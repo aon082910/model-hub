@@ -17,6 +17,7 @@ nav button.active { color: var(--text); background: var(--panel); }
 .tab.active { display: block; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 input, select, button { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+input[type="color"] { width: 72px; height: 40px; padding: 3px; cursor: pointer; }
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { cursor: default; opacity: .45; border-color: var(--border); }
