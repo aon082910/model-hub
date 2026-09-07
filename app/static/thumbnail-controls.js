@@ -4,9 +4,20 @@
   if (!button || !status) return;
 
   let pollHandle = null;
+  let wasRunning = false;
+
+  function refreshVisibleThumbnails() {
+    const stamp = Date.now();
+    document.querySelectorAll('img[src^="/api/library/thumbnails/"]').forEach((img) => {
+      const url = new URL(img.src, window.location.origin);
+      url.searchParams.set('v', String(stamp));
+      img.src = url.pathname + url.search;
+    });
+  }
 
   function renderState(state) {
     if (state.running) {
+      wasRunning = true;
       button.disabled = true;
       button.textContent = 'Regenerating Thumbnails...';
       const total = state.total || 0;
@@ -20,6 +31,10 @@
     button.textContent = 'Regenerate Thumbnails';
     if ((state.done || 0) > 0 || (state.failed || 0) > 0) {
       status.textContent = `Complete: ${state.regenerated || 0} regenerated${state.failed ? ` · ${state.failed} failed` : ''}`;
+    }
+    if (wasRunning) {
+      wasRunning = false;
+      refreshVisibleThumbnails();
     }
   }
 
