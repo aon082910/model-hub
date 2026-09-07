@@ -46,11 +46,10 @@ function ensureViewerColorControl() {
     control.className = 'row';
     control.style.cssText = 'margin-top:8px;align-items:center;';
     control.innerHTML = `
-      <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px">
+      <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px" title="Temporary for this preview; the next preview uses the saved default color.">
         Preview color
         <input id="viewer-live-color" type="color" value="${DEFAULT_VIEWER_MODEL_COLOR}" aria-label="Temporary preview color">
-      </label>
-      <small style="color:var(--muted)">Temporary — resets to the saved default for the next preview.</small>`;
+      </label>`;
     $('#viewer-canvas-wrap').insertAdjacentElement('afterend', control);
   }
 
