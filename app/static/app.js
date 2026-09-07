@@ -160,7 +160,13 @@ function openViewer(model) {
 $('#close-viewer').addEventListener('click', () => {
   $('#viewer-modal').classList.add('hidden');
   if (animId) cancelAnimationFrame(animId);
+  if (viewerResizeHandler) {
+    window.removeEventListener('resize', viewerResizeHandler);
+    viewerResizeHandler = null;
+  }
 });
+
+let viewerResizeHandler = null;
 
 function initViewer() {
   const canvas = $('#viewer-canvas');
@@ -183,6 +189,18 @@ function initViewer() {
     renderer.render(scene, camera);
   }
   animate();
+
+  // the modal's canvas height changes with viewport width/orientation on
+  // mobile (see the #viewer-canvas-wrap mobile media query), so the
+  // renderer/camera need to re-fit rather than stretching the last frame
+  if (viewerResizeHandler) window.removeEventListener('resize', viewerResizeHandler);
+  viewerResizeHandler = () => {
+    if (!renderer || !wrap.clientWidth || !wrap.clientHeight) return;
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+    camera.aspect = wrap.clientWidth / wrap.clientHeight;
+    camera.updateProjectionMatrix();
+  };
+  window.addEventListener('resize', viewerResizeHandler);
 }
 
 function loadSTL(url) {

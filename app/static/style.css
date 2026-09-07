@@ -41,3 +41,33 @@ fieldset { border: 1px solid var(--border); border-radius: 6px; }
 #viewer-canvas-wrap { width: 100%; height: 420px; background: #0d0f12; border-radius: 6px; }
 #viewer-canvas { width: 100%; height: 100%; display: block; }
 #viewer-info { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* ---------- Mobile ---------- */
+@media (max-width: 640px) {
+  header { flex-wrap: wrap; gap: 8px 16px; padding: 10px 12px; }
+  nav#tabs { display: flex; gap: 2px; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  nav#tabs button { flex: 0 0 auto; white-space: nowrap; }
+  .tab { padding: 12px; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar input, .toolbar button, .toolbar label { width: 100%; }
+  .toolbar label { display: flex; align-items: center; gap: 6px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+  .row { flex-direction: column; align-items: stretch; }
+  .row input, .row select, .row button { width: 100%; }
+  li { flex-wrap: wrap; gap: 6px; }
+  .modal { align-items: flex-start; }
+  /* !important: beats the auth-overlay box's inline width:340px, which
+     otherwise outranks anything set here since inline style specificity
+     can't be reached from a stylesheet without it */
+  .modal-content { width: 100% !important; max-width: 100vw; height: 100%; max-height: 100vh; border-radius: 0; overflow-y: auto; padding: 12px; }
+  #viewer-canvas-wrap { height: 40vh; }
+  .settings-form { max-width: 100%; }
+}
+
+/* Bigger tap targets on touch devices, regardless of viewport width.
+   Excludes checkbox/radio -- min-height there just blows them up into a
+   giant square instead of making them easier to tap. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]), select, button { min-height: 40px; }
+}

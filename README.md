@@ -169,7 +169,7 @@ gated behind JS or auth you'll need to open the direct file URL in a tab first.
 - **Print estimates**: `app/estimate.py` — volumetric heuristic by default, or exact numbers via an optional external slicer CLI (`SLICER_CLI_PATH`)
 - **Notifications**: `app/notify.py` — generic webhook POST, best-effort
 - **Migrations**: `app/db.py` auto-adds new columns to existing SQLite tables on startup (no Alembic; fine for this project's size, but note it if you fork it)
-- **Frontend**: vanilla JS + Three.js, no build step (`app/static/`)
+- **Frontend**: vanilla JS + Three.js, no build step (`app/static/`) — mobile-responsive down to phone widths (scrollable tab bar, stacked toolbars/forms, full-screen viewer modal)
 
 ## CI / Tests
 
