@@ -2,6 +2,11 @@ from datetime import datetime
 
 
 def _ensure_authenticated(client):
+    # The shared integration client may already have a valid session from
+    # tests/test_app.py. If so, no credentials need to be known here.
+    if client.get("/api/settings").status_code == 200:
+        return
+
     status = client.get("/api/auth/status").json()
     username = "pagination-test-admin"
     password = "pagination test password"
@@ -12,12 +17,13 @@ def _ensure_authenticated(client):
         assert login.status_code == 200
         return
 
-    # The shared integration client may already have a valid session from
-    # tests/test_app.py. If so, no credentials need to be known here.
-    if client.get("/api/settings").status_code == 200:
-        return
-
-    raise AssertionError("Test client is configured but not authenticated")
+    # Already configured (by tests/test_app.py) but not authenticated: that
+    # file's last test, test_logout_revokes_session, deliberately revokes the
+    # shared client's session, and its account/password by that point is the
+    # one set in test_change_password_success. Log back in with it rather
+    # than treating "configured but logged out" as a hard failure.
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "new password long enough"})
+    assert login.status_code == 200, "expected to be able to log back in as the test_app.py admin account"
 
 
 def _seed_pagination_models():

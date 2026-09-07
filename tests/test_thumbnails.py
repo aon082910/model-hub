@@ -51,7 +51,12 @@ def test_large_non_watertight_mesh_skips_convex_hull(monkeypatch, tmp_path):
             [0.0, 0.0, 4.0],
         ]
     )
-    faces = np.tile(np.array([[0, 1, 2]], dtype=np.int64), (20, 1))
+    # trimesh's bounding box only considers vertices actually referenced by a
+    # face, not the raw vertex array -- so all four vertices (including the
+    # z=4 one) need to appear in at least one face, or the bbox comes back
+    # degenerate (zero z-extent) and volume_mm3 is correctly None instead of 24.
+    base_faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int64)
+    faces = np.tile(base_faces, (5, 1))
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
     monkeypatch.setattr(thumbnails, "MAX_CONVEX_HULL_FACES", 10)
