@@ -12,6 +12,18 @@ from app.config import THUMB_DIR
 GEOMETRY_HASH_CHUNK_VERTICES = 100_000
 MAX_RENDER_FACES = 50_000
 MAX_CONVEX_HULL_FACES = 50_000
+DEFAULT_THUMBNAIL_COLOR = "#c9ced6"
+
+
+def normalize_thumbnail_color(value: str) -> str:
+    """Return a safe six-digit hex color for Matplotlib thumbnail rendering."""
+    if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
+        try:
+            int(value[1:], 16)
+            return value
+        except ValueError:
+            pass
+    return DEFAULT_THUMBNAIL_COLOR
 
 
 def load_mesh(path: Path):
@@ -86,7 +98,12 @@ def mesh_stats(path: Path, mesh=None) -> dict:
     }
 
 
-def generate_thumbnail(path: Path, size: int = 512, mesh=None) -> str:
+def generate_thumbnail(
+    path: Path,
+    size: int = 512,
+    mesh=None,
+    color: str = DEFAULT_THUMBNAIL_COLOR,
+) -> str:
     """Render an isometric snapshot of the mesh to a PNG in THUMB_DIR.
     Returns the thumbnail filename (relative to THUMB_DIR), or None on failure.
 
@@ -97,7 +114,7 @@ def generate_thumbnail(path: Path, size: int = 512, mesh=None) -> str:
     """
     if mesh is None:
         mesh = load_mesh(path)
-    png = _matplotlib_fallback(mesh, size)
+    png = _matplotlib_fallback(mesh, size, normalize_thumbnail_color(color))
 
     if png is None:
         return None
@@ -109,7 +126,7 @@ def generate_thumbnail(path: Path, size: int = 512, mesh=None) -> str:
     return out_name
 
 
-def _matplotlib_fallback(mesh, size: int) -> bytes:
+def _matplotlib_fallback(mesh, size: int, color: str) -> bytes:
     import io
     import matplotlib
     matplotlib.use("Agg")
@@ -134,7 +151,7 @@ def _matplotlib_fallback(mesh, size: int) -> bytes:
     try:
         ax = fig.add_subplot(projection="3d")
         collection = Poly3DCollection(
-            triangles, facecolor="#4f8ef7", edgecolor="none", linewidths=0
+            triangles, facecolor=color, edgecolor="none", linewidths=0
         )
         ax.add_collection3d(collection)
         bounds = np.asarray(mesh.bounds)
