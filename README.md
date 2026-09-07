@@ -66,8 +66,8 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 
 | Feature | Status |
 |---|---|
-| STL/3MF/OBJ/FBX viewer & thumbnails | STL/OBJ/3MF/FBX all wired to a live Three.js viewer |
-| STEP/STP | Parsed for thumbnails/hashing via trimesh where possible; full CAD-assembly preservation is not implemented (no live 3D viewer — three.js has no native STEP support) |
+| STL/3MF/OBJ/FBX/STEP viewer & thumbnails | STL/OBJ/3MF/FBX/STEP/STP all wired to a live Three.js viewer |
+| STEP/STP | Live-viewed via [occt-import-js](https://github.com/kovacsv/occt-import-js) (OpenCascade compiled to WASM, runs client-side, tessellates the B-rep into a mesh) — lazy-loaded on first STEP open so it doesn't cost anything for people who never open one |
 | Duplicate detection (hash + geometry) | Done — SHA256 content hash + normalized-vertex geometry hash |
 | Collections | Done |
 | Smart/rule-based collections | Done — field/operator/value rules (`app/smart_collections.py`) |
@@ -163,6 +163,7 @@ gated behind JS or auth you'll need to open the direct file URL in a tab first.
 - **Backend**: FastAPI + SQLModel (SQLite) — `app/main.py`, `app/routers/*`
 - **Scanning**: `app/scanner.py` walks the mounted library, hashes files, detects duplicates
 - **Thumbnails**: `app/thumbnails.py` via trimesh (headless render, matplotlib fallback); also computes volume/watertightness for print estimates
+- **Viewer**: `app/static/app.js` + Three.js for STL/OBJ/3MF/FBX; STEP/STP tessellated client-side by `occt-import-js` (WASM OpenCascade) into a Three.js mesh
 - **AI**: `app/ai/` — `OllamaProvider` (local) and `APIProvider` (OpenAI/OpenRouter-compatible), selected per the `ai_mode` setting
 - **Auth**: `app/auth.py` + `app/routers/auth_router.py` — session cookie for the WebUI, a separate narrower-scoped API key for the browser extension, enforced by a single ASGI middleware in `main.py`
 - **Print estimates**: `app/estimate.py` — volumetric heuristic by default, or exact numbers via an optional external slicer CLI (`SLICER_CLI_PATH`)

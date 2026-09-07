@@ -8,6 +8,9 @@
 <script type="importmap">
 { "imports": { "three": "/assets/vendor/three.module.min.js" } }
 </script>
+<!-- classic (non-module) script: occt-import-js is an Emscripten UMD build that
+     attaches a global factory function, not an ES export -->
+<script src="/assets/vendor/occt-import-js.js"></script>
 </head>
 <body>
 <div id="app">

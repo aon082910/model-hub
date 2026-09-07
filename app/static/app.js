@@ -141,13 +141,13 @@ function openViewer(model) {
     '.obj': loadOBJ,
     '.3mf': load3MF,
     '.fbx': loadFBX,
+    '.step': loadSTEP,
+    '.stp': loadSTEP,
   };
   const loadFn = loaders[model.extension];
   if (loadFn) {
     loadFn(fileUrl);
   } else {
-    // STEP: shown via thumbnail only -- STEP needs a CAD-capable loader like
-    // occt-import-js, not a stock three.js one (three.js has no native STEP support).
     $('#viewer-info').insertAdjacentHTML('beforeend',
       `<div style="color:#e0a800">Live viewer not available for ${model.extension} yet -- see the thumbnail and download the original file above.</div>`);
   }
@@ -224,6 +224,53 @@ function loadFBX(url) {
     scene.add(object);
     frameCameraOn(object);
   }, undefined, (err) => showViewerError(err));
+}
+
+// occt-import-js is a ~7MB WASM CAD kernel -- loaded lazily on first STEP
+// view, not at page load, and cached (module init is expensive, running it
+// twice per session would be wasteful).
+let occtModulePromise = null;
+function getOcctModule() {
+  if (!occtModulePromise) {
+    occtModulePromise = window.occtimportjs({ locateFile: (path) => `/assets/vendor/${path}` });
+  }
+  return occtModulePromise;
+}
+
+async function loadSTEP(url) {
+  $('#viewer-info').insertAdjacentHTML('beforeend',
+    '<div id="step-loading-note">Loading STEP geometry (this can take a few seconds)…</div>');
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Could not fetch file (${res.status})`);
+    const fileBuffer = new Uint8Array(await res.arrayBuffer());
+    const occt = await getOcctModule();
+    const result = occt.ReadStepFile(fileBuffer, null);
+    if (!result.success || !result.meshes.length) {
+      throw new Error('STEP file parsed but contained no visible geometry (assembly-only or metadata-only file?)');
+    }
+    const group = new THREE.Group();
+    const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0x4f8ef7 });
+    for (const resultMesh of result.meshes) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(resultMesh.attributes.position.array, 3));
+      if (resultMesh.attributes.normal) {
+        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(resultMesh.attributes.normal.array, 3));
+      }
+      geometry.setIndex(resultMesh.index.array);
+      if (!resultMesh.attributes.normal) geometry.computeVertexNormals();
+      const material = resultMesh.color
+        ? new THREE.MeshStandardMaterial({ color: new THREE.Color(resultMesh.color[0], resultMesh.color[1], resultMesh.color[2]) })
+        : defaultMaterial;
+      group.add(new THREE.Mesh(geometry, material));
+    }
+    scene.add(group);
+    frameCameraOn(group);
+  } catch (err) {
+    showViewerError(err);
+  } finally {
+    document.getElementById('step-loading-note')?.remove();
+  }
 }
 
 function showViewerError(err) {
