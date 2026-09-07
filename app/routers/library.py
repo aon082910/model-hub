@@ -7,7 +7,9 @@ from typing import Optional
 from app.db import get_session
 from app.models import Model3D, Tag, ModelTagLink
 from app.config import LIBRARY_PATH, THUMB_DIR
+from app.library_maintenance import LibraryMaintenanceBusy
 from app.scanner import ScanAlreadyRunning, scan_library, import_uploaded_file
+from app.thumbnail_jobs import start_thumbnail_regeneration, thumbnail_regeneration_status
 from app.ai.tagging import semantic_search
 from app.estimate import estimate_print
 
@@ -20,6 +22,20 @@ def trigger_scan(session: Session = Depends(get_session)):
         return scan_library(session)
     except ScanAlreadyRunning as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/thumbnails/regenerate")
+def regenerate_thumbnails():
+    """Start a background refresh of cached PNGs for already indexed mesh models."""
+    try:
+        return start_thumbnail_regeneration()
+    except LibraryMaintenanceBusy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.get("/thumbnails/regenerate/status")
+def thumbnail_regeneration_job_status():
+    return thumbnail_regeneration_status()
 
 
 @router.get("/models")
