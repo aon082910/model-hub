@@ -13,6 +13,7 @@ GEOMETRY_HASH_CHUNK_VERTICES = 100_000
 MAX_RENDER_FACES = 50_000
 MAX_CONVEX_HULL_FACES = 50_000
 DEFAULT_THUMBNAIL_COLOR = "#c9ced6"
+THUMBNAIL_RENDER_VERSION = 2
 
 
 def normalize_thumbnail_color(value: str) -> str:
@@ -20,10 +21,33 @@ def normalize_thumbnail_color(value: str) -> str:
     if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
         try:
             int(value[1:], 16)
-            return value
+            return value.lower()
         except ValueError:
             pass
     return DEFAULT_THUMBNAIL_COLOR
+
+
+def thumbnail_filename(
+    path: Path,
+    size: int = 512,
+    color: str = DEFAULT_THUMBNAIL_COLOR,
+) -> str:
+    """Return the deterministic cache filename for the current render settings.
+
+    Including the color and render-version settings in the filename makes browser
+    cache invalidation automatic and lets bulk regeneration skip thumbnails that
+    are already current after an interrupted or repeated job.
+    """
+    signature = "\0".join(
+        (
+            str(path),
+            str(size),
+            normalize_thumbnail_color(color),
+            str(MAX_RENDER_FACES),
+            str(THUMBNAIL_RENDER_VERSION),
+        )
+    )
+    return hashlib.sha1(signature.encode()).hexdigest() + ".png"
 
 
 def load_mesh(path: Path):
@@ -112,18 +136,35 @@ def generate_thumbnail(
     minimal headless container (xvfb-run's readiness check can hang with no
     clear error). matplotlib needs no display server at all.
     """
+    color = normalize_thumbnail_color(color)
     if mesh is None:
         mesh = load_mesh(path)
-    png = _matplotlib_fallback(mesh, size, normalize_thumbnail_color(color))
+    png = _matplotlib_fallback(mesh, size, color)
 
     if png is None:
         return None
 
-    out_name = hashlib.sha1(str(path).encode()).hexdigest() + ".png"
+    out_name = thumbnail_filename(path, size=size, color=color)
     out_path = THUMB_DIR / out_name
     with open(out_path, "wb") as f:
         f.write(png)
     return out_name
+
+
+def render_thumbnail_file(
+    path_str: str,
+    color: str,
+    size: int = 512,
+) -> str:
+    """Process-pool entry point for rendering one file without database access."""
+    path = Path(path_str)
+    mesh = None
+    try:
+        mesh = load_mesh(path)
+        return generate_thumbnail(path, size=size, mesh=mesh, color=color)
+    finally:
+        if mesh is not None:
+            del mesh
 
 
 def _matplotlib_fallback(mesh, size: int, color: str) -> bytes:
