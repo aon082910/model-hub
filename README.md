@@ -161,7 +161,7 @@ gated behind JS or auth you'll need to open the direct file URL in a tab first.
 ## Architecture
 
 - **Backend**: FastAPI + SQLModel (SQLite) — `app/main.py`, `app/routers/*`
-- **Scanning**: `app/scanner.py` walks the mounted library, hashes files, detects duplicates
+- **Scanning**: `app/scanner.py` walks the mounted library, hashes files, detects duplicates. Runs in a worker thread (not the event loop) so the WebUI and `/api/health` come up immediately even on a large first-time index; mesh/thumbnail processing is bounded (capped convex-hull/render face counts, chunked hashing) to keep memory flat on very large libraries; only one scan runs at a time (a second `Rescan Library` request gets a clean `409` instead of a SQLite lock error)
 - **Thumbnails**: `app/thumbnails.py` via trimesh (headless render, matplotlib fallback); also computes volume/watertightness for print estimates
 - **Viewer**: `app/static/app.js` + Three.js for STL/OBJ/3MF/FBX; STEP/STP tessellated client-side by `occt-import-js` (WASM OpenCascade) into a Three.js mesh
 - **AI**: `app/ai/` — `OllamaProvider` (local) and `APIProvider` (OpenAI/OpenRouter-compatible), selected per the `ai_mode` setting
@@ -169,7 +169,7 @@ gated behind JS or auth you'll need to open the direct file URL in a tab first.
 - **Print estimates**: `app/estimate.py` — volumetric heuristic by default, or exact numbers via an optional external slicer CLI (`SLICER_CLI_PATH`)
 - **Notifications**: `app/notify.py` — generic webhook POST, best-effort
 - **Migrations**: `app/db.py` auto-adds new columns to existing SQLite tables on startup (no Alembic; fine for this project's size, but note it if you fork it)
-- **Frontend**: vanilla JS + Three.js, no build step (`app/static/`) — mobile-responsive down to phone widths (scrollable tab bar, stacked toolbars/forms, full-screen viewer modal)
+- **Frontend**: vanilla JS + Three.js, no build step (`app/static/`) — mobile-responsive down to phone widths (scrollable tab bar, stacked toolbars/forms, full-screen viewer modal). The Library view is paginated (`app/static/library-controls.js`), with search/tag filtering applied at the database-query level so it covers the whole indexed library, not just the current page
 
 ## CI / Tests
 
