@@ -64,17 +64,31 @@ def health():
     return {"status": "ok"}
 
 
-async def _background_scan_loop():
+def _run_scan():
+    """Run one library scan outside the asyncio event loop."""
     from sqlmodel import Session
     from app.scanner import scan_library
     from app.notify import notify
+
+    with Session(engine) as session:
+        result = scan_library(session)
+        if result.get("added"):
+            notify(session, "Model Hub: new files", f"{result['added']} new model(s) added to your library.")
+        return result
+
+
+async def _background_scan_loop():
+    from app.scanner import ScanAlreadyRunning
+
     while True:
         try:
-            with Session(engine) as session:
-                result = scan_library(session)
-                logger.info("Background scan: %s", result)
-                if result.get("added"):
-                    notify(session, "Model Hub: new files", f"{result['added']} new model(s) added to your library.")
+            # scan_library performs blocking filesystem, hashing, mesh parsing,
+            # thumbnail rendering, and SQLite work. Run it in a worker thread so
+            # Uvicorn can finish startup and continue servicing HTTP requests.
+            result = await asyncio.to_thread(_run_scan)
+            logger.info("Background scan: %s", result)
+        except ScanAlreadyRunning:
+            logger.info("Background scan skipped: library scan already in progress")
         except Exception:
             logger.exception("Background scan failed")
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)

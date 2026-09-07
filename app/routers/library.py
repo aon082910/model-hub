@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Response
 from fastapi.responses import FileResponse
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 from typing import Optional
 
 from app.db import get_session
-from app.models import Model3D, Tag
+from app.models import Model3D, Tag, ModelTagLink
 from app.config import LIBRARY_PATH, THUMB_DIR
-from app.scanner import scan_library, import_uploaded_file
+from app.scanner import ScanAlreadyRunning, scan_library, import_uploaded_file
 from app.ai.tagging import semantic_search
 from app.estimate import estimate_print
 
@@ -15,32 +16,63 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 
 @router.post("/scan")
 def trigger_scan(session: Session = Depends(get_session)):
-    return scan_library(session)
+    try:
+        return scan_library(session)
+    except ScanAlreadyRunning as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/models")
 def list_models(
+    response: Response,
     q: Optional[str] = None,
     tag: Optional[str] = None,
     extension: Optional[str] = None,
     duplicates_only: bool = False,
-    limit: int = 200,
-    offset: int = 0,
+    limit: int = Query(200, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
 ):
-    stmt = select(Model3D)
-    if extension:
-        stmt = stmt.where(Model3D.extension == extension)
-    if duplicates_only:
-        stmt = stmt.where(Model3D.is_duplicate_of.is_not(None))
-    models = session.exec(stmt.offset(offset).limit(limit)).all()
+    """Return one page of models while applying search/filtering to the full library.
 
-    if q:
-        ql = q.lower()
-        models = [m for m in models if ql in m.filename.lower()
-                  or (m.ai_description and ql in m.ai_description.lower())]
-    if tag:
-        models = [m for m in models if tag.lower() in [t.name for t in m.tags]]
+    The JSON response remains a plain list for backwards compatibility. Pagination
+    metadata is returned through X-Total-Count, X-Limit, and X-Offset headers.
+    """
+    conditions = []
+
+    if extension:
+        conditions.append(Model3D.extension == extension)
+    if duplicates_only:
+        conditions.append(Model3D.is_duplicate_of.is_not(None))
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        conditions.append(or_(
+            Model3D.filename.ilike(pattern),
+            Model3D.ai_description.ilike(pattern),
+        ))
+    if tag and tag.strip():
+        tag_pattern = tag.strip()
+        tagged_model_ids = (
+            select(ModelTagLink.model_id)
+            .join(Tag, ModelTagLink.tag_id == Tag.id)
+            .where(Tag.name.ilike(tag_pattern))
+        )
+        conditions.append(Model3D.id.in_(tagged_model_ids))
+
+    count_stmt = select(func.count()).select_from(Model3D)
+    stmt = select(Model3D)
+    for condition in conditions:
+        count_stmt = count_stmt.where(condition)
+        stmt = stmt.where(condition)
+
+    total = session.exec(count_stmt).one()
+    models = session.exec(
+        stmt.order_by(Model3D.id).offset(offset).limit(limit)
+    ).all()
+
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["X-Offset"] = str(offset)
     return models
 
 
@@ -52,7 +84,7 @@ async def import_file(
     license: Optional[str] = Form(None),
     session: Session = Depends(get_session),
 ):
-    """Receives a model file pushed from the Model Hub browser extension
+    """Receives a model file pushed in by the Model Hub browser extension
     (or any other client) and files it into the library."""
     content = await file.read()
     try:

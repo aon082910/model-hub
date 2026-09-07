@@ -18,6 +18,7 @@ RUN chmod +x /entrypoint.sh
 
 ENV LIBRARY_PATH=/data \
     CONFIG_PATH=/config \
+    MPLCONFIGDIR=/config/matplotlib \
     PYTHONUNBUFFERED=1 \
     PUID=99 \
     PGID=100
