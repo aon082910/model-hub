@@ -79,6 +79,34 @@ def verify_session_token(token: str) -> str | None:
     return username
 
 
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 15 * 60
+
+# In-memory only -- fine for a single-container app with no shared state across
+# instances. Keyed by client IP so one attacker can't lock out the real admin,
+# and cleared on a successful login so a legitimate user who fumbles a few times
+# isn't stuck waiting out the window.
+_login_attempts: dict[str, list[float]] = {}
+
+
+def check_login_rate_limit(key: str) -> int | None:
+    """Returns seconds to wait if the key is currently rate-limited, else None."""
+    now = time.time()
+    attempts = [t for t in _login_attempts.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+    _login_attempts[key] = attempts
+    if len(attempts) >= LOGIN_MAX_ATTEMPTS:
+        return max(1, int(LOGIN_WINDOW_SECONDS - (now - attempts[0])))
+    return None
+
+
+def record_failed_login(key: str):
+    _login_attempts.setdefault(key, []).append(time.time())
+
+
+def clear_login_attempts(key: str):
+    _login_attempts.pop(key, None)
+
+
 def is_configured(session: Session) -> bool:
     return get_setting(session, "auth_password_hash") is not None
 

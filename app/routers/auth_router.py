@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlmodel import Session
 
 from app.db import get_session
@@ -6,6 +6,7 @@ from app.settings_store import get_setting, set_setting
 from app.auth import (
     is_configured, hash_password, verify_password, make_session_token,
     SESSION_COOKIE, SESSION_TTL_SECONDS, ensure_extension_api_key,
+    check_login_rate_limit, record_failed_login, clear_login_attempts,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -33,13 +34,22 @@ def setup(payload: dict, session: Session = Depends(get_session)):
 
 
 @router.post("/login")
-def login(payload: dict, response: Response, session: Session = Depends(get_session)):
+def login(payload: dict, request: Request, response: Response, session: Session = Depends(get_session)):
+    client_ip = request.client.host if request.client else "unknown"
+    retry_after = check_login_rate_limit(client_ip)
+    if retry_after is not None:
+        raise HTTPException(
+            429, f"Too many login attempts. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
     username = payload.get("username") or ""
     password = payload.get("password") or ""
     stored_user = get_setting(session, "auth_username")
     stored_hash = get_setting(session, "auth_password_hash")
     if not stored_user or not stored_hash or username != stored_user or not verify_password(password, stored_hash):
+        record_failed_login(client_ip)
         raise HTTPException(401, "Invalid username or password")
+    clear_login_attempts(client_ip)
     token = make_session_token(username)
     response.set_cookie(
         SESSION_COOKIE, token, max_age=SESSION_TTL_SECONDS,

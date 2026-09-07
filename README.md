@@ -87,6 +87,8 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 A single admin account gates the entire app and API (except `/api/health` and the
 login/setup endpoints themselves). Session is a signed, HttpOnly cookie, 30-day expiry;
 password is PBKDF2-SHA256 hashed (200k iterations), never stored or returned in plaintext.
+`/api/auth/login` is rate-limited per client IP (5 failed attempts / 15 minutes, in-memory)
+to slow down brute-force guessing; a locked-out client gets a `429` with `Retry-After`.
 
 - **First run**: the WebUI shows a **Create admin account** screen. Or set `AUTH_USERNAME`
   + `AUTH_PASSWORD` container env vars to skip it (the account is created from those on

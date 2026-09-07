@@ -86,6 +86,40 @@ def test_login_success_grants_session(client):
     assert client.get("/api/settings").status_code == 200
 
 
+# ---------- login rate limiting ----------
+# Exercised as a unit test against app.auth directly rather than through the
+# shared `client` fixture: TestClient requests all share the same fake client
+# IP, so tripping the limiter via HTTP here would lock out every later test
+# in this file that logs in with the same client.
+
+def test_login_rate_limit_trips_after_max_attempts():
+    from app import auth
+    key = "test-rate-limit-ip"
+    auth.clear_login_attempts(key)
+    try:
+        for _ in range(auth.LOGIN_MAX_ATTEMPTS):
+            assert auth.check_login_rate_limit(key) is None
+            auth.record_failed_login(key)
+        retry_after = auth.check_login_rate_limit(key)
+        assert retry_after is not None and retry_after > 0
+    finally:
+        auth.clear_login_attempts(key)
+
+
+def test_login_rate_limit_cleared_on_success():
+    from app import auth
+    key = "test-rate-limit-ip-2"
+    auth.clear_login_attempts(key)
+    try:
+        for _ in range(auth.LOGIN_MAX_ATTEMPTS):
+            auth.record_failed_login(key)
+        assert auth.check_login_rate_limit(key) is not None
+        auth.clear_login_attempts(key)
+        assert auth.check_login_rate_limit(key) is None
+    finally:
+        auth.clear_login_attempts(key)
+
+
 # ---------- settings: reserved keys never leak ----------
 
 def test_settings_excludes_reserved_keys(client):
