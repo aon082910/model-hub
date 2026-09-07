@@ -119,10 +119,13 @@
 
     <h2>3D Preview</h2>
     <div class="settings-form">
-      <label>Model color <small>(used for STL, OBJ, FBX, and uncolored STEP geometry; embedded 3MF/STEP colors are preserved. The color picker in an open preview is temporary and does not change this saved default.)</small>
+      <label>Model color <small>(used for live previews and generated PNG thumbnails. Embedded 3MF/STEP colors are preserved in the live viewer. The color picker in an open preview is temporary and does not change this saved default.)</small>
         <input id="viewer-model-color" type="color" value="#c9ced6">
       </label>
       <button id="save-viewer-settings-btn">Save Preview Settings</button>
+      <button id="regenerate-thumbnails-btn">Regenerate Thumbnails</button>
+      <small>Rebuilds cached PNG thumbnails for already indexed mesh models using the saved color. This does not rescan the library or recompute mesh metadata.</small>
+      <span id="thumbnail-regeneration-status"></span>
       <span id="viewer-settings-status"></span>
     </div>
 
