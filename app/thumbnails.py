@@ -167,7 +167,11 @@ def render_thumbnail_file(
             del mesh
 
 
-def _matplotlib_fallback(mesh, size: int, color: str) -> bytes:
+def _matplotlib_fallback(
+    mesh,
+    size: int,
+    color: str = DEFAULT_THUMBNAIL_COLOR,
+) -> bytes:
     import io
     import matplotlib
     matplotlib.use("Agg")
