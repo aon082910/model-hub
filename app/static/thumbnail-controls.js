@@ -21,8 +21,12 @@
       button.disabled = true;
       button.textContent = 'Regenerating Thumbnails...';
       const total = state.total || 0;
+      const details = [];
+      if (state.regenerated) details.push(`${state.regenerated} rendered`);
+      if (state.skipped) details.push(`${state.skipped} skipped`);
+      if (state.failed) details.push(`${state.failed} failed`);
       status.textContent = total > 0
-        ? `${state.done || 0} / ${total} complete${state.failed ? ` · ${state.failed} failed` : ''}`
+        ? `${state.done || 0} / ${total} complete${details.length ? ` · ${details.join(' · ')}` : ''}`
         : 'Preparing thumbnail regeneration...';
       return;
     }
@@ -30,7 +34,10 @@
     button.disabled = false;
     button.textContent = 'Regenerate Thumbnails';
     if ((state.done || 0) > 0 || (state.failed || 0) > 0) {
-      status.textContent = `Complete: ${state.regenerated || 0} regenerated${state.failed ? ` · ${state.failed} failed` : ''}`;
+      const details = [`${state.regenerated || 0} rendered`];
+      if (state.skipped) details.push(`${state.skipped} skipped`);
+      if (state.failed) details.push(`${state.failed} failed`);
+      status.textContent = `Complete: ${details.join(' · ')}`;
     }
     if (wasRunning) {
       wasRunning = false;
