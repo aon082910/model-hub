@@ -1,12 +1,15 @@
 import gc
 import logging
+import multiprocessing
+import os
 import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app.config import LIBRARY_PATH, MESH_EXTENSIONS
+from app.config import LIBRARY_PATH, MESH_EXTENSIONS, THUMB_DIR
 from app.db import engine
 from app.library_maintenance import (
     LibraryMaintenanceBusy,
@@ -18,13 +21,14 @@ from app.models import Model3D
 from app.settings_store import get_setting
 from app.thumbnails import (
     DEFAULT_THUMBNAIL_COLOR,
-    generate_thumbnail,
-    load_mesh,
     normalize_thumbnail_color,
+    render_thumbnail_file,
+    thumbnail_filename,
 )
 
 logger = logging.getLogger("modelhub.thumbnails")
 THUMBNAIL_BATCH_SIZE = 100
+THUMBNAIL_WORKERS = max(1, min(8, int(os.environ.get("THUMBNAIL_WORKERS", "4"))))
 
 _state_lock = threading.Lock()
 _job_state = {
@@ -32,6 +36,7 @@ _job_state = {
     "done": 0,
     "total": 0,
     "regenerated": 0,
+    "skipped": 0,
     "failed": 0,
 }
 
@@ -54,7 +59,7 @@ def start_thumbnail_regeneration() -> dict:
             f"Library maintenance already in progress: {active or 'another task'}"
         )
 
-    _set_state(running=True, done=0, total=0, regenerated=0, failed=0)
+    _set_state(running=True, done=0, total=0, regenerated=0, skipped=0, failed=0)
     worker = threading.Thread(
         target=_run_thumbnail_regeneration,
         name="modelhub-thumbnail-regeneration",
@@ -83,11 +88,11 @@ def _load_job_configuration() -> tuple[str, int]:
         return color, int(total)
 
 
-def _load_model_page(last_id: int) -> list[tuple[int, str]]:
-    """Fetch one bounded page of model ids/paths and close the DB session immediately."""
+def _load_model_page(last_id: int) -> list[tuple[int, str, str | None]]:
+    """Fetch one bounded page of model ids/paths/current thumbnails and close DB quickly."""
     with Session(engine) as session:
         rows = session.exec(
-            select(Model3D.id, Model3D.path)
+            select(Model3D.id, Model3D.path, Model3D.thumbnail_path)
             .where(
                 Model3D.id > last_id,
                 Model3D.extension.in_(MESH_EXTENSIONS),
@@ -95,18 +100,44 @@ def _load_model_page(last_id: int) -> list[tuple[int, str]]:
             .order_by(Model3D.id)
             .limit(THUMBNAIL_BATCH_SIZE)
         ).all()
-        return [(int(model_id), str(path)) for model_id, path in rows]
+        return [
+            (
+                int(model_id),
+                str(path),
+                str(current_thumbnail) if current_thumbnail else None,
+            )
+            for model_id, path, current_thumbnail in rows
+        ]
 
 
-def _persist_thumbnail(model_id: int, thumbnail_path: str) -> None:
-    """Update only the cached thumbnail filename for one indexed model."""
+def _persist_thumbnail_batch(updates: list[tuple[int, str]]) -> None:
+    """Persist one page of completed thumbnail filenames in one short transaction."""
+    if not updates:
+        return
     with Session(engine) as session:
-        model = session.get(Model3D, model_id)
-        if model is None:
-            return
-        model.thumbnail_path = thumbnail_path
-        session.add(model)
+        for model_id, thumbnail_path in updates:
+            model = session.get(Model3D, model_id)
+            if model is None:
+                continue
+            model.thumbnail_path = thumbnail_path
+            session.add(model)
         session.commit()
+
+
+def _thumbnail_is_current(full_path: Path, current_thumbnail: str | None, color: str) -> bool:
+    """Return True when the DB and cache already point at this render configuration."""
+    expected = thumbnail_filename(full_path, color=color)
+    return current_thumbnail == expected and (THUMB_DIR / expected).exists()
+
+
+def _render_one(model_id: int, full_path: Path, color: str) -> tuple[int, str]:
+    """Render one thumbnail in a worker process and return its DB update payload."""
+    if not full_path.exists():
+        raise FileNotFoundError(f"model file is missing on disk: {full_path}")
+    thumbnail_path = render_thumbnail_file(str(full_path), color)
+    if not thumbnail_path:
+        raise ValueError("thumbnail renderer returned no image")
+    return model_id, thumbnail_path
 
 
 def _run_thumbnail_regeneration() -> None:
@@ -114,57 +145,84 @@ def _run_thumbnail_regeneration() -> None:
         color, total = _load_job_configuration()
         _set_state(total=total)
         logger.info(
-            "Thumbnail regeneration started: %d indexed mesh models, color %s",
+            "Thumbnail regeneration started: %d indexed mesh models, color %s, %d workers",
             total,
             color,
+            THUMBNAIL_WORKERS,
         )
 
         last_id = 0
-        done = regenerated = failed = 0
+        done = regenerated = skipped = failed = 0
 
-        while True:
-            page = _load_model_page(last_id)
-            if not page:
-                break
+        # Spawn avoids forking Python/Matplotlib state from the background thread.
+        mp_context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=THUMBNAIL_WORKERS,
+            mp_context=mp_context,
+        ) as executor:
+            while True:
+                page = _load_model_page(last_id)
+                if not page:
+                    break
 
-            for model_id, rel_path in page:
-                last_id = model_id
-                full_path = LIBRARY_PATH / Path(rel_path)
-                thumb_path = None
-                mesh = None
-                try:
-                    if not full_path.exists():
-                        raise FileNotFoundError("model file is missing on disk")
-                    mesh = load_mesh(full_path)
-                    thumb_path = generate_thumbnail(full_path, mesh=mesh, color=color)
-                    if not thumb_path:
-                        raise ValueError("thumbnail renderer returned no image")
-                    _persist_thumbnail(model_id, thumb_path)
-                    regenerated += 1
-                except Exception as exc:
-                    failed += 1
-                    logger.warning(
-                        "Thumbnail regeneration failed for %s: %s",
-                        full_path,
-                        exc,
-                    )
-                finally:
-                    if mesh is not None:
-                        del mesh
-                    done += 1
-                    _set_state(done=done, regenerated=regenerated, failed=failed)
+                last_id = page[-1][0]
+                pending = {}
+                updates = []
 
-            gc.collect()
-            logger.info(
-                "Thumbnail regeneration progress: %d/%d complete (%d failed)",
-                done,
-                total,
-                failed,
-            )
+                for model_id, rel_path, current_thumbnail in page:
+                    full_path = LIBRARY_PATH / Path(rel_path)
+                    if _thumbnail_is_current(full_path, current_thumbnail, color):
+                        skipped += 1
+                        done += 1
+                        continue
+
+                    future = executor.submit(_render_one, model_id, full_path, color)
+                    pending[future] = full_path
+
+                for future in as_completed(pending):
+                    full_path = pending[future]
+                    try:
+                        updates.append(future.result())
+                        regenerated += 1
+                    except Exception as exc:
+                        failed += 1
+                        logger.warning(
+                            "Thumbnail regeneration failed for %s: %s",
+                            full_path,
+                            exc,
+                        )
+                    finally:
+                        done += 1
+                        _set_state(
+                            done=done,
+                            regenerated=regenerated,
+                            skipped=skipped,
+                            failed=failed,
+                        )
+
+                # Persist all successful renders from this page in one transaction.
+                _persist_thumbnail_batch(updates)
+                _set_state(
+                    done=done,
+                    regenerated=regenerated,
+                    skipped=skipped,
+                    failed=failed,
+                )
+
+                gc.collect()
+                logger.info(
+                    "Thumbnail regeneration progress: %d/%d complete (%d rendered, %d skipped, %d failed)",
+                    done,
+                    total,
+                    regenerated,
+                    skipped,
+                    failed,
+                )
 
         logger.info(
-            "Thumbnail regeneration complete: %d regenerated, %d failed",
+            "Thumbnail regeneration complete: %d rendered, %d skipped, %d failed",
             regenerated,
+            skipped,
             failed,
         )
     except Exception:
