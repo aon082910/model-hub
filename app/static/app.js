@@ -8,6 +8,59 @@ import { OrbitControls } from '/assets/vendor/OrbitControls.js';
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
+const DEFAULT_VIEWER_MODEL_COLOR = '#c9ced6';
+let viewerModelColor = DEFAULT_VIEWER_MODEL_COLOR;
+let viewerSessionColor = DEFAULT_VIEWER_MODEL_COLOR;
+
+function normalizeViewerModelColor(value) {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
+    ? value
+    : DEFAULT_VIEWER_MODEL_COLOR;
+}
+
+function createViewerMaterial() {
+  const material = new THREE.MeshStandardMaterial({ color: viewerSessionColor });
+  material.userData.modelHubPreviewMaterial = true;
+  return material;
+}
+
+function applyViewerSessionColor() {
+  if (!scene) return;
+  scene.traverse((object) => {
+    if (!object.isMesh || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (material?.userData?.modelHubPreviewMaterial && material.color) {
+        material.color.set(viewerSessionColor);
+        material.needsUpdate = true;
+      }
+    }
+  });
+}
+
+function ensureViewerColorControl() {
+  let control = $('#viewer-color-control');
+  if (!control) {
+    control = document.createElement('div');
+    control.id = 'viewer-color-control';
+    control.className = 'row';
+    control.style.cssText = 'margin-top:8px;align-items:center;';
+    control.innerHTML = `
+      <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px" title="Temporary for this preview; the next preview uses the saved default color.">
+        Preview color
+        <input id="viewer-live-color" type="color" value="${DEFAULT_VIEWER_MODEL_COLOR}" aria-label="Temporary preview color">
+      </label>`;
+    $('#viewer-canvas-wrap').insertAdjacentElement('afterend', control);
+  }
+
+  const picker = $('#viewer-live-color');
+  picker.value = viewerSessionColor;
+  picker.oninput = () => {
+    viewerSessionColor = normalizeViewerModelColor(picker.value);
+    applyViewerSessionColor();
+  };
+}
+
 // ---------- Tabs ----------
 $$('#tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -105,6 +158,7 @@ function debounce(fn, ms) {
 let renderer, scene, camera, controls, animId;
 
 function openViewer(model) {
+  viewerSessionColor = viewerModelColor;
   $('#viewer-modal').classList.remove('hidden');
   $('#viewer-info').innerHTML = `
     <div><b>${model.filename}</b></div>
@@ -135,6 +189,7 @@ function openViewer(model) {
   };
 
   initViewer();
+  ensureViewerColorControl();
   const fileUrl = `/api/library/models/${model.id}/file`;
   const loaders = {
     '.stl': loadSTL,
@@ -207,8 +262,7 @@ function loadSTL(url) {
   const loader = new STLLoader();
   loader.load(url, (geometry) => {
     geometry.center();
-    const material = new THREE.MeshStandardMaterial({ color: 0x4f8ef7 });
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(geometry, createViewerMaterial());
     scene.add(mesh);
     frameCameraOn(mesh);
   });
@@ -218,7 +272,7 @@ function loadOBJ(url) {
   const loader = new OBJLoader();
   loader.load(url, (object) => {
     object.traverse((child) => {
-      if (child.isMesh) child.material = new THREE.MeshStandardMaterial({ color: 0x4f8ef7 });
+      if (child.isMesh) child.material = createViewerMaterial();
     });
     scene.add(object);
     frameCameraOn(object);
@@ -237,7 +291,7 @@ function loadFBX(url) {
   const loader = new FBXLoader();
   loader.load(url, (object) => {
     object.traverse((child) => {
-      if (child.isMesh) child.material = new THREE.MeshStandardMaterial({ color: 0x4f8ef7 });
+      if (child.isMesh) child.material = createViewerMaterial();
     });
     scene.add(object);
     frameCameraOn(object);
@@ -268,7 +322,7 @@ async function loadSTEP(url) {
       throw new Error('STEP file parsed but contained no visible geometry (assembly-only or metadata-only file?)');
     }
     const group = new THREE.Group();
-    const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0x4f8ef7 });
+    const defaultMaterial = createViewerMaterial();
     for (const resultMesh of result.meshes) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(resultMesh.attributes.position.array, 3));
@@ -451,6 +505,8 @@ async function loadSettings() {
   $('#ai-api-key').value = s.ai_api_key || '';
   $('#ai-api-model').value = s.ai_api_model || '';
   $('#unraid-share-path').value = s.unraid_share_path || '';
+  viewerModelColor = normalizeViewerModelColor(s.viewer_model_color);
+  $('#viewer-model-color').value = viewerModelColor;
   $('#est-material').value = s.est_material || 'PLA';
   $('#est-density').value = s.est_density || '';
   $('#est-infill').value = s.est_infill || '15';
@@ -474,6 +530,22 @@ $('#save-settings-btn').addEventListener('click', async () => {
   });
   $('#settings-status').textContent = 'Saved.';
   setTimeout(() => $('#settings-status').textContent = '', 2000);
+});
+
+$('#save-viewer-settings-btn').addEventListener('click', async () => {
+  const color = normalizeViewerModelColor($('#viewer-model-color').value);
+  const res = await fetch('/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ viewer_model_color: color }),
+  });
+  if (!res.ok) {
+    $('#viewer-settings-status').textContent = 'Failed to save.';
+    return;
+  }
+  viewerModelColor = color;
+  $('#viewer-model-color').value = color;
+  $('#viewer-settings-status').textContent = 'Saved.';
+  setTimeout(() => $('#viewer-settings-status').textContent = '', 2000);
 });
 
 $('#save-estimate-settings-btn').addEventListener('click', async () => {
@@ -530,6 +602,8 @@ async function boot() {
     showAuthOverlay('login');
     return;
   }
+  const settings = await probe.json();
+  viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
   loadModels();
 }
 
@@ -560,6 +634,11 @@ function showAuthOverlay(mode) {
       });
     }
     overlay.classList.add('hidden');
+    const settingsRes = await fetch('/api/settings');
+    if (settingsRes.ok) {
+      const settings = await settingsRes.json();
+      viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
+    }
     loadModels();
   };
 }

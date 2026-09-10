@@ -1,29 +1,39 @@
 import gc
 import hashlib
 import logging
-import threading
 from pathlib import Path
 from datetime import datetime
 
 from sqlmodel import Session, select
 
 from app.config import LIBRARY_PATH, SUPPORTED_EXTENSIONS, MESH_EXTENSIONS
+from app.library_maintenance import (
+    acquire_library_maintenance,
+    current_library_maintenance,
+    release_library_maintenance,
+)
 from app.models import Model3D
-from app.thumbnails import generate_thumbnail, load_mesh, mesh_stats
+from app.settings_store import get_setting
+from app.thumbnails import (
+    DEFAULT_THUMBNAIL_COLOR,
+    generate_thumbnail,
+    load_mesh,
+    mesh_stats,
+    normalize_thumbnail_color,
+)
 
 logger = logging.getLogger("modelhub.scanner")
 
 SCAN_BATCH_SIZE = 100
-_scan_lock = threading.Lock()
 
 
 class ScanAlreadyRunning(RuntimeError):
-    """Raised when another library scan already owns the process-wide scan lock."""
+    """Raised when another library maintenance task prevents a scan from starting."""
 
 
 def scan_is_running() -> bool:
-    """Return whether a library scan currently owns the process-wide scan lock."""
-    return _scan_lock.locked()
+    """Return whether the process-wide library maintenance slot is owned by a scan."""
+    return current_library_maintenance() == "scan"
 
 
 def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -50,6 +60,12 @@ def _upsert_path(session: Session, path: Path, rel_path: str, counters: dict) ->
         existing.last_scanned_at = datetime.utcnow()
         session.add(existing)
         return existing
+
+    # Capture the saved thumbnail color while the initial lookup transaction is
+    # still open, then release that transaction before hashing/mesh/render work.
+    thumbnail_color = normalize_thumbnail_color(
+        get_setting(session, "viewer_model_color", DEFAULT_THUMBNAIL_COLOR)
+    )
 
     # The lookup above starts a SQLite read transaction. End it before hashing,
     # Trimesh analysis, or thumbnail rendering, all of which can take seconds or
@@ -85,7 +101,7 @@ def _upsert_path(session: Session, path: Path, rel_path: str, counters: dict) ->
             except Exception as e:
                 logger.warning("Failed to read mesh stats for %s: %s", path, e)
             try:
-                thumb_path = generate_thumbnail(path, mesh=mesh)
+                thumb_path = generate_thumbnail(path, mesh=mesh, color=thumbnail_color)
             except Exception as e:
                 logger.warning("Thumbnail generation failed for %s: %s", path, e)
         finally:
@@ -173,13 +189,18 @@ def _remove_missing_models(session: Session) -> None:
 
 
 def scan_library(session: Session) -> dict:
-    """Run one library scan, rejecting concurrent scan attempts."""
-    if not _scan_lock.acquire(blocking=False):
-        raise ScanAlreadyRunning("Library scan already in progress")
+    """Run one library scan, rejecting overlapping heavy library maintenance."""
+    if not acquire_library_maintenance("scan"):
+        active = current_library_maintenance()
+        if active == "scan":
+            message = "Library scan already in progress"
+        else:
+            message = f"Library maintenance already in progress: {active or 'another task'}"
+        raise ScanAlreadyRunning(message)
     try:
         return _scan_library(session)
     finally:
-        _scan_lock.release()
+        release_library_maintenance()
 
 
 def _scan_library(session: Session) -> dict:
