@@ -8,9 +8,7 @@ from app.ai import AIProvider
 
 
 class APIProvider(AIProvider):
-    """OpenAI-compatible API (OpenRouter, OpenAI, etc). User supplies their own key.
-    Mirrors Meshory's existing OpenRouter-based tagging.
-    """
+    """OpenAI-compatible API (OpenRouter, OpenAI, etc). User supplies their own key."""
 
     def __init__(self, api_key: str, api_base: str = "https://openrouter.ai/api/v1",
                  model: str = "openai/gpt-4o-mini", embed_model: str = "openai/text-embedding-3-small"):

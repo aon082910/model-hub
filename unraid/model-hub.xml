@@ -10,7 +10,7 @@
   <Support>https://github.com/aon082910/model-hub/issues</Support>
   <Project>https://github.com/aon082910/model-hub</Project>
   <Overview>
-Self-hosted, open clone of Meshory's 3D print file library: STL/3MF/OBJ/STEP/FBX
+Self-hosted, open 3D print file library manager: STL/3MF/OBJ/STEP/FBX
 organization, thumbnails, duplicate detection, tagging, semantic search, smart
 collections, filament inventory and a print queue. AI tagging/search can run
 against a local Ollama instance (nothing leaves your network) or an external

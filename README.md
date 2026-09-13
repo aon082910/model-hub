@@ -5,12 +5,11 @@
 Source: [github.com/aon082910/model-hub](https://github.com/aon082910/model-hub) ·
 Image: [hub.docker.com/r/allornothing/model-hub](https://hub.docker.com/r/allornothing/model-hub)
 
-An open, self-hosted clone of [meshory.com](https://meshory.com)'s feature set for Unraid:
+An open, self-hosted 3D-print-file-library manager for Unraid:
 STL/3MF/OBJ/STEP/FBX library management, thumbnails, duplicate detection, AI
 auto-tagging + semantic search (local Ollama **or** an external API — your
 choice, switchable in Settings), smart collections, filament inventory, and a
-print queue. Meshory itself is closed-source and desktop-only; this is a
-from-scratch reimplementation of its feature list, not a repackage of Meshory.
+print queue.
 
 ## Run it locally / test before deploying to Unraid
 
@@ -52,8 +51,7 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
    - **Local (Ollama)** — point "Host" at `http://<unraid-ip>:11434` (or the
      Ollama container's name if both are on the same custom Docker network).
      Nothing leaves your network.
-   - **API** — paste an OpenRouter/OpenAI-compatible key. Same model Meshory
-     itself uses today.
+   - **API** — paste an OpenRouter/OpenAI-compatible key.
    - **Off** — pure manual tagging, no AI calls at all.
 
 6. Click **Rescan Library**, then **Tag All (AI)** if you want auto-tagging.
@@ -62,7 +60,7 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
    (skipped if you set Admin Username/Password in step 4). This gates the whole
    app — see [Auth](#auth) below.
 
-## What's implemented vs. Meshory's roadmap
+## Feature status
 
 | Feature | Status |
 |---|---|
