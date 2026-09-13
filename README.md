@@ -71,7 +71,7 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Duplicate detection (hash + geometry) | Done — SHA256 content hash + normalized-vertex geometry hash |
 | Collections | Done |
 | Smart/rule-based collections | Done — field/operator/value rules (`app/smart_collections.py`) |
-| AI auto-tagging, local or API | Done — pluggable provider (`app/ai/`), pausable/resumable batch job, rough cost estimate for paid API mode |
+| AI auto-tagging, local or API | Done — pluggable provider (`app/ai/`), pausable/resumable batch job, rough cost estimate for paid API mode. Batch runs checkpoint (session release + GC) every 20 models so tagging a large untagged library doesn't grow memory unbounded |
 | Semantic search | Done — embeddings stored per-model, cosine similarity search |
 | Slicer hand-off | Implemented as network-path + direct-download hand-off (`app/routers/slicer.py`) — a server container cannot launch an app on your desktop, so this exposes the same share path your slicer can watch/import from, rather than faking a "send to slicer" button |
 | Metadata/license/designer tracking | Done — fields on each model, editable in the viewer |
