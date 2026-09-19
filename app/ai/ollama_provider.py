@@ -2,10 +2,9 @@ import base64
 import json
 from typing import List
 
-import httpx
-
 from app.config import DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_VISION_MODEL, DEFAULT_OLLAMA_EMBED_MODEL
 from app.ai import AIProvider
+from app.ai.http_utils import post_json_bounded
 
 
 class OllamaProvider(AIProvider):
@@ -25,19 +24,28 @@ class OllamaProvider(AIProvider):
             '{"tags": ["...", "..."], "description": "one sentence"}. '
             "Tags should be short, lowercase, e.g. object type, category, use-case."
         )
-        resp = httpx.post(
+        body = post_json_bounded(
             f"{self.host}/api/generate",
-            json={
+            {
                 "model": self.vision_model,
                 "prompt": prompt,
                 "images": [b64],
                 "stream": False,
                 "format": "json",
+                # We only ever want a couple of short tags plus one sentence.
+                # Without a cap, a model that struggles to close out the
+                # forced JSON grammar (a known failure mode especially on
+                # smaller/quantized vision models) can keep generating far
+                # past anything usable -- bounding it here caps how long one
+                # model can block the rest of the batch. post_json_bounded's
+                # own byte cap is the real backstop for memory: it protects
+                # even if a model or a non-Ollama-compliant endpoint ignores
+                # this option entirely.
+                "options": {"num_predict": 200},
             },
             timeout=120,
         )
-        resp.raise_for_status()
-        raw = resp.json().get("response", "{}")
+        raw = body.get("response", "{}")
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
@@ -48,10 +56,9 @@ class OllamaProvider(AIProvider):
         }
 
     def embed_text(self, text: str) -> List[float]:
-        resp = httpx.post(
+        body = post_json_bounded(
             f"{self.host}/api/embeddings",
-            json={"model": self.embed_model, "prompt": text},
+            {"model": self.embed_model, "prompt": text},
             timeout=60,
         )
-        resp.raise_for_status()
-        return resp.json().get("embedding", [])
+        return body.get("embedding", [])

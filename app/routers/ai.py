@@ -10,6 +10,7 @@ from app.ai import get_provider
 from app.ai.api_provider import APIProvider
 from app.settings_store import get_setting
 from app.notify import notify
+from app.memory_guard import memory_usage_critical
 
 logger = logging.getLogger("modelhub.ai")
 
@@ -37,11 +38,12 @@ def tag_single(model_id: int, session: Session = Depends(get_session)):
     return tag_model(session, model)
 
 
-_job_state = {"running": False, "done": 0, "total": 0, "cancel": False, "estimated_cost_usd": 0.0}
+_job_state = {"running": False, "done": 0, "total": 0, "cancel": False, "estimated_cost_usd": 0.0, "stopped_reason": None}
 
 
 def _run_batch_tagging(model_ids: list[int]):
-    _job_state.update(running=True, done=0, total=len(model_ids), cancel=False, estimated_cost_usd=0.0)
+    _job_state.update(running=True, done=0, total=len(model_ids), cancel=False,
+                       estimated_cost_usd=0.0, stopped_reason=None)
     try:
         with Session(engine) as session:
             provider = get_provider(session)
@@ -49,6 +51,17 @@ def _run_batch_tagging(model_ids: list[int]):
             is_paid = isinstance(provider, APIProvider)
             for mid in model_ids:
                 if _job_state["cancel"]:
+                    break
+                # Checked before each model rather than only at the periodic
+                # ORM checkpoint below -- a single pathological response from
+                # an AI provider (e.g. a local model stuck generating past any
+                # sane length) can spike memory well within one batch of 20.
+                if memory_usage_critical():
+                    logger.warning(
+                        "Stopping batch tagging early: container memory usage is critical "
+                        "(%d/%d models tagged)", _job_state["done"], _job_state["total"],
+                    )
+                    _job_state["stopped_reason"] = "high memory usage"
                     break
                 model = session.get(Model3D, mid)
                 if model and not model.ai_tagged:
@@ -68,6 +81,7 @@ def _run_batch_tagging(model_ids: list[int]):
 
             notify(session, "Model Hub: tagging finished",
                    f"Tagged {_job_state['done']}/{_job_state['total']} model(s)." +
+                   (f" Stopped early: {_job_state['stopped_reason']}." if _job_state["stopped_reason"] else "") +
                    (f" Est. cost: ${_job_state['estimated_cost_usd']:.3f}" if _job_state["estimated_cost_usd"] else ""))
     except Exception:
         logger.exception("Batch tagging job crashed")

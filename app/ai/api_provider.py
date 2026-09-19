@@ -2,9 +2,8 @@ import base64
 import json
 from typing import List
 
-import httpx
-
 from app.ai import AIProvider
+from app.ai.http_utils import post_json_bounded
 
 
 class APIProvider(AIProvider):
@@ -39,11 +38,14 @@ class APIProvider(AIProvider):
                 }
             ],
             "response_format": {"type": "json_object"},
+            # Same rationale as OllamaProvider's num_predict cap -- we only
+            # ever want a couple of tags plus one sentence.
+            "max_tokens": 200,
         }
-        resp = httpx.post(f"{self.api_base}/chat/completions", headers=self._headers(),
-                           json=payload, timeout=120)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        body = post_json_bounded(
+            f"{self.api_base}/chat/completions", payload, timeout=120, headers=self._headers()
+        )
+        content = body["choices"][0]["message"]["content"]
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
@@ -54,7 +56,8 @@ class APIProvider(AIProvider):
         }
 
     def embed_text(self, text: str) -> List[float]:
-        resp = httpx.post(f"{self.api_base}/embeddings", headers=self._headers(),
-                           json={"model": self.embed_model, "input": text}, timeout=60)
-        resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
+        body = post_json_bounded(
+            f"{self.api_base}/embeddings", {"model": self.embed_model, "input": text},
+            timeout=60, headers=self._headers(),
+        )
+        return body["data"][0]["embedding"]

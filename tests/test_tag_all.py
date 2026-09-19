@@ -81,12 +81,14 @@ def test_batch_tagging_checkpoints_session_and_resets_running_flag(monkeypatch):
     monkeypatch.setattr(tagging_module, "get_provider", lambda session: _FakeProvider())
     monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
     monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "memory_usage_critical", lambda: False)
 
     ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
     ai_module._run_batch_tagging(list(models_by_id.keys()))
 
     assert ai_module._job_state["running"] is False
     assert ai_module._job_state["done"] == n_models
+    assert ai_module._job_state["stopped_reason"] is None
     assert all(m.ai_tagged for m in models_by_id.values())
     # 45 models at a checkpoint interval of 20 -> checkpoints at 20 and 40.
     assert fake_session.expunges == 2
@@ -131,6 +133,7 @@ def test_batch_tagging_continues_past_a_single_model_failure(monkeypatch):
     monkeypatch.setattr(tagging_module, "get_provider", lambda session: flaky)
     monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
     monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "memory_usage_critical", lambda: False)
 
     ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
     ai_module._run_batch_tagging(list(models_by_id.keys()))
@@ -139,3 +142,64 @@ def test_batch_tagging_continues_past_a_single_model_failure(monkeypatch):
     assert ai_module._job_state["running"] is False
     # model 1's tag_image call fails, but 2 and 3 still get tagged.
     assert sum(1 for m in models_by_id.values() if m.ai_tagged) == 2
+
+
+def test_batch_tagging_stops_early_when_memory_is_critical(monkeypatch):
+    """The Linux OOM killer gives no warning and no traceback -- a job that
+    notices it's approaching the container's memory limit must stop itself
+    with a clear reason well before that, rather than let the kernel take the
+    whole container down mid-batch."""
+    import app.routers.ai as ai_module
+    import app.ai.tagging as tagging_module
+
+    models_by_id = {i: _FakeModel(i) for i in range(10)}
+    fake_session = _FakeSession(models_by_id)
+    provider = _FakeProvider()
+
+    # Critical from the very first check -- nothing should get tagged.
+    monkeypatch.setattr(ai_module, "Session", lambda eng: fake_session)
+    monkeypatch.setattr(ai_module, "get_provider", lambda session: provider)
+    monkeypatch.setattr(tagging_module, "get_provider", lambda session: provider)
+    monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
+    monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "memory_usage_critical", lambda: True)
+
+    ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
+    ai_module._run_batch_tagging(list(models_by_id.keys()))
+
+    assert ai_module._job_state["running"] is False
+    assert ai_module._job_state["done"] == 0
+    assert ai_module._job_state["stopped_reason"] == "high memory usage"
+    assert not any(m.ai_tagged for m in models_by_id.values())
+
+
+def test_batch_tagging_stops_partway_when_memory_turns_critical(monkeypatch):
+    """Memory can turn critical partway through a batch, not just at the
+    start -- already-tagged models must be left as-is, not rolled back or
+    reprocessed, and the job must still end cleanly."""
+    import app.routers.ai as ai_module
+    import app.ai.tagging as tagging_module
+
+    models_by_id = {i: _FakeModel(i) for i in range(10)}
+    fake_session = _FakeSession(models_by_id)
+    provider = _FakeProvider()
+    checks = {"count": 0}
+
+    def critical_after_three():
+        checks["count"] += 1
+        return checks["count"] > 3
+
+    monkeypatch.setattr(ai_module, "Session", lambda eng: fake_session)
+    monkeypatch.setattr(ai_module, "get_provider", lambda session: provider)
+    monkeypatch.setattr(tagging_module, "get_provider", lambda session: provider)
+    monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
+    monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "memory_usage_critical", critical_after_three)
+
+    ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
+    ai_module._run_batch_tagging(list(models_by_id.keys()))
+
+    assert ai_module._job_state["running"] is False
+    assert ai_module._job_state["done"] == 3
+    assert ai_module._job_state["stopped_reason"] == "high memory usage"
+    assert sum(1 for m in models_by_id.values() if m.ai_tagged) == 3
