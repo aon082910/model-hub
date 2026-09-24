@@ -90,6 +90,14 @@ class ThreeMFLoader extends Loader {
 		const scope = this;
 		const textureLoader = new TextureLoader( this.manager );
 
+		// Multi-part 3MF project files (e.g. exported by Bambu Studio / OrcaSlicer,
+		// which split each plate/object into its own 3D/Objects/object_*.model part)
+		// can reference a component objectId that lives in a *different* model part
+		// than the <component> reference itself. Populated by buildObjects() below;
+		// buildObject() falls back to searching every part here when an objectId
+		// isn't defined in the part it was asked to look in.
+		let allModelParts = null;
+
 		function loadDocument( data ) {
 
 			let zip = null;
@@ -1316,6 +1324,16 @@ class ThreeMFLoader extends Loader {
 
 				}
 
+				if ( build === undefined ) {
+
+					// Genuinely unresolvable (a dangling reference in a malformed
+					// file) -- skip this one component rather than crash the whole
+					// model's build.
+					console.warn( 'THREE.3MFLoader: Object', component.objectId, 'not found, skipped.' );
+					continue;
+
+				}
+
 				const object3D = build.clone();
 
 				// apply component transform
@@ -1338,24 +1356,47 @@ class ThreeMFLoader extends Loader {
 
 		function buildObject( objectId, objects, modelData, textureData ) {
 
-			const objectData = modelData[ 'resources' ][ 'object' ][ objectId ];
+			let objectData = modelData[ 'resources' ][ 'object' ][ objectId ];
+			let ownerModelData = modelData;
+
+			if ( objectData === undefined && allModelParts ) {
+
+				// Not defined in the part that referenced it -- search every
+				// other part of this 3MF for it before giving up.
+				for ( const key in allModelParts ) {
+
+					const candidate = allModelParts[ key ][ 'resources' ][ 'object' ][ objectId ];
+
+					if ( candidate !== undefined ) {
+
+						objectData = candidate;
+						ownerModelData = allModelParts[ key ];
+						break;
+
+					}
+
+				}
+
+			}
+
+			if ( objectData === undefined ) return;
 
 			if ( objectData[ 'mesh' ] ) {
 
 				const meshData = objectData[ 'mesh' ];
 
-				const extensions = modelData[ 'extensions' ];
-				const modelXml = modelData[ 'xml' ];
+				const extensions = ownerModelData[ 'extensions' ];
+				const modelXml = ownerModelData[ 'xml' ];
 
 				applyExtensions( extensions, meshData, modelXml );
 
-				objects[ objectData.id ] = getBuild( meshData, objects, modelData, textureData, objectData, buildGroup );
+				objects[ objectData.id ] = getBuild( meshData, objects, ownerModelData, textureData, objectData, buildGroup );
 
 			} else {
 
 				const compositeData = objectData[ 'components' ];
 
-				objects[ objectData.id ] = getBuild( compositeData, objects, modelData, textureData, objectData, buildComposite );
+				objects[ objectData.id ] = getBuild( compositeData, objects, ownerModelData, textureData, objectData, buildComposite );
 
 			}
 
@@ -1374,6 +1415,8 @@ class ThreeMFLoader extends Loader {
 			const objects = {};
 			const modelsKeys = Object.keys( modelsData );
 			const textureData = {};
+
+			allModelParts = modelsData;
 
 			// evaluate model relationships to textures
 

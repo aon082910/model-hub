@@ -1,4 +1,5 @@
 import hashlib
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,18 @@ from app.config import THUMB_DIR
 GEOMETRY_HASH_CHUNK_VERTICES = 100_000
 MAX_RENDER_FACES = 50_000
 MAX_CONVEX_HULL_FACES = 50_000
+# Building trimesh's internal edge/adjacency tables for is_watertight also
+# scales with face count. Multi-plate/multi-object .3mf project files (e.g.
+# exported by Bambu Studio/OrcaSlicer, which get concatenated into one mesh
+# on load) can have several million faces once combined -- computing
+# is_watertight on a mesh that size has been observed in the wild to consume
+# well over 15GB of RAM, OOM-killing the container on every scan attempt
+# since the scan just retries the same file after every restart. Treat any
+# mesh past this size as non-watertight without even trying, the same way
+# MAX_CONVEX_HULL_FACES already treats its own fallback as too expensive
+# past a size. Set higher than the hull/render caps since is_watertight
+# alone is cheaper than those, but still bounded.
+MAX_WATERTIGHT_CHECK_FACES = 200_000
 DEFAULT_THUMBNAIL_COLOR = "#c9ced6"
 THUMBNAIL_RENDER_VERSION = 2
 
@@ -97,7 +110,11 @@ def mesh_stats(path: Path, mesh=None) -> dict:
     geometry_hash = _geometry_hash(verts)
     bbox = np.asarray(mesh.bounding_box.extents, dtype=float).tolist()
 
-    watertight = bool(getattr(mesh, "is_watertight", False))
+    if len(faces) > MAX_WATERTIGHT_CHECK_FACES:
+        watertight = False
+    else:
+        watertight = bool(getattr(mesh, "is_watertight", False))
+
     if watertight:
         volume_mm3 = abs(float(mesh.volume))
     elif len(faces) <= MAX_CONVEX_HULL_FACES:
@@ -122,6 +139,39 @@ def mesh_stats(path: Path, mesh=None) -> dict:
     }
 
 
+def extract_3mf_thumbnail(path: Path) -> bytes:
+    """Return the embedded preview PNG from a .3mf's OPC (zip) package, if any.
+
+    Slicers (Bambu Studio, OrcaSlicer, PrusaSlicer, ...) already render and
+    embed a plate preview inside the .3mf itself, conventionally at
+    Metadata/thumbnail.png or under Auxiliaries/.thumbnails/. Using it
+    directly skips mesh parsing entirely for the thumbnail -- which matters
+    most for exactly the large multi-plate project files that are otherwise
+    the most expensive (and were, before the is_watertight guard above, the
+    most crash-prone) to render ourselves -- and gives a more accurate
+    preview than our own flat-color render besides.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            candidates = [
+                n for n in zf.namelist()
+                if n.lower().endswith(".png")
+                and ("thumbnail" in n.lower() or ".thumbnails/" in n.lower())
+            ]
+            if not candidates:
+                return None
+            preferred = next((n for n in candidates if n.lower() == "metadata/thumbnail.png"), None)
+            # No conventional top-level thumbnail -- take the largest PNG among
+            # the candidates, more likely to be a full preview than an icon.
+            name = preferred or max(candidates, key=lambda n: zf.getinfo(n).file_size)
+            data = zf.read(name)
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                return None
+            return data
+    except Exception:
+        return None
+
+
 def generate_thumbnail(
     path: Path,
     size: int = 512,
@@ -137,9 +187,15 @@ def generate_thumbnail(
     clear error). matplotlib needs no display server at all.
     """
     color = normalize_thumbnail_color(color)
-    if mesh is None:
-        mesh = load_mesh(path)
-    png = _matplotlib_fallback(mesh, size, color)
+
+    png = None
+    if path.suffix.lower() == ".3mf":
+        png = extract_3mf_thumbnail(path)
+
+    if png is None:
+        if mesh is None:
+            mesh = load_mesh(path)
+        png = _matplotlib_fallback(mesh, size, color)
 
     if png is None:
         return None
