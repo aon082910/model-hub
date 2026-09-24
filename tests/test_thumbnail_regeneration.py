@@ -66,22 +66,30 @@ def test_thumbnail_current_requires_matching_signature_and_file(monkeypatch, tmp
 
 
 def test_render_worker_only_renders_thumbnail(monkeypatch, tmp_path):
-    import app.thumbnail_jobs as jobs
+    import app.mesh_worker as mesh_worker
+    import app.thumbnails as thumbnails
 
     model_path = tmp_path / "model.stl"
     model_path.write_bytes(b"mesh")
     calls = []
 
-    def fake_render(path_str, color):
-        calls.append((Path(path_str), color))
+    def fake_render(path, color, budget_bytes):
+        calls.append((path, color, budget_bytes))
         return "signed-thumbnail.png"
 
-    monkeypatch.setattr(jobs, "render_thumbnail_file", fake_render)
+    monkeypatch.setattr(thumbnails, "render_thumbnail_only", fake_render)
 
-    result = jobs._render_one(42, model_path, "#654321")
+    result = mesh_worker.render_thumbnail(str(model_path), "#654321", 123)
 
-    assert result == (42, "signed-thumbnail.png")
-    assert calls == [(model_path, "#654321")]
+    assert result == "signed-thumbnail.png"
+    assert calls == [(model_path, "#654321", 123)]
+
+
+def test_render_worker_rejects_missing_file(tmp_path):
+    import app.mesh_worker as mesh_worker
+
+    with pytest.raises(FileNotFoundError):
+        mesh_worker.render_thumbnail(str(tmp_path / "gone.stl"), "#654321", 123)
 
 
 def test_thumbnail_job_rejected_during_scan():

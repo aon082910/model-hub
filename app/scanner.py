@@ -1,30 +1,68 @@
 import gc
 import hashlib
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
 
 from sqlmodel import Session, select
 
-from app.config import LIBRARY_PATH, SUPPORTED_EXTENSIONS, MESH_EXTENSIONS
+from app.config import CONFIG_PATH, LIBRARY_PATH, SUPPORTED_EXTENSIONS, MESH_EXTENSIONS
 from app.library_maintenance import (
     acquire_library_maintenance,
     current_library_maintenance,
     release_library_maintenance,
 )
+from app.mesh_worker import MeshWorkerError, analyze_file, preview_file, scan_worker_pool
 from app.models import Model3D
 from app.settings_store import get_setting
-from app.thumbnails import (
-    DEFAULT_THUMBNAIL_COLOR,
-    generate_thumbnail,
-    load_mesh,
-    mesh_stats,
-    normalize_thumbnail_color,
-)
+from app.thumbnails import DEFAULT_THUMBNAIL_COLOR, normalize_thumbnail_color
 
 logger = logging.getLogger("modelhub.scanner")
 
 SCAN_BATCH_SIZE = 100
+
+# Last-resort crash-loop breaker. Mesh parsing already runs in a memory-capped
+# worker (app/mesh_worker.py) so a single file shouldn't be able to take the
+# server down -- but if something unanticipated still does, the background
+# scan restarts on the next launch and walks straight back into the same file.
+# The path being analyzed is recorded here and cleared once it's committed;
+# a marker still present at the start of a scan names the file the previous
+# scan died on. Two strikes (not one, so an ordinary restart mid-scan doesn't
+# penalize an innocent file) and the file is indexed without mesh analysis
+# from then on.
+INFLIGHT_MARKER = CONFIG_PATH / "scan_inflight.json"
+CRASH_STRIKES_BEFORE_SKIP = 2
+
+
+def _load_crash_suspects() -> dict:
+    try:
+        data = json.loads(INFLIGHT_MARKER.read_text())
+        INFLIGHT_MARKER.unlink(missing_ok=True)
+        path, strikes = data["path"], int(data.get("strikes", 0)) + 1
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        INFLIGHT_MARKER.unlink(missing_ok=True)
+        return {}
+    logger.warning(
+        "The previous library scan ended while analyzing %s (%d time(s) in a row)", path, strikes
+    )
+    return {path: strikes}
+
+
+def _write_inflight_marker(rel_path: str, strikes: int) -> None:
+    try:
+        INFLIGHT_MARKER.write_text(json.dumps({"path": rel_path, "strikes": strikes}))
+    except OSError:
+        pass
+
+
+def _clear_inflight_marker() -> None:
+    try:
+        INFLIGHT_MARKER.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 class ScanAlreadyRunning(RuntimeError):
@@ -44,13 +82,18 @@ def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def _upsert_path(session: Session, path: Path, rel_path: str, counters: dict) -> Model3D:
+def _upsert_path(
+    session: Session, path: Path, rel_path: str, counters: dict, crash_suspects: dict = None
+) -> Model3D:
     """Hash/measure/thumbnail a single file on disk and create-or-update its Model3D row.
     Shared by the directory scanner and the browser-extension import endpoint.
 
     Expensive filesystem/mesh work is intentionally performed outside an active
     database transaction so the background scanner does not block unrelated SQLite
     writes such as queue, filament, or metadata updates.
+
+    crash_suspects (scans only) enables the in-flight crash-loop marker; see
+    INFLIGHT_MARKER.
     """
     ext = path.suffix.lower()
     stat = path.stat()
@@ -83,30 +126,39 @@ def _upsert_path(session: Session, path: Path, rel_path: str, counters: dict) ->
     thumb_path = None
 
     if ext in MESH_EXTENSIONS:
-        mesh = None
-        try:
-            # Load once and reuse the same mesh for stats and thumbnail rendering.
-            mesh = load_mesh(path)
-        except Exception as e:
-            logger.warning("Failed to load mesh for %s: %s", path, e)
+        strikes = crash_suspects.get(rel_path, 0) if crash_suspects is not None else 0
+        if strikes >= CRASH_STRIKES_BEFORE_SKIP:
+            logger.warning(
+                "Skipping mesh analysis for %s: library scans ended while analyzing it %d times "
+                "in a row. It is indexed without stats or a thumbnail.",
+                rel_path, strikes,
+            )
         else:
+            if crash_suspects is not None:
+                _write_inflight_marker(rel_path, strikes)
+            pool = scan_worker_pool()
+            analysis = None
             try:
-                stats = mesh_stats(path, mesh=mesh)
-                geometry_hash = stats["geometry_hash"]
-                vcount = stats["vertex_count"]
-                fcount = stats["face_count"]
-                bbox = stats["bbox"]
-                volume_mm3 = stats["volume_mm3"]
-                is_watertight = stats["is_watertight"]
+                # Never parsed in this process -- see app/mesh_worker.py.
+                analysis = pool.run(analyze_file, str(path), thumbnail_color, pool.budget_bytes)
+            except MeshWorkerError as e:
+                logger.warning("Mesh analysis failed for %s: %s", rel_path, e)
+                try:
+                    analysis = pool.run(preview_file, str(path), thumbnail_color)
+                except Exception as e2:
+                    logger.warning("Preview fallback also failed for %s: %s", rel_path, e2)
             except Exception as e:
-                logger.warning("Failed to read mesh stats for %s: %s", path, e)
-            try:
-                thumb_path = generate_thumbnail(path, mesh=mesh, color=thumbnail_color)
-            except Exception as e:
-                logger.warning("Thumbnail generation failed for %s: %s", path, e)
-        finally:
-            # Do not keep a large Trimesh object alive beyond this file.
-            del mesh
+                logger.warning("Mesh analysis failed for %s: %s", rel_path, e)
+            if analysis is not None:
+                for problem in analysis.get("errors", []):
+                    logger.warning("%s: %s", rel_path, problem)
+                geometry_hash = analysis["geometry_hash"]
+                vcount = analysis["vertex_count"]
+                fcount = analysis["face_count"]
+                bbox = tuple(analysis["bbox"])
+                volume_mm3 = analysis["volume_mm3"]
+                is_watertight = analysis["is_watertight"]
+                thumb_path = analysis["thumbnail_path"]
 
     # From here to the caller's commit, keep DB work short: duplicate lookup,
     # re-fetch/update (if needed), and persistence only.
@@ -212,6 +264,7 @@ def _scan_library(session: Session) -> dict:
         return counters
 
     logger.info("Library scan started: %s", LIBRARY_PATH)
+    crash_suspects = _load_crash_suspects()
 
     for path in LIBRARY_PATH.rglob("*"):
         if not path.is_file():
@@ -221,12 +274,13 @@ def _scan_library(session: Session) -> dict:
             continue
         counters["found"] += 1
         rel_path = str(path.relative_to(LIBRARY_PATH))
-        _upsert_path(session, path, rel_path, counters)
+        _upsert_path(session, path, rel_path, counters, crash_suspects=crash_suspects)
 
         # Persist each completed file immediately. This releases SQLite's writer
         # lock between models instead of holding it while the next model is hashed,
         # parsed, and rendered. Memory cleanup remains batched separately below.
         session.commit()
+        _clear_inflight_marker()
 
         if counters["found"] % SCAN_BATCH_SIZE == 0:
             _checkpoint_session(session)

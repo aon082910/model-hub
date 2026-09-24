@@ -14,19 +14,29 @@ GEOMETRY_HASH_CHUNK_VERTICES = 100_000
 MAX_RENDER_FACES = 50_000
 MAX_CONVEX_HULL_FACES = 50_000
 # Building trimesh's internal edge/adjacency tables for is_watertight also
-# scales with face count. Multi-plate/multi-object .3mf project files (e.g.
-# exported by Bambu Studio/OrcaSlicer, which get concatenated into one mesh
-# on load) can have several million faces once combined -- computing
-# is_watertight on a mesh that size has been observed in the wild to consume
-# well over 15GB of RAM, OOM-killing the container on every scan attempt
-# since the scan just retries the same file after every restart. Treat any
-# mesh past this size as non-watertight without even trying, the same way
-# MAX_CONVEX_HULL_FACES already treats its own fallback as too expensive
-# past a size. Set higher than the hull/render caps since is_watertight
-# alone is cheaper than those, but still bounded.
+# scales with face count, and multi-plate .3mf project files (Bambu Studio,
+# OrcaSlicer) get concatenated into one mesh of several million faces on load.
+# Treat any mesh past this size as non-watertight without trying, the same way
+# MAX_CONVEX_HULL_FACES bounds its own fallback.
 MAX_WATERTIGHT_CHECK_FACES = 200_000
 DEFAULT_THUMBNAIL_COLOR = "#c9ced6"
 THUMBNAIL_RENDER_VERSION = 2
+
+# Peak memory to *load* a file with trimesh, per byte of input, measured in
+# the container: a 35MB Bambu-style .3mf holding 207MB of uncompressed model
+# XML peaked at 4.1GB (~20x the XML), and a 262MB binary STL at 2.9GB (~11x).
+# Used to decide up front whether a file fits the mesh worker's memory budget
+# (see app/mesh_worker.py) before spending minutes parsing it only to hit the
+# ceiling. Rounded up: underestimating just means the worker's hard limit
+# catches it instead.
+PARSE_BYTES_PER_3MF_XML_BYTE = 20
+PARSE_BYTES_PER_BINARY_STL_BYTE = 12
+# Largest embedded preview we'll read out of a .3mf -- real slicer previews are
+# tens to hundreds of KB; this only guards against a pathological archive.
+MAX_EMBEDDED_THUMBNAIL_BYTES = 20 * 1024 * 1024
+
+# Binary STL: 80-byte header, uint32 face count, then 50 bytes per face.
+_STL_RECORD = np.dtype([("normal", "<f4", (3,)), ("v", "<f4", (3, 3)), ("attr", "<u2")])
 
 
 def normalize_thumbnail_color(value: str) -> str:
@@ -144,32 +154,113 @@ def extract_3mf_thumbnail(path: Path) -> bytes:
 
     Slicers (Bambu Studio, OrcaSlicer, PrusaSlicer, ...) already render and
     embed a plate preview inside the .3mf itself, conventionally at
-    Metadata/thumbnail.png or under Auxiliaries/.thumbnails/. Using it
-    directly skips mesh parsing entirely for the thumbnail -- which matters
-    most for exactly the large multi-plate project files that are otherwise
-    the most expensive (and were, before the is_watertight guard above, the
-    most crash-prone) to render ourselves -- and gives a more accurate
-    preview than our own flat-color render besides.
+    Metadata/thumbnail.png or under Auxiliaries/.thumbnails/. Using it skips
+    mesh parsing for the thumbnail entirely -- which matters most for exactly
+    the large multi-plate project files that are otherwise the most expensive
+    to parse -- and is a more accurate preview than our own flat-color render.
     """
     try:
         with zipfile.ZipFile(path) as zf:
             candidates = [
-                n for n in zf.namelist()
-                if n.lower().endswith(".png")
-                and ("thumbnail" in n.lower() or ".thumbnails/" in n.lower())
+                info for info in zf.infolist()
+                if info.filename.lower().endswith(".png")
+                and ("thumbnail" in info.filename.lower() or ".thumbnails/" in info.filename.lower())
+                and info.file_size <= MAX_EMBEDDED_THUMBNAIL_BYTES
             ]
             if not candidates:
                 return None
-            preferred = next((n for n in candidates if n.lower() == "metadata/thumbnail.png"), None)
+            preferred = next(
+                (i for i in candidates if i.filename.lower() == "metadata/thumbnail.png"), None
+            )
             # No conventional top-level thumbnail -- take the largest PNG among
             # the candidates, more likely to be a full preview than an icon.
-            name = preferred or max(candidates, key=lambda n: zf.getinfo(n).file_size)
-            data = zf.read(name)
+            info = preferred or max(candidates, key=lambda i: i.file_size)
+            data = zf.read(info)
             if not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 return None
             return data
     except Exception:
         return None
+
+
+def binary_stl_face_count(path: Path):
+    """Face count from a binary STL's header, or None if it isn't one.
+
+    Validated against the file size (84 + 50 bytes per face), which is the
+    only reliable test -- plenty of binary STLs start their header with the
+    word "solid" just like ASCII ones do.
+    """
+    try:
+        size = path.stat().st_size
+        if size < 84:
+            return None
+        with open(path, "rb") as f:
+            f.seek(80)
+            count = int.from_bytes(f.read(4), "little")
+        if count > 0 and size == 84 + 50 * count:
+            return count
+    except OSError:
+        pass
+    return None
+
+
+def binary_stl_preview(path: Path, max_faces: int = MAX_RENDER_FACES, chunk_faces: int = 1_000_000):
+    """(triangles, bounds, face_count) for a binary STL, read straight from disk.
+
+    Never builds a mesh: exact bounds come from one chunked pass over the file
+    and the triangles from an evenly spaced sample of max_faces records, so
+    memory stays bounded by the chunk and sample sizes no matter how large the
+    file is. Returns None for anything that isn't a valid binary STL.
+    """
+    count = binary_stl_face_count(path)
+    if count is None:
+        return None
+    records = np.memmap(path, dtype=_STL_RECORD, mode="r", offset=84, shape=(count,))
+    try:
+        lo = np.full(3, np.inf)
+        hi = np.full(3, -np.inf)
+        for start in range(0, count, chunk_faces):
+            vertices = np.asarray(records["v"][start:start + chunk_faces], dtype=np.float64).reshape(-1, 3)
+            lo = np.minimum(lo, vertices.min(axis=0))
+            hi = np.maximum(hi, vertices.max(axis=0))
+        sample = np.linspace(0, count - 1, min(count, max_faces), dtype=np.int64)
+        triangles = np.asarray(records["v"][sample], dtype=np.float64)
+    finally:
+        del records
+    if not (np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))):
+        return None
+    return triangles, np.array([lo, hi]), count
+
+
+def estimate_parse_bytes(path: Path):
+    """Rough peak memory trimesh would need to load this file, or None if unknown.
+
+    Only estimated for the formats where it's cheap and where the big files
+    actually show up: .3mf (from the zip directory's uncompressed sizes, no
+    decompression) and binary STL (from the file size). Everything else is
+    left to the mesh worker's hard memory limit.
+    """
+    ext = path.suffix.lower()
+    try:
+        if ext == ".3mf":
+            with zipfile.ZipFile(path) as zf:
+                xml_bytes = sum(
+                    info.file_size for info in zf.infolist()
+                    if info.filename.lower().endswith(".model")
+                )
+            return xml_bytes * PARSE_BYTES_PER_3MF_XML_BYTE
+        if ext == ".stl" and binary_stl_face_count(path) is not None:
+            return path.stat().st_size * PARSE_BYTES_PER_BINARY_STL_BYTE
+    except Exception:
+        return None
+    return None
+
+
+def _write_thumbnail(path: Path, png: bytes, size: int, color: str) -> str:
+    out_name = thumbnail_filename(path, size=size, color=color)
+    with open(THUMB_DIR / out_name, "wb") as f:
+        f.write(png)
+    return out_name
 
 
 def generate_thumbnail(
@@ -199,28 +290,112 @@ def generate_thumbnail(
 
     if png is None:
         return None
-
-    out_name = thumbnail_filename(path, size=size, color=color)
-    out_path = THUMB_DIR / out_name
-    with open(out_path, "wb") as f:
-        f.write(png)
-    return out_name
+    return _write_thumbnail(path, png, size, color)
 
 
-def render_thumbnail_file(
-    path_str: str,
-    color: str,
-    size: int = 512,
-) -> str:
-    """Process-pool entry point for rendering one file without database access."""
-    path = Path(path_str)
-    mesh = None
+def _empty_analysis() -> dict:
+    return {
+        "geometry_hash": None,
+        "vertex_count": None,
+        "face_count": None,
+        "bbox": (None, None, None),
+        "volume_mm3": None,
+        "is_watertight": None,
+        "thumbnail_path": None,
+        "analysis": "preview-only",
+        "errors": [],
+    }
+
+
+def preview_without_parsing(path: Path, color: str = DEFAULT_THUMBNAIL_COLOR, size: int = 512) -> dict:
+    """Whatever can be learned about a mesh file without loading it as a mesh.
+
+    For files too large to parse within the memory budget (or that failed to
+    parse at all): a .3mf's own embedded slicer preview, or for a binary STL a
+    sampled render plus exact face count and bounding box read straight off
+    disk. Returns the same keys as analyze_mesh; unknown values are None.
+    """
+    color = normalize_thumbnail_color(color)
+    result = _empty_analysis()
+    ext = path.suffix.lower()
+    if ext == ".3mf":
+        png = extract_3mf_thumbnail(path)
+        if png is not None:
+            result["thumbnail_path"] = _write_thumbnail(path, png, size, color)
+    elif ext == ".stl":
+        preview = binary_stl_preview(path)
+        if preview is not None:
+            triangles, bounds, count = preview
+            extents = (bounds[1] - bounds[0]).tolist()
+            result["face_count"] = int(count)
+            result["bbox"] = tuple(extents)
+            # Same coarse bounding-box volume the full path falls back to for
+            # meshes past MAX_CONVEX_HULL_FACES.
+            result["volume_mm3"] = float(np.prod(extents)) if all(e > 0 for e in extents) else None
+            result["thumbnail_path"] = _write_thumbnail(
+                path, _render_triangles(triangles, bounds, size, color), size, color
+            )
+    return result
+
+
+def analyze_mesh(path: Path, color: str = DEFAULT_THUMBNAIL_COLOR, budget_bytes: int = None) -> dict:
+    """Stats and thumbnail for one mesh file, bounded by budget_bytes.
+
+    Meant to run inside the memory-capped mesh worker (app/mesh_worker.py),
+    never in the web server process. Files estimated to need more than the
+    budget skip the full parse and get preview_without_parsing() instead; a
+    full parse that fails anyway (hits the worker's hard limit, or the file is
+    just malformed) falls back to the same. Per-step problems are returned in
+    "errors" for the caller to log, since a spawned worker has no logging
+    configuration of its own.
+    """
+    estimate = estimate_parse_bytes(path)
+    if budget_bytes is not None and estimate is not None and estimate > budget_bytes:
+        result = preview_without_parsing(path, color)
+        result["errors"].append(
+            f"needs an estimated {estimate // 2**20} MB to load, over the {budget_bytes // 2**20} MB "
+            "mesh worker budget -- indexed from a preview only"
+        )
+        return result
+
     try:
         mesh = load_mesh(path)
-        return generate_thumbnail(path, size=size, mesh=mesh, color=color)
+    except Exception as exc:
+        result = preview_without_parsing(path, color)
+        result["errors"].append(f"could not load mesh ({exc}) -- indexed from a preview only")
+        return result
+
+    result = _empty_analysis()
+    result["analysis"] = "full"
+    try:
+        try:
+            result.update(mesh_stats(path, mesh=mesh))
+        except Exception as exc:
+            result["errors"].append(f"failed to read mesh stats: {exc}")
+        try:
+            result["thumbnail_path"] = generate_thumbnail(path, mesh=mesh, color=color)
+        except Exception as exc:
+            result["errors"].append(f"thumbnail generation failed: {exc}")
     finally:
-        if mesh is not None:
-            del mesh
+        del mesh
+    return result
+
+
+def render_thumbnail_only(path: Path, color: str = DEFAULT_THUMBNAIL_COLOR, budget_bytes: int = None) -> str:
+    """Thumbnail for an already-indexed file, parsing it only when it has to.
+
+    Tries the no-parse preview first (embedded .3mf preview, streamed binary
+    STL); only loads the mesh when that yields nothing and the file fits the
+    budget. Returns the thumbnail filename, or None.
+    """
+    color = normalize_thumbnail_color(color)
+    thumbnail = preview_without_parsing(path, color)["thumbnail_path"]
+    if thumbnail:
+        return thumbnail
+    estimate = estimate_parse_bytes(path)
+    if budget_bytes is not None and estimate is not None and estimate > budget_bytes:
+        return None
+    return generate_thumbnail(path, color=color)
 
 
 def _matplotlib_fallback(
@@ -228,12 +403,6 @@ def _matplotlib_fallback(
     size: int,
     color: str = DEFAULT_THUMBNAIL_COLOR,
 ) -> bytes:
-    import io
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
     vertices = np.asarray(mesh.vertices)
     face_indices = np.asarray(mesh.faces)
     if len(vertices) == 0 or len(face_indices) == 0:
@@ -246,7 +415,19 @@ def _matplotlib_fallback(
             0, len(face_indices) - 1, MAX_RENDER_FACES, dtype=np.int64
         )
         face_indices = face_indices[sample]
-    triangles = vertices[face_indices]
+    return _render_triangles(vertices[face_indices], np.asarray(mesh.bounds), size, color)
+
+
+def _render_triangles(triangles, bounds, size: int, color: str = DEFAULT_THUMBNAIL_COLOR) -> bytes:
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    bounds = np.asarray(bounds)
+    if bounds.shape != (2, 3):
+        raise ValueError("mesh has invalid bounds")
 
     fig = plt.figure(figsize=(size / 100, size / 100), dpi=100)
     try:
@@ -255,9 +436,6 @@ def _matplotlib_fallback(
             triangles, facecolor=color, edgecolor="none", linewidths=0
         )
         ax.add_collection3d(collection)
-        bounds = np.asarray(mesh.bounds)
-        if bounds.shape != (2, 3):
-            raise ValueError("mesh has invalid bounds")
         ax.set_xlim(bounds[0][0], bounds[1][0])
         ax.set_ylim(bounds[0][1], bounds[1][1])
         ax.set_zlim(bounds[0][2], bounds[1][2])

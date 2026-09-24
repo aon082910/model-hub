@@ -59,6 +59,8 @@ Community Applications first) if you want local AI instead of an API key.</Requi
 
   <Config Name="Scan Interval" Target="SCAN_INTERVAL_SECONDS" Default="300" Mode="" Description="Seconds between automatic background library scans." Type="Variable" Display="advanced" Required="false" Mask="false">300</Config>
 
+  <Config Name="Mesh Worker Memory (MB)" Target="MESH_WORKER_MEMORY_MB" Default="" Mode="" Description="Memory ceiling for the separate process that parses model files during scans. Leave blank for automatic (half of the container limit or host RAM, 1-8 GB). Files needing more are still indexed, from a preview (a .3mf's embedded thumbnail, or a streamed render of an STL) instead of a full parse. Raise it only if you have RAM to spare and want full stats on very large files." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+
   <Config Name="Ollama Host" Target="OLLAMA_HOST" Default="http://ollama:11434" Mode="" Description="Address of your Ollama container/instance for local AI tagging. Only used when AI mode is set to 'local' in the app's Settings tab." Type="Variable" Display="advanced" Required="false" Mask="false">http://ollama:11434</Config>
 
   <Config Name="Ollama Vision Model" Target="OLLAMA_VISION_MODEL" Default="llava" Mode="" Description="Vision-capable Ollama model used for auto-tagging thumbnails." Type="Variable" Display="advanced" Required="false" Mask="false">llava</Config>

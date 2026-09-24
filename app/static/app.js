@@ -157,6 +157,19 @@ function debounce(fn, ms) {
 // ---------- 3D Viewer ----------
 let renderer, scene, camera, controls, animId;
 
+// The browser parses the whole file to preview it, at many times the file's
+// size -- a multi-plate .3mf holds several times its zipped size in XML.
+// Past these, ask before loading rather than risk hanging the tab.
+const LARGE_PREVIEW_FACES = 2_000_000;
+const LARGE_PREVIEW_BYTES = 150 * 2 ** 20;
+const LARGE_PREVIEW_3MF_BYTES = 25 * 2 ** 20;
+
+function previewIsTooLarge(model) {
+  if (model.face_count) return model.face_count > LARGE_PREVIEW_FACES;
+  const limit = model.extension === '.3mf' ? LARGE_PREVIEW_3MF_BYTES : LARGE_PREVIEW_BYTES;
+  return (model.size_bytes || 0) > limit;
+}
+
 function openViewer(model) {
   viewerSessionColor = viewerModelColor;
   $('#viewer-modal').classList.remove('hidden');
@@ -200,7 +213,16 @@ function openViewer(model) {
     '.stp': loadSTEP,
   };
   const loadFn = loaders[model.extension];
-  if (loadFn) {
+  if (loadFn && previewIsTooLarge(model)) {
+    const faces = model.face_count ? `${(model.face_count / 1e6).toFixed(1)}M faces` : `${Math.round(model.size_bytes / 2 ** 20)} MB`;
+    $('#viewer-info').insertAdjacentHTML('beforeend',
+      `<div id="large-preview-note" style="color:#e0a800">This model is very large (${faces}) and may freeze or crash this browser tab to preview live. `
+      + `<button id="large-preview-load-btn">Load anyway</button></div>`);
+    $('#large-preview-load-btn').onclick = () => {
+      $('#large-preview-note').remove();
+      loadFn(fileUrl);
+    };
+  } else if (loadFn) {
     loadFn(fileUrl);
   } else {
     $('#viewer-info').insertAdjacentHTML('beforeend',

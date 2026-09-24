@@ -1,9 +1,10 @@
 import gc
 import logging
-import multiprocessing
 import os
 import threading
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutureTimeout
+from concurrent.futures import as_completed
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 from sqlalchemy import func
@@ -17,12 +18,18 @@ from app.library_maintenance import (
     current_library_maintenance,
     release_library_maintenance,
 )
+from app.mesh_worker import (
+    MIN_BUDGET_BYTES,
+    WORKER_TIMEOUT_SECONDS,
+    MeshWorkerPool,
+    mesh_memory_budget_bytes,
+    render_thumbnail,
+)
 from app.models import Model3D
 from app.settings_store import get_setting
 from app.thumbnails import (
     DEFAULT_THUMBNAIL_COLOR,
     normalize_thumbnail_color,
-    render_thumbnail_file,
     thumbnail_filename,
 )
 
@@ -130,103 +137,127 @@ def _thumbnail_is_current(full_path: Path, current_thumbnail: str | None, color:
     return current_thumbnail == expected and (THUMB_DIR / expected).exists()
 
 
-def _render_one(model_id: int, full_path: Path, color: str) -> tuple[int, str]:
-    """Render one thumbnail in a worker process and return its DB update payload."""
-    if not full_path.exists():
-        raise FileNotFoundError(f"model file is missing on disk: {full_path}")
-    thumbnail_path = render_thumbnail_file(str(full_path), color)
-    if not thumbnail_path:
-        raise ValueError("thumbnail renderer returned no image")
-    return model_id, thumbnail_path
+def _worker_pool() -> MeshWorkerPool:
+    """Parallel render workers that together stay within one mesh-worker budget.
+
+    Each parallel worker could otherwise need a full parse's worth of memory at
+    once. Splitting the budget means a file too large for one worker's share is
+    rendered from its no-parse preview instead (embedded .3mf thumbnail,
+    streamed binary STL) rather than several of them OOM-ing the box together.
+    """
+    budget = mesh_memory_budget_bytes()
+    workers = max(1, min(THUMBNAIL_WORKERS, budget // MIN_BUDGET_BYTES))
+    return MeshWorkerPool(workers=workers, budget_bytes=budget // workers)
 
 
 def _run_thumbnail_regeneration() -> None:
+    pool = None
     try:
         color, total = _load_job_configuration()
         _set_state(total=total)
+        pool = _worker_pool()
         logger.info(
-            "Thumbnail regeneration started: %d indexed mesh models, color %s, %d workers",
+            "Thumbnail regeneration started: %d indexed mesh models, color %s, %d workers x %d MB",
             total,
             color,
-            THUMBNAIL_WORKERS,
+            pool.workers,
+            pool.budget_bytes // (1024 * 1024),
         )
 
         last_id = 0
-        done = regenerated = skipped = failed = 0
+        counts = {"done": 0, "regenerated": 0, "skipped": 0, "failed": 0}
 
-        # Spawn avoids forking Python/Matplotlib state from the background thread.
-        mp_context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(
-            max_workers=THUMBNAIL_WORKERS,
-            mp_context=mp_context,
-        ) as executor:
-            while True:
-                page = _load_model_page(last_id)
-                if not page:
-                    break
+        def record(updates, model_id, full_path, thumbnail=None, error=None):
+            if thumbnail:
+                updates.append((model_id, thumbnail))
+                counts["regenerated"] += 1
+            else:
+                counts["failed"] += 1
+                logger.warning(
+                    "Thumbnail regeneration failed for %s: %s",
+                    full_path,
+                    error or "no thumbnail could be produced",
+                )
+            counts["done"] += 1
+            _set_state(**counts)
 
-                last_id = page[-1][0]
-                pending = {}
-                updates = []
+        while True:
+            page = _load_model_page(last_id)
+            if not page:
+                break
 
-                for model_id, rel_path, current_thumbnail in page:
-                    full_path = LIBRARY_PATH / Path(rel_path)
-                    if _thumbnail_is_current(full_path, current_thumbnail, color):
-                        skipped += 1
-                        done += 1
-                        continue
+            last_id = page[-1][0]
+            pending = {}
+            updates = []
 
-                    future = executor.submit(_render_one, model_id, full_path, color)
-                    pending[future] = full_path
+            for model_id, rel_path, current_thumbnail in page:
+                full_path = LIBRARY_PATH / Path(rel_path)
+                if _thumbnail_is_current(full_path, current_thumbnail, color):
+                    counts["skipped"] += 1
+                    counts["done"] += 1
+                    continue
+                try:
+                    future = pool.executor().submit(
+                        render_thumbnail, str(full_path), color, pool.budget_bytes
+                    )
+                except BrokenProcessPool:
+                    pool.reset()
+                    future = pool.executor().submit(
+                        render_thumbnail, str(full_path), color, pool.budget_bytes
+                    )
+                pending[future] = (model_id, full_path)
 
-                for future in as_completed(pending):
-                    full_path = pending[future]
+            # A worker that dies fails every task still queued on that pool, not
+            # just its own -- those, and anything left when the page times out
+            # (a hung worker), are retried one at a time on fresh workers so the
+            # real culprit fails alone instead of taking the rest down with it.
+            retry = []
+            try:
+                for future in as_completed(list(pending), timeout=WORKER_TIMEOUT_SECONDS):
+                    model_id, full_path = pending.pop(future)
                     try:
-                        updates.append(future.result())
-                        regenerated += 1
+                        record(updates, model_id, full_path, thumbnail=future.result())
+                    except BrokenProcessPool:
+                        retry.append((model_id, full_path))
                     except Exception as exc:
-                        failed += 1
-                        logger.warning(
-                            "Thumbnail regeneration failed for %s: %s",
-                            full_path,
-                            exc,
-                        )
-                    finally:
-                        done += 1
-                        _set_state(
-                            done=done,
-                            regenerated=regenerated,
-                            skipped=skipped,
-                            failed=failed,
-                        )
+                        record(updates, model_id, full_path, error=exc)
+            except FutureTimeout:
+                retry.extend(pending.values())
 
-                # Persist all successful renders from this page in one transaction.
-                _persist_thumbnail_batch(updates)
-                _set_state(
-                    done=done,
-                    regenerated=regenerated,
-                    skipped=skipped,
-                    failed=failed,
-                )
+            if retry:
+                pool.reset()
+                for model_id, full_path in retry:
+                    try:
+                        thumbnail = pool.run(render_thumbnail, str(full_path), color, pool.budget_bytes)
+                    except Exception as exc:
+                        record(updates, model_id, full_path, error=exc)
+                    else:
+                        record(updates, model_id, full_path, thumbnail=thumbnail)
 
-                gc.collect()
-                logger.info(
-                    "Thumbnail regeneration progress: %d/%d complete (%d rendered, %d skipped, %d failed)",
-                    done,
-                    total,
-                    regenerated,
-                    skipped,
-                    failed,
-                )
+            # Persist all successful renders from this page in one transaction.
+            _persist_thumbnail_batch(updates)
+            _set_state(**counts)
+
+            gc.collect()
+            logger.info(
+                "Thumbnail regeneration progress: %d/%d complete (%d rendered, %d skipped, %d failed)",
+                counts["done"],
+                total,
+                counts["regenerated"],
+                counts["skipped"],
+                counts["failed"],
+            )
 
         logger.info(
             "Thumbnail regeneration complete: %d rendered, %d skipped, %d failed",
-            regenerated,
-            skipped,
-            failed,
+            counts["regenerated"],
+            counts["skipped"],
+            counts["failed"],
         )
     except Exception:
         logger.exception("Thumbnail regeneration job failed")
     finally:
+        if pool is not None:
+            pool.shutdown()
         _set_state(running=False)
         release_library_maintenance()

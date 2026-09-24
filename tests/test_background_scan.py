@@ -66,7 +66,7 @@ def test_scan_commits_each_file_and_checkpoints_memory_in_batches(monkeypatch, t
 
     monkeypatch.setattr(scanner, "LIBRARY_PATH", library)
     monkeypatch.setattr(scanner, "SUPPORTED_EXTENSIONS", {".stl"})
-    monkeypatch.setattr(scanner, "_upsert_path", lambda session, path, rel_path, counters: None)
+    monkeypatch.setattr(scanner, "_upsert_path", lambda session, path, rel_path, counters, **kwargs: None)
     monkeypatch.setattr(scanner, "_remove_missing_models", lambda session: None)
     monkeypatch.setattr(scanner.gc, "collect", lambda: 0)
 

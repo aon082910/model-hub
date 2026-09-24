@@ -102,3 +102,9 @@ async def on_startup():
         bootstrap_from_env(session)
         ensure_extension_api_key(session)
     asyncio.create_task(_background_scan_loop())
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    from app.mesh_worker import shutdown_worker_pools
+    shutdown_worker_pools()
