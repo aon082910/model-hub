@@ -17,10 +17,13 @@ against a local Ollama instance (nothing leaves your network) or an external
 OpenRouter/OpenAI-compatible API using your own key -- switch anytime from
 the in-app Settings tab. Point "Library Path" at the share where your STL/3MF
 files already live; nothing is modified on disk, files are only read and hashed.
+
 On first open you'll be asked to create an admin login (or set Admin
 Username/Password below to skip that screen). Also includes print time/filament
-weight estimates, a browser extension for one-click import from Printables/
-MakerWorld, and optional webhook notifications (ntfy/Discord/Slack).
+weight estimates, projects that track the electronics/parts/supplies each
+build needs (with a shopping list) and subtract the filament used when a
+project is marked printed, a browser extension for one-click import from
+Printables/MakerWorld, and optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8420]/</WebUI>
@@ -33,8 +36,82 @@ MakerWorld, and optional webhook notifications (ntfy/Discord/Slack).
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Date>2026-09-02</Date>
+  <Date>2026-10-07</Date>
   <Changes>
+### 1.7.0
+New Projects tab. A project groups library models and keeps a parts list
+(electronics, parts, supplies) with how many are needed vs. owned, unit cost
+and a buy link. Filter to the projects that still need parts, or open the
+Shopping List for everything missing across unfinished projects with an
+estimated total. Add a model to a project from its viewer, then give it one
+or more filament spools with grams each (the Estimate button fills grams from
+the print estimate). When a project is set to printed (or done) that filament
+is subtracted from inventory exactly once; moving it back to planning or
+building restores it. No new settings; new tables are created automatically
+on first start.
+
+### 1.6.0
+Fixes the app still crashing when a scan runs. Loading a model file takes
+many times its size in memory (a 35MB Bambu Studio project needed 4GB, a
+262MB STL 3GB), and that happened inside the app itself -- one large file
+anywhere in the library could get the whole container killed on every
+scan. Model files are now parsed in a separate, memory-limited worker
+process: if a file is too big it's indexed from a preview instead (the
+.3mf's embedded thumbnail, or a streamed render of the STL), and if the
+worker dies anyway only that file is affected. New optional setting: Mesh
+Worker Memory (MB), blank for automatic. Thumbnail regeneration gets the
+same protection, and the 3D viewer now asks before loading huge models.
+
+### 1.5.0
+Fixes an OOM crash loop and a 3D viewer error on multi-part .3mf project
+files (Bambu Studio / OrcaSlicer, which split each plate/object into its
+own file inside the .3mf). Scanning one of these could consume 15GB+ of
+RAM computing mesh watertightness and OOM-kill the container on every
+launch -- since the background scan runs on startup, this could look
+like the app crashing right after launching, and any files past that one
+in scan order (including in subfolders -- scanning was already recursive,
+it just never got that far) would never get indexed. Also extracts the
+slicer's own embedded preview from .3mf files when present instead of
+rendering our own, and fixes the live 3D viewer failing to open these
+same multi-part files.
+
+### 1.4.0
+Fixes the actual root cause of Tag All crashing the container: an
+oversized AI response (e.g. a local vision model stuck generating past
+a sane length) could get fully buffered into memory in a single network
+call fast enough to OOM the container in seconds -- too fast for the
+1.3.0 fix's periodic checkpointing to help. AI responses are now
+streamed with a hard size cap so that can't happen, generation length is
+capped as a second line of defense, and the tagging job now checks the
+container's actual memory usage before every model and stops itself
+cleanly (instead of the kernel silently killing the container) if it's
+running critically high.
+
+### 1.3.0
+Tag All no longer risks crashing/hanging on large untagged libraries: the
+batch job now periodically releases database state instead of holding
+everything in memory for the whole run, per-model failures are logged
+instead of silently swallowed, and a crash mid-job no longer leaves the
+tagging state stuck. Also adds a configurable 3D preview/thumbnail color
+(Settings -> 3D Preview) plus a Regenerate Thumbnails maintenance job
+(contributed by @justindgreen), which runs in parallel and can resume
+if interrupted.
+
+### 1.2.0
+Large-library fixes contributed by @justindgreen: the initial/background scan
+now runs off the main event loop so the WebUI and health check come up
+immediately instead of appearing stuck on big libraries; mesh/thumbnail
+memory use is now bounded so indexing a large library no longer grows
+memory unboundedly; concurrent scans are rejected cleanly instead of
+racing on SQLite; the Library view is now paginated with full-library
+search instead of only showing the first 200 models.
+
+### 1.1.0
+Live STEP/STP viewer (client-side WASM via occt-import-js, no server round
+trip), rate limiting on the login endpoint (5 attempts / 15 min per IP), and
+a mobile-responsive UI (scrollable tab bar, stacked forms, full-screen viewer
+modal, larger touch targets).
+
 ### 1.0.0
 Initial release. STL/3MF/OBJ/FBX live viewer, AI auto-tagging + semantic search
 (local Ollama or API), smart collections, filament inventory, print queue with
