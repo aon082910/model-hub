@@ -1,10 +1,11 @@
 import asyncio
+import hashlib
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, engine
@@ -52,12 +53,48 @@ async def auth_gate(request: Request, call_next):
     return await call_next(request)
 
 STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
+
+# The app's own scripts/styles (not vendor/, which only changes with a rewrite)
+# get a ?v=<content hash> in index.html, so an upgrade changes their URLs and
+# browsers can't keep running the previous release's JavaScript.
+VERSIONED_ASSETS = ("style.css", "library-controls.js", "thumbnail-controls.js", "app.js")
+
+
+def _asset_version() -> str:
+    digest = hashlib.sha1()
+    for name in VERSIONED_ASSETS:
+        digest.update((STATIC_DIR / name).read_bytes())
+    return digest.hexdigest()[:10]
+
+
+def _render_index() -> str:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    version = _asset_version()
+    for name in VERSIONED_ASSETS:
+        html = html.replace(f'"/assets/{name}"', f'"/assets/{name}?v={version}"')
+    return html
+
+
+INDEX_HTML = _render_index()
+
+
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files that browsers must revalidate (ETag -> cheap 304) before
+    reuse, so unversioned URLs such as vendor/ can't go stale either."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/assets", RevalidatingStaticFiles(directory=STATIC_DIR), name="assets")
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    # no-cache: the page that carries the version tokens must itself never be stale
+    return HTMLResponse(INDEX_HTML, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/health")

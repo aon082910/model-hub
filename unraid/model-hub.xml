@@ -38,6 +38,13 @@ Printables/MakerWorld, and optional webhook notifications (ntfy/Discord/Slack).
   <DonateLink/>
   <Date>2026-10-07</Date>
   <Changes>
+### 1.7.1
+Fixes the browser holding on to the previous version's page after an
+upgrade (new tabs and features not showing up until a manual hard refresh).
+The page and its scripts are now versioned, and the server tells browsers to
+check for changes before reusing cached files, so updates appear on the next
+page load. No settings changes.
+
 ### 1.7.0
 New Projects tab. A project groups library models and keeps a parts list
 (electronics, parts, supplies) with how many are needed vs. owned, unit cost
