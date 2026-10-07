@@ -49,6 +49,32 @@ fieldset { border: 1px solid var(--border); border-radius: 6px; }
 #viewer-canvas { width: 100%; height: 100%; display: block; }
 #viewer-info { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.hidden { display: none; }
+.muted { color: var(--muted); }
+.project-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+.project-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.project-head h3 { margin: 0; flex: 1; font-size: 16px; }
+.project-desc { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.project-summary { font-size: 13px; margin: 6px 0; }
+.project-models { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.project-model { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.project-model-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.project-model-head b { overflow-wrap: anywhere; }
+.project-model-head .model-unlink { margin-left: auto; }
+.filament-line { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.filament-line select { flex: 1 1 140px; min-width: 0; }
+.filament-line input { width: 80px; }
+.filament-short { color: #e0645a; }
+.parts-table { font-size: 13px; margin-bottom: 8px; }
+.parts-table a { color: var(--accent); }
+.parts-table small { color: var(--muted); }
+.parts-table .part-owned { width: 64px; }
+.parts-table tr.part-complete td { color: var(--muted); }
+.part-add { flex-wrap: wrap; margin: 8px 0 0; }
+.part-add .new-part-name { flex: 1 1 200px; }
+.part-add .new-part-qty, .part-add .new-part-owned, .part-add .new-part-cost { width: 80px; }
+.part-add .new-part-url { flex: 1 1 160px; }
+#shopping-list { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px 14px 10px; margin-bottom: 14px; }
 
 /* ---------- Mobile ---------- */
 @media (max-width: 640px) {

@@ -69,6 +69,7 @@ $$('#tabs button').forEach(btn => {
     btn.classList.add('active');
     $(`#tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'collections') loadCollections();
+    if (btn.dataset.tab === 'projects') loadProjects();
     if (btn.dataset.tab === 'filament') loadFilament();
     if (btn.dataset.tab === 'queue') loadQueue();
     if (btn.dataset.tab === 'settings') loadSettings();
@@ -230,8 +231,11 @@ function openViewer(model) {
   }
 
   loadFilamentOptionsForQueue();
+  loadProjectOptionsForViewer();
+  $('#viewer-project-result').textContent = '';
   $('#viewer-estimate-btn').onclick = () => runEstimate(model.id);
   $('#viewer-add-queue-btn').onclick = () => addToQueue(model.id);
+  $('#viewer-add-project-btn').onclick = () => addModelToProject(model.id);
 }
 
 $('#close-viewer').addEventListener('click', () => {
@@ -428,6 +432,284 @@ async function addToQueue(modelId) {
   });
   $('#viewer-estimate-result').textContent = 'Added to print queue.';
 }
+
+// ---------- Projects ----------
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function safeUrl(url) {
+  return /^https?:\/\//i.test(url || '') ? url : '';
+}
+
+function jsonRequest(method, url, body) {
+  return fetch(url, {
+    method, headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+async function loadProjectOptionsForViewer() {
+  const projects = await (await fetch('/api/projects')).json();
+  $('#viewer-project').innerHTML = '<option value="">(choose a project)</option>' +
+    projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+async function addModelToProject(modelId) {
+  const projectId = $('#viewer-project').value;
+  if (!projectId) { $('#viewer-project-result').textContent = 'Choose a project first.'; return; }
+  const res = await fetch(`/api/projects/${projectId}/models/${modelId}`, { method: 'POST' });
+  $('#viewer-project-result').textContent = res.ok ? 'Added to project.' : 'Could not add to project.';
+}
+
+function renderPartRow(projectId, part) {
+  const url = safeUrl(part.purchase_url);
+  const cost = part.unit_cost != null ? `$${part.unit_cost.toFixed(2)}` : '';
+  return `
+    <tr class="${part.quantity_needed ? '' : 'part-complete'}" data-project="${projectId}" data-part="${part.id}">
+      <td>${esc(part.name)}${part.notes ? `<br><small>${esc(part.notes)}</small>` : ''}</td>
+      <td>${esc(part.category)}</td>
+      <td>${part.quantity}</td>
+      <td><input type="number" min="0" class="part-owned" value="${part.quantity_owned}" aria-label="Quantity owned"></td>
+      <td>${part.quantity_needed ? `<b>${part.quantity_needed}</b>` : 'have all'}</td>
+      <td>${cost}</td>
+      <td>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">buy</a>` : ''}</td>
+      <td><button class="part-del">delete</button></td>
+    </tr>`;
+}
+
+let projectSpools = [];
+
+function spoolOptions(selectedId) {
+  return projectSpools.map(f => `<option value="${f.id}" ${f.id === selectedId ? 'selected' : ''}>${
+    esc([f.material, f.brand, f.color].filter(Boolean).join(' '))} (${f.remaining_g}g left)</option>`).join('');
+}
+
+function renderProjectModel(m, locked) {
+  const lines = m.filament.map(l => `
+    <div class="filament-line" data-line="${l.id}">
+      <select class="line-spool" ${locked ? 'disabled' : ''}>${spoolOptions(l.filament_id)}${
+        l.remaining_g == null ? `<option value="${l.filament_id}" selected>(deleted spool)</option>` : ''}</select>
+      <input class="line-grams" type="number" min="0" step="0.1" value="${l.grams}" aria-label="Grams" ${locked ? 'disabled' : ''}> g
+      ${locked ? '' : '<button class="line-del" title="Remove this filament">&times;</button>'}
+    </div>`).join('');
+  return `
+    <div class="project-model" data-model="${m.id}">
+      <div class="project-model-head">
+        <b>${esc(m.filename)}</b>
+        ${m.filament_grams ? `<span class="muted">${m.filament_grams}g</span>` : ''}
+        ${locked ? '' : `<button class="model-estimate" title="Estimate filament use for this model">Estimate</button>
+        <button class="model-unlink" title="Remove from project">&times;</button>`}
+        <span class="model-estimate-note muted"></span>
+      </div>
+      ${lines}
+      ${locked ? '' : `
+      <div class="filament-line filament-add">
+        <select class="new-line-spool">${projectSpools.length ? spoolOptions(null) : '<option value="">(add filament in the Filament tab first)</option>'}</select>
+        <input class="new-line-grams" type="number" min="0" step="0.1" placeholder="grams" aria-label="Grams">
+        <button class="line-add" ${projectSpools.length ? '' : 'disabled'}>Add filament</button>
+      </div>`}
+    </div>`;
+}
+
+function renderProject(p) {
+  const cost = p.cost_needed ? ` · $${p.cost_needed.toFixed(2)} to buy` : '';
+  const summary = p.parts_total
+    ? (p.parts_missing ? `${p.parts_missing} of ${p.parts_total} parts needed${cost}` : 'all parts on hand')
+    : 'no parts listed';
+  const locked = p.filament_deducted;
+  const models = p.models.map(m => renderProjectModel(m, locked)).join('');
+  const totals = p.filament_totals.map(t => `
+    <span class="${t.short ? 'filament-short' : ''}">${esc(t.filament_label)}: ${t.grams}g${t.remaining_g != null ? ` (spool has ${t.remaining_g}g)` : ''}${t.short ? ' &mdash; not enough!' : ''}</span>`).join(' · ');
+  const filamentSummary = p.filament_totals.length
+    ? `<div class="project-summary">Filament: <b>${p.filament_grams}g</b> &mdash; ${totals}
+        ${locked ? '<br><small>Already subtracted from inventory. Move the project back to planning/building to undo.</small>' : ''}</div>`
+    : '';
+  return `
+    <div class="project-card" data-project="${p.id}">
+      <div class="project-head">
+        <h3>${esc(p.name)}</h3>
+        <select class="project-status">
+          ${['planning', 'building', 'printed', 'done'].map(s => `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+        <button class="project-del">delete project</button>
+      </div>
+      ${p.description ? `<div class="project-desc">${esc(p.description)}</div>` : ''}
+      <div class="project-summary">${summary}</div>
+      ${filamentSummary}
+      ${models ? `<div class="project-models">${models}</div>` : ''}
+      ${p.parts.length ? `
+      <div class="table-scroll">
+        <table class="parts-table"><thead><tr>
+          <th>Part</th><th>Type</th><th>Need</th><th>Own</th><th>To get</th><th>Unit cost</th><th></th><th></th>
+        </tr></thead><tbody>${p.parts.map(part => renderPartRow(p.id, part)).join('')}</tbody></table>
+      </div>` : ''}
+      <div class="row part-add">
+        <input class="new-part-name" placeholder="Part name (e.g. ESP32, M3x8 screws, solder)">
+        <select class="new-part-category">
+          <option value="electronics">electronics</option>
+          <option value="parts">parts</option>
+          <option value="supplies">supplies</option>
+        </select>
+        <input class="new-part-qty" type="number" min="1" value="1" aria-label="Quantity needed" title="Quantity needed">
+        <input class="new-part-owned" type="number" min="0" value="0" aria-label="Quantity owned" title="Quantity already owned">
+        <input class="new-part-cost" type="number" min="0" step="0.01" placeholder="Unit cost" aria-label="Unit cost">
+        <input class="new-part-url" placeholder="Purchase link (optional)">
+        <button class="part-add-btn">Add Part</button>
+      </div>
+    </div>`;
+}
+
+async function loadProjects() {
+  const onlyNeeding = $('#projects-needing-only').checked;
+  const [res, spools] = await Promise.all([
+    fetch(`/api/projects?only_needing_parts=${onlyNeeding}`),
+    fetch('/api/filament').then(r => r.json()),
+  ]);
+  projectSpools = spools;
+  const projects = await res.json();
+  $('#projects-list').innerHTML = projects.length
+    ? projects.map(renderProject).join('')
+    : `<p class="muted">${onlyNeeding ? 'No projects need parts right now.' : 'No projects yet. Add one above.'}</p>`;
+  if (!$('#shopping-list').classList.contains('hidden')) loadShoppingList();
+}
+
+async function loadShoppingList() {
+  const data = await (await fetch('/api/projects/shopping-list')).json();
+  const box = $('#shopping-list');
+  box.classList.remove('hidden');
+  const rows = data.items.map(i => `
+    <tr>
+      <td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.quantity_needed}</td>
+      <td>${esc(i.project_name)}</td>
+      <td>${i.cost_needed != null ? `$${i.cost_needed.toFixed(2)}` : ''}</td>
+      <td>${safeUrl(i.purchase_url) ? `<a href="${esc(safeUrl(i.purchase_url))}" target="_blank" rel="noopener noreferrer">buy</a>` : ''}</td>
+    </tr>`).join('');
+  box.innerHTML = `
+    <h3>Shopping List <small>(parts still needed for projects that aren't done)</small></h3>
+    ${data.items.length ? `
+    <div class="table-scroll"><table class="parts-table"><thead><tr>
+      <th>Part</th><th>Type</th><th>Qty</th><th>Project</th><th>Cost</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="project-summary">Estimated total: $${data.total_cost.toFixed(2)}</div>`
+      : '<p class="muted">Nothing to buy -- every project has the parts it needs.</p>'}`;
+}
+
+$('#add-project-btn').addEventListener('click', async () => {
+  const name = $('#new-project-name').value.trim();
+  if (!name) return;
+  await jsonRequest('POST', '/api/projects', { name, description: $('#new-project-description').value });
+  $('#new-project-name').value = '';
+  $('#new-project-description').value = '';
+  loadProjects();
+});
+$('#projects-needing-only').addEventListener('change', loadProjects);
+$('#shopping-list-btn').addEventListener('click', () => {
+  const box = $('#shopping-list');
+  if (box.classList.contains('hidden')) loadShoppingList();
+  else box.classList.add('hidden');
+});
+
+$('#projects-list').addEventListener('click', async (e) => {
+  const card = e.target.closest('.project-card');
+  if (!card) return;
+  const projectId = card.dataset.project;
+  const target = e.target;
+
+  if (target.classList.contains('project-del')) {
+    if (!confirm('Delete this project and its parts list?')) return;
+    await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+  } else if (target.classList.contains('part-del')) {
+    await fetch(`/api/projects/${projectId}/parts/${target.closest('tr').dataset.part}`, { method: 'DELETE' });
+  } else if (target.classList.contains('model-unlink')) {
+    const res = await fetch(`/api/projects/${projectId}/models/${target.closest('.project-model').dataset.model}`, { method: 'DELETE' });
+    if (!res.ok) return alert((await res.json().catch(() => ({}))).detail || 'Could not remove model.');
+  } else if (target.classList.contains('line-add')) {
+    const box = target.closest('.project-model');
+    const filamentId = box.querySelector('.new-line-spool').value;
+    if (!filamentId) return;
+    const res = await jsonRequest('POST', `/api/projects/${projectId}/models/${box.dataset.model}/filament`,
+      { filament_id: filamentId, grams: box.querySelector('.new-line-grams').value || 0 });
+    if (!res.ok) return alert((await res.json().catch(() => ({}))).detail || 'Could not add filament.');
+  } else if (target.classList.contains('line-del')) {
+    const res = await fetch(`/api/projects/${projectId}/filament/${target.closest('.filament-line').dataset.line}`, { method: 'DELETE' });
+    if (!res.ok) return alert((await res.json().catch(() => ({}))).detail || 'Could not remove filament.');
+  } else if (target.classList.contains('model-estimate')) {
+    await estimateProjectModel(projectId, target.closest('.project-model'));
+    return;
+  } else if (target.classList.contains('part-add-btn')) {
+    const name = card.querySelector('.new-part-name').value.trim();
+    if (!name) return;
+    const res = await jsonRequest('POST', `/api/projects/${projectId}/parts`, {
+      name,
+      category: card.querySelector('.new-part-category').value,
+      quantity: card.querySelector('.new-part-qty').value,
+      quantity_owned: card.querySelector('.new-part-owned').value,
+      unit_cost: card.querySelector('.new-part-cost').value,
+      purchase_url: card.querySelector('.new-part-url').value,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return alert(err.detail || 'Could not add part.');
+    }
+  } else {
+    return;
+  }
+  loadProjects();
+});
+
+// Fills in filament grams from the print estimate, using the material of the
+// model's first assigned spool (PLA if none yet). With several filament lines
+// the total is split evenly -- edit the numbers to match the real color split.
+async function estimateProjectModel(projectId, box) {
+  const note = box.querySelector('.model-estimate-note');
+  const lineRows = [...box.querySelectorAll('.filament-line[data-line]')];
+  const firstSpool = lineRows.length
+    ? projectSpools.find(f => f.id === parseInt(lineRows[0].querySelector('.line-spool').value))
+    : projectSpools.find(f => f.id === parseInt(box.querySelector('.new-line-spool').value));
+  const material = encodeURIComponent(firstSpool?.material || 'PLA');
+  note.textContent = 'Estimating…';
+  const res = await fetch(`/api/library/models/${box.dataset.model}/estimate?material=${material}`);
+  const est = res.ok ? await res.json() : {};
+  if (est.estimated_grams == null) {
+    note.textContent = est.note || 'Estimate unavailable for this model.';
+    return;
+  }
+  if (lineRows.length) {
+    const each = Math.round((est.estimated_grams / lineRows.length) * 10) / 10;
+    for (const row of lineRows) {
+      await jsonRequest('PATCH', `/api/projects/${projectId}/filament/${row.dataset.line}`, { grams: each });
+    }
+    loadProjects();
+  } else {
+    box.querySelector('.new-line-grams').value = est.estimated_grams;
+    note.textContent = `~${est.estimated_grams}g (${est.source}) -- pick a spool and click Add filament.`;
+  }
+}
+
+$('#projects-list').addEventListener('change', async (e) => {
+  const card = e.target.closest('.project-card');
+  if (!card) return;
+  const projectId = card.dataset.project;
+  if (e.target.classList.contains('project-status')) {
+    const res = await jsonRequest('PATCH', `/api/projects/${projectId}`, { status: e.target.value });
+    if (!res.ok) alert((await res.json().catch(() => ({}))).detail || 'Could not change status.');
+    loadProjects();
+  } else if (e.target.classList.contains('line-grams') || e.target.classList.contains('line-spool')) {
+    const row = e.target.closest('.filament-line');
+    const body = e.target.classList.contains('line-grams')
+      ? { grams: e.target.value || 0 } : { filament_id: e.target.value };
+    const res = await jsonRequest('PATCH', `/api/projects/${projectId}/filament/${row.dataset.line}`, body);
+    if (!res.ok) alert((await res.json().catch(() => ({}))).detail || 'Could not update filament.');
+    loadProjects();
+  } else if (e.target.classList.contains('part-owned')) {
+    const res = await jsonRequest('PATCH', `/api/projects/${projectId}/parts/${e.target.closest('tr').dataset.part}`,
+      { quantity_owned: e.target.value });
+    if (!res.ok) alert('Quantity owned must be a whole number, 0 or more.');
+    loadProjects();
+  }
+});
 
 // ---------- Collections ----------
 async function loadCollections() {

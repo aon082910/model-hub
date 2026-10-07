@@ -75,6 +75,7 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Metadata/license/designer tracking | Done — fields on each model, editable in the viewer |
 | Filament inventory | Done — CRUD + automatic consumption tracking (deducted when a print queue item is marked "done", see [Print estimates](#print-time--filament-estimates)) |
 | Print queue | Done — ordered queue with status, filament assignment, and estimated grams/time per job |
+| Projects & parts tracking | Done — group library models into a project and keep its parts list (electronics / parts / supplies) with quantity needed vs. owned, unit cost and a purchase link. The **Projects** tab can filter to projects still needing parts, and a **Shopping List** rolls up every missing part across unfinished projects with an estimated total. Add a model to a project from its viewer. Each model in a project can be given one or more filament spools with grams per spool (the **Estimate** button fills grams from the print estimate); when the project is set to **printed** (or **done**) those grams are subtracted from filament inventory exactly once, and moving the project back to planning/building restores them |
 | Browser extension for Printables/MakerWorld import | Done — `browser-extension/` (Manifest V3), see [Browser extension](#browser-extension) below |
 | Login/auth | Done — see [Auth](#auth) below |
 | Print time / filament weight estimate | Done — see [Print estimates](#print-time--filament-estimates) below |

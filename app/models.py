@@ -13,6 +13,11 @@ class ModelCollectionLink(SQLModel, table=True):
     collection_id: Optional[int] = Field(default=None, foreign_key="collection.id", primary_key=True)
 
 
+class ProjectModelLink(SQLModel, table=True):
+    project_id: Optional[int] = Field(default=None, foreign_key="project.id", primary_key=True)
+    model_id: Optional[int] = Field(default=None, foreign_key="model3d.id", primary_key=True)
+
+
 class Tag(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
@@ -94,6 +99,47 @@ class QueueItem(SQLModel, table=True):
     estimated_grams: Optional[float] = None
     estimated_minutes: Optional[float] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Project(SQLModel, table=True):
+    """A build that combines printed models with non-printed parts (electronics,
+    hardware, supplies). The parts list lives in ProjectPart."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: Optional[str] = None
+    status: str = "planning"  # planning, building, printed, done
+    notes: Optional[str] = None
+    # True once this project's filament has been subtracted from inventory
+    # (set when it reaches printed/done, cleared when it's moved back).
+    filament_deducted: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ProjectModelFilament(SQLModel, table=True):
+    """Filament planned for one model in a project: grams from one spool.
+    A model printed in several colors/materials has several rows.
+    deducted_g records what was actually taken from the spool so a revert
+    restores exactly that (the spool's remaining_g is clamped at zero)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    model_id: int = Field(foreign_key="model3d.id")
+    filament_id: int = Field(foreign_key="filament.id")
+    grams: float = 0
+    deducted_g: float = 0
+
+
+class ProjectPart(SQLModel, table=True):
+    """One line of a project's bill of materials. quantity is how many the
+    project needs; quantity_owned is how many are already on hand."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    name: str
+    category: str = "electronics"  # electronics, parts, supplies
+    quantity: int = 1
+    quantity_owned: int = 0
+    unit_cost: Optional[float] = None
+    purchase_url: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class AppSettings(SQLModel, table=True):

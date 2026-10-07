@@ -19,6 +19,7 @@
     <nav id="tabs">
       <button data-tab="library" class="active">Library</button>
       <button data-tab="collections">Collections</button>
+      <button data-tab="projects">Projects</button>
       <button data-tab="filament">Filament</button>
       <button data-tab="queue">Print Queue</button>
       <button data-tab="settings">Settings</button>
@@ -65,6 +66,21 @@
       <button id="add-smart-btn">Add Smart Collection</button>
     </div>
     <ul id="smart-collections-list"></ul>
+  </section>
+
+  <section id="tab-projects" class="tab">
+    <h2>Projects</h2>
+    <div class="row">
+      <input id="new-project-name" placeholder="New project name">
+      <input id="new-project-description" placeholder="Description (optional)">
+      <button id="add-project-btn">Add Project</button>
+    </div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="projects-needing-only"> Only projects still needing parts</label>
+      <button id="shopping-list-btn">Shopping List</button>
+    </div>
+    <div id="shopping-list" class="hidden"></div>
+    <div id="projects-list"></div>
   </section>
 
   <section id="tab-filament" class="tab">
@@ -186,6 +202,11 @@
       <div class="row" style="margin-top:4px">
         <select id="viewer-queue-filament"><option value="">(no filament selected)</option></select>
         <button id="viewer-add-queue-btn">Add to Print Queue</button>
+      </div>
+      <div class="row" style="margin-top:4px">
+        <select id="viewer-project"><option value="">(choose a project)</option></select>
+        <button id="viewer-add-project-btn">Add to Project</button>
+        <span id="viewer-project-result"></span>
       </div>
     </div>
   </div>
