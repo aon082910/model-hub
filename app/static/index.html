@@ -20,6 +20,7 @@
       <button data-tab="library" class="active">Library</button>
       <button data-tab="collections">Collections</button>
       <button data-tab="projects">Projects</button>
+      <button data-tab="supplies">Supplies</button>
       <button data-tab="filament">Filament</button>
       <button data-tab="queue">Print Queue</button>
       <button data-tab="settings">Settings</button>
@@ -81,6 +82,42 @@
     </div>
     <div id="shopping-list" class="hidden"></div>
     <div id="projects-list"></div>
+    <datalist id="supply-names"></datalist>
+  </section>
+
+  <section id="tab-supplies" class="tab">
+    <h2>Supplies on hand</h2>
+    <p class="muted">Electronics, parts and supplies you already own. Names that match a project part show up as "in stock" on the shopping list.</p>
+    <div class="row supply-add">
+      <input id="supply-name" placeholder="Name (e.g. ESP32 dev board, M3x8 screws)">
+      <select id="supply-category">
+        <option value="electronics">electronics</option>
+        <option value="parts">parts</option>
+        <option value="supplies">supplies</option>
+      </select>
+      <input id="supply-qty" type="number" min="0" value="1" aria-label="Quantity" title="Quantity">
+      <input id="supply-min" type="number" min="0" value="0" aria-label="Low stock at" title="Flag as low stock at or below this (0 = never)">
+      <input id="supply-location" placeholder="Location (bin, drawer)">
+      <input id="supply-cost" type="number" min="0" step="0.01" placeholder="Unit cost" aria-label="Unit cost">
+      <button id="add-supply-btn">Add</button>
+    </div>
+    <div class="toolbar">
+      <input id="supply-search" placeholder="Search name / location / notes...">
+      <select id="supply-filter-category">
+        <option value="">all types</option>
+        <option value="electronics">electronics</option>
+        <option value="parts">parts</option>
+        <option value="supplies">supplies</option>
+      </select>
+      <label><input type="checkbox" id="supply-low-only"> Low stock only</label>
+      <a id="supply-export" class="button-link" href="/api/inventory/export" download>Export CSV</a>
+    </div>
+    <div class="table-scroll">
+      <table id="supplies-table"><thead><tr>
+        <th>Name</th><th>Type</th><th>Qty</th><th>Low at</th><th>Location</th><th>Unit cost</th><th></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <p id="supplies-empty" class="muted hidden">Nothing here yet.</p>
   </section>
 
   <section id="tab-filament" class="tab">
@@ -187,6 +224,7 @@
       <button id="close-viewer">&times;</button>
       <div id="viewer-canvas-wrap"><canvas id="viewer-canvas"></canvas></div>
       <div id="viewer-info"></div>
+      <div id="viewer-source"></div>
       <div class="row" id="viewer-estimate-row" style="margin-top:8px">
         <select id="viewer-est-material">
           <option value="PLA">PLA</option>

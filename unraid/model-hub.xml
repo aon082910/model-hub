@@ -21,9 +21,11 @@ files already live; nothing is modified on disk, files are only read and hashed.
 On first open you'll be asked to create an admin login (or set Admin
 Username/Password below to skip that screen). Also includes print time/filament
 weight estimates, projects that track the electronics/parts/supplies each
-build needs (with a shopping list) and subtract the filament used when a
-project is marked printed, a browser extension for one-click import from
-Printables/MakerWorld, and optional webhook notifications (ntfy/Discord/Slack).
+build needs (with an exportable shopping list and a Supplies page for what you
+already own) and subtract the filament used when a project is marked printed,
+matching of your models to their Printables/MakerWorld listings (pictures,
+designer, license, tags), a browser extension for one-click import, and
+optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8420]/</WebUI>
@@ -38,6 +40,19 @@ Printables/MakerWorld, and optional webhook notifications (ntfy/Discord/Slack).
   <DonateLink/>
   <Date>2026-10-07</Date>
   <Changes>
+### 1.8.0
+Shopping list export: download the Projects shopping list as CSV or text, or
+copy it, and optionally combine identical parts from different projects. New
+Supplies tab for the electronics, parts and supplies you already own, with
+low-stock flags, locations and CSV export; the shopping list shows how many
+you have in stock. Models can now be matched to their Printables or
+MakerWorld listing: search by name or paste a link, then pull in the title,
+designer, license, description, tags and pictures (pictures are shrunk and
+saved under /config/source_images). Models imported with the browser
+extension from those sites are matched automatically. The library API now
+returns each model's tags, so tags show up in the viewer. No settings
+changes; new tables and columns are added automatically on first start.
+
 ### 1.7.1
 Fixes the browser holding on to the previous version's page after an
 upgrade (new tabs and features not showing up until a manual hard refresh).

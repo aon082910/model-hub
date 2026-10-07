@@ -76,10 +76,35 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Filament inventory | Done — CRUD + automatic consumption tracking (deducted when a print queue item is marked "done", see [Print estimates](#print-time--filament-estimates)) |
 | Print queue | Done — ordered queue with status, filament assignment, and estimated grams/time per job |
 | Projects & parts tracking | Done — group library models into a project and keep its parts list (electronics / parts / supplies) with quantity needed vs. owned, unit cost and a purchase link. The **Projects** tab can filter to projects still needing parts, and a **Shopping List** rolls up every missing part across unfinished projects with an estimated total. Add a model to a project from its viewer. Each model in a project can be given one or more filament spools with grams per spool (the **Estimate** button fills grams from the print estimate); when the project is set to **printed** (or **done**) those grams are subtracted from filament inventory exactly once, and moving the project back to planning/building restores them |
+| Shopping list export | Done — the Projects tab's **Shopping List** can be downloaded as CSV or plain text, or copied to the clipboard (for a notes app or your phone). **Combine identical parts across projects** merges the same part from different projects into one line; each line also shows how many you already have in Supplies |
+| Supplies on hand | Done — a **Supplies** tab for the electronics, parts and supplies you own: quantity, a low-stock threshold (flagged and filterable), location (bin/drawer), unit cost, search, and CSV export. Typing a project part name suggests items from here and pre-fills its type and cost |
+| Match models to Printables / MakerWorld | Done — see [Matching models to site listings](#matching-models-to-site-listings) below |
 | Browser extension for Printables/MakerWorld import | Done — `browser-extension/` (Manifest V3), see [Browser extension](#browser-extension) below |
 | Login/auth | Done — see [Auth](#auth) below |
 | Print time / filament weight estimate | Done — see [Print estimates](#print-time--filament-estimates) below |
 | Notifications | Done — see [Notifications](#notifications) below |
+
+## Matching models to site listings
+
+Open a model and use **Find on MakerWorld / Printables** (or paste a model link). Model Hub searches both
+sites using the file name (`Benchy_v2-fixed.stl` becomes "Benchy"), lists the matches best first with a
+match percentage, and **Link** pulls in that listing's title, designer, license, description, tags and
+pictures. Options let you skip the pictures, leave designer/license alone, or add the site's tags as
+Model Hub tags. **Re-fetch from site** refreshes a link and **Unlink** removes it and the saved pictures.
+Models without a rendered thumbnail (STEP, FBX...) show the listing's first picture in the library grid.
+
+Models imported through the [browser extension](#browser-extension) from a Printables or MakerWorld page
+are matched automatically from the page address, so they arrive with their details filled in.
+
+- **How it works**: Printables is read through its public GraphQL API; MakerWorld through the JSON API behind
+  `api.bambulab.com` (makerworld.com itself blocks server-side page requests). Both are unofficial and can
+  change without notice, so a failure is reported in the UI instead of breaking anything, and one site being
+  down never hides the other's results. Thingiverse is not supported (it needs an API key).
+- **Safe by construction**: only those two sites are contacted, and pictures are only downloaded from their
+  own image hosts, so a pasted link can't make the server fetch anything else on your network.
+- **Pictures are shrunk** to preview-sized JPEGs (at most 1200 px, up to 6 per model, stored under
+  `/config/source_images/`), and oversized images are refused before they are decoded.
+- Matching is by name, so check the match before linking; a wrong link is one click to undo.
 
 ## Auth
 

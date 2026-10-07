@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
@@ -89,7 +90,26 @@ def list_models(
     response.headers["X-Total-Count"] = str(total)
     response.headers["X-Limit"] = str(limit)
     response.headers["X-Offset"] = str(offset)
-    return models
+    return _with_tags(session, models)
+
+
+def _with_tags(session: Session, models: list) -> list:
+    """Model rows as JSON dicts plus their tags (a relationship, so a plain
+    row dump leaves it out). One query for the whole page. The packed
+    embedding is left out: it's binary and nothing in the UI reads it."""
+    tags_by_model = {}
+    ids = [m.id for m in models]
+    if ids:
+        rows = session.exec(
+            select(ModelTagLink.model_id, Tag)
+            .join(Tag, ModelTagLink.tag_id == Tag.id)
+            .where(ModelTagLink.model_id.in_(ids))
+            .order_by(Tag.name)
+        ).all()
+        for model_id, tag in rows:
+            tags_by_model.setdefault(model_id, []).append(
+                {"id": tag.id, "name": tag.name, "ai_generated": tag.ai_generated})
+    return [{**m.model_dump(exclude={"embedding"}), "tags": tags_by_model.get(m.id, [])} for m in models]
 
 
 @router.post("/import")
@@ -110,7 +130,11 @@ async def import_file(
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return model
+    # a model that came from Printables/MakerWorld gets its listing details
+    # (title, pictures, tags...) filled in; a site problem never fails the import
+    from app.routers.sources import best_effort_link
+    await run_in_threadpool(best_effort_link, session, model, source_url)
+    return model.model_dump(exclude={"embedding"})
 
 
 @router.get("/search/semantic")
@@ -124,7 +148,7 @@ def get_model(model_id: int, session: Session = Depends(get_session)):
     model = session.get(Model3D, model_id)
     if not model:
         raise HTTPException(404, "Model not found")
-    return model
+    return _with_tags(session, [model])[0]
 
 
 @router.patch("/models/{model_id}")
@@ -180,6 +204,8 @@ def delete_model_record(model_id: int, session: Session = Depends(get_session)):
     model = session.get(Model3D, model_id)
     if not model:
         raise HTTPException(404, "Model not found")
+    from app.sources import delete_images
+    delete_images(model_id)
     session.delete(model)
     session.commit()
     return {"status": "deleted"}

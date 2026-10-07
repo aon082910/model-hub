@@ -62,6 +62,14 @@ class Model3D(SQLModel, table=True):
     source_url: Optional[str] = None
     designer: Optional[str] = None
     license: Optional[str] = None
+    # matched listing on a model site (see app/sources.py)
+    source_provider: Optional[str] = None  # printables, makerworld
+    source_id: Optional[str] = None
+    source_title: Optional[str] = None
+    source_description: Optional[str] = None
+    source_tags: Optional[str] = None      # JSON list
+    source_images: Optional[str] = None    # JSON list of file names in CONFIG_PATH/source_images/<model id>/
+    source_synced_at: Optional[datetime] = None
 
     is_duplicate_of: Optional[int] = Field(default=None, foreign_key="model3d.id")
 
@@ -140,6 +148,20 @@ class ProjectPart(SQLModel, table=True):
     unit_cost: Optional[float] = None
     purchase_url: Optional[str] = None
     notes: Optional[str] = None
+
+
+class InventoryItem(SQLModel, table=True):
+    """Parts, electronics and supplies on hand, independent of any project."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    category: str = "electronics"  # electronics, parts, supplies
+    quantity: int = 0
+    min_quantity: int = 0          # flag as low stock at or below this (0 = never)
+    location: Optional[str] = None
+    unit_cost: Optional[float] = None
+    purchase_url: Optional[str] = None
+    notes: Optional[str] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AppSettings(SQLModel, table=True):

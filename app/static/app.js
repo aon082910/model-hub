@@ -70,6 +70,7 @@ $$('#tabs button').forEach(btn => {
     $(`#tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'collections') loadCollections();
     if (btn.dataset.tab === 'projects') loadProjects();
+    if (btn.dataset.tab === 'supplies') loadSupplies();
     if (btn.dataset.tab === 'filament') loadFilament();
     if (btn.dataset.tab === 'queue') loadQueue();
     if (btn.dataset.tab === 'settings') loadSettings();
@@ -94,7 +95,10 @@ function renderGrid(models) {
   for (const m of models) {
     const card = document.createElement('div');
     card.className = 'card' + (m.is_duplicate_of ? ' duplicate' : '');
-    const thumb = m.thumbnail_path ? `/api/library/thumbnails/${m.thumbnail_path}` : '';
+    // models the renderer couldn't thumbnail (STEP, FBX...) borrow the first picture from their site listing
+    const siteImages = parseJsonList(m.source_images);
+    const thumb = m.thumbnail_path ? `/api/library/thumbnails/${m.thumbnail_path}`
+      : (siteImages.length ? `/api/library/models/${m.id}/source/images/${siteImages[0]}` : '');
     card.innerHTML = `
       ${thumb ? `<img src="${thumb}" loading="lazy">` : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:#666">${m.extension}</div>`}
       <div class="meta">
@@ -177,7 +181,7 @@ function openViewer(model) {
   $('#viewer-info').innerHTML = `
     <div><b>${model.filename}</b></div>
     <div>${model.ai_description || ''}</div>
-    <div>Tags: ${(model.tags || []).map(t => t.name).join(', ') || '(none)'}</div>
+    <div id="viewer-tags">Tags: ${(model.tags || []).map(t => t.name).join(', ') || '(none)'}</div>
     <div>Vertices: ${model.vertex_count ?? '?'} | Faces: ${model.face_count ?? '?'}</div>
     <div><a href="/api/library/models/${model.id}/file" download>Download original file</a></div>
     <div class="row" style="margin-top:8px">
@@ -186,6 +190,9 @@ function openViewer(model) {
       <input id="viewer-license" placeholder="License" value="${model.license || ''}">
       <button id="viewer-save-meta-btn">Save</button>
     </div>`;
+
+  viewerSourceChanged = false;
+  renderViewerSource(model);
 
   $('#viewer-tag-btn').onclick = async () => {
     const res = await fetch(`/api/ai/tag/${model.id}`, { method: 'POST' });
@@ -240,6 +247,7 @@ function openViewer(model) {
 
 $('#close-viewer').addEventListener('click', () => {
   $('#viewer-modal').classList.add('hidden');
+  if (viewerSourceChanged) { viewerSourceChanged = false; loadModels(); }
   if (animId) cancelAnimationFrame(animId);
   if (viewerResizeHandler) {
     window.removeEventListener('resize', viewerResizeHandler);
@@ -392,6 +400,143 @@ function frameCameraOn(object3d) {
   controls.target.set(0, 0, 0);
 }
 
+// ---------- Match a model to its Printables / MakerWorld listing ----------
+let viewerSourceChanged = false;
+const PROVIDER_LABELS = { printables: 'Printables', makerworld: 'MakerWorld' };
+
+function parseJsonList(value) {
+  try { const list = JSON.parse(value || '[]'); return Array.isArray(list) ? list : []; }
+  catch (e) { return []; }
+}
+
+function safeHttpUrl(url) {
+  return /^https?:\/\//i.test(url || '') ? url : '';
+}
+
+function renderViewerSource(model) {
+  const box = $('#viewer-source');
+  if (!model.source_provider) {
+    box.innerHTML = `
+      <div class="source-card">
+        <div class="row">
+          <button id="source-find">Find on MakerWorld / Printables</button>
+          <input id="source-url" placeholder="...or paste a model link">
+          <button id="source-link-url">Link</button>
+        </div>
+        <div class="source-options">
+          <label><input type="checkbox" id="source-opt-images" checked> Save pictures</label>
+          <label><input type="checkbox" id="source-opt-fill" checked> Fill designer / license</label>
+          <label><input type="checkbox" id="source-opt-tags"> Add the site's tags</label>
+        </div>
+        <div id="source-status" class="muted"></div>
+        <div id="source-results"></div>
+      </div>`;
+    $('#source-find').onclick = () => findSourceMatches(model);
+    $('#source-link-url').onclick = () => {
+      const url = $('#source-url').value.trim();
+      if (url) linkSource(model, { url });
+    };
+    return;
+  }
+
+  const images = parseJsonList(model.source_images);
+  const tags = parseJsonList(model.source_tags);
+  const stamp = model.source_synced_at ? encodeURIComponent(model.source_synced_at) : '';
+  const description = model.source_description || '';
+  box.innerHTML = `
+    <div class="source-card">
+      <div class="source-head">
+        <span class="badge">${esc(PROVIDER_LABELS[model.source_provider] || model.source_provider)}</span>
+        ${safeHttpUrl(model.source_url)
+          ? `<a href="${esc(model.source_url)}" target="_blank" rel="noopener noreferrer">${esc(model.source_title || model.source_url)}</a>`
+          : esc(model.source_title || '')}
+      </div>
+      <div class="muted">${[model.designer && `by ${esc(model.designer)}`, model.license && esc(model.license)].filter(Boolean).join(' · ')}</div>
+      ${images.length ? `<div class="source-gallery">${images.map(n =>
+        `<a href="/api/library/models/${model.id}/source/images/${n}?v=${stamp}" target="_blank" rel="noopener"><img src="/api/library/models/${model.id}/source/images/${n}?v=${stamp}" loading="lazy" alt=""></a>`).join('')}</div>` : ''}
+      ${tags.length ? `<div class="source-tags">${tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
+      ${description ? `<details><summary>Description</summary><div class="source-desc">${esc(description)}</div></details>` : ''}
+      <div class="row">
+        <button id="source-refresh">Re-fetch from site</button>
+        <button id="source-add-tags">Add site tags</button>
+        <button id="source-unlink">Unlink</button>
+        <span id="source-status" class="muted"></span>
+      </div>
+    </div>`;
+  $('#source-refresh').onclick = () => linkSource(model, { provider: model.source_provider, source_id: model.source_id });
+  $('#source-add-tags').onclick = () => linkSource(model,
+    { provider: model.source_provider, source_id: model.source_id, images: false, fill_details: false, add_tags: true });
+  $('#source-unlink').onclick = async () => {
+    if (!confirm('Unlink this model from its listing and delete the saved pictures?')) return;
+    const res = await fetch(`/api/library/models/${model.id}/source`, { method: 'DELETE' });
+    if (res.ok) {
+      Object.assign(model, await res.json());
+      viewerSourceChanged = true;
+      renderViewerSource(model);
+      showViewerTags(model);
+    }
+  };
+}
+
+function showViewerTags(model) {
+  $('#viewer-tags').textContent = `Tags: ${(model.tags || []).map(t => t.name).join(', ') || '(none)'}`;
+}
+
+async function sourceErrorText(res) {
+  const err = await res.json().catch(() => ({}));
+  return err.detail || `Request failed (${res.status})`;
+}
+
+async function findSourceMatches(model) {
+  const status = $('#source-status');
+  const results = $('#source-results');
+  status.textContent = 'Searching...';
+  results.innerHTML = '';
+  const res = await fetch(`/api/library/models/${model.id}/source/suggest`);
+  if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
+  const data = await res.json();
+  const problems = Object.entries(data.errors || {}).map(([p, msg]) => `${PROVIDER_LABELS[p] || p}: ${msg}`);
+  status.textContent = (data.results.length
+    ? `Matches for "${data.query}" (best first)` : `No matches for "${data.query}".`)
+    + (problems.length ? ` ${problems.join('; ')}` : '');
+  results.innerHTML = data.results.map((r, i) => `
+    <div class="source-result" data-index="${i}">
+      ${r.thumbnail ? `<img src="${esc(r.thumbnail)}" loading="lazy" referrerpolicy="no-referrer" alt="">` : '<div class="source-noimg"></div>'}
+      <div class="source-result-info">
+        <div><b>${esc(r.title)}</b></div>
+        <div class="muted">${esc(PROVIDER_LABELS[r.provider] || r.provider)} · ${esc(r.designer)}${r.license ? ' · ' + esc(r.license) : ''} · ${Math.round(r.score * 100)}% match</div>
+        <a href="${esc(safeHttpUrl(r.url))}" target="_blank" rel="noopener noreferrer">view listing</a>
+      </div>
+      <button class="source-pick">Link</button>
+    </div>`).join('');
+  results.querySelectorAll('.source-pick').forEach((btn) => {
+    btn.onclick = () => {
+      const r = data.results[parseInt(btn.closest('.source-result').dataset.index)];
+      linkSource(model, { provider: r.provider, source_id: r.source_id });
+    };
+  });
+}
+
+async function linkSource(model, listing) {
+  const status = $('#source-status');
+  status.textContent = 'Fetching from the site...';
+  const body = { ...listing };
+  if ($('#source-opt-images')) {
+    body.images = $('#source-opt-images').checked;
+    body.fill_details = $('#source-opt-fill').checked;
+    body.add_tags = $('#source-opt-tags').checked;
+  }
+  const res = await jsonRequest('POST', `/api/library/models/${model.id}/source`, body);
+  if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
+  Object.assign(model, await res.json());
+  viewerSourceChanged = true;
+  renderViewerSource(model);
+  $('#viewer-designer').value = model.designer || '';
+  $('#viewer-license').value = model.license || '';
+  showViewerTags(model);
+  $('#source-status').textContent = 'Saved.';
+}
+
 // ---------- Print estimate + add-to-queue (from viewer) ----------
 let lastEstimate = null;
 
@@ -480,6 +625,7 @@ function renderPartRow(projectId, part) {
 }
 
 let projectSpools = [];
+let projectSupplies = [];
 
 function spoolOptions(selectedId) {
   return projectSpools.map(f => `<option value="${f.id}" ${f.id === selectedId ? 'selected' : ''}>${
@@ -546,7 +692,7 @@ function renderProject(p) {
         </tr></thead><tbody>${p.parts.map(part => renderPartRow(p.id, part)).join('')}</tbody></table>
       </div>` : ''}
       <div class="row part-add">
-        <input class="new-part-name" placeholder="Part name (e.g. ESP32, M3x8 screws, solder)">
+        <input class="new-part-name" list="supply-names" placeholder="Part name (e.g. ESP32, M3x8 screws, solder)">
         <select class="new-part-category">
           <option value="electronics">electronics</option>
           <option value="parts">parts</option>
@@ -563,11 +709,15 @@ function renderProject(p) {
 
 async function loadProjects() {
   const onlyNeeding = $('#projects-needing-only').checked;
-  const [res, spools] = await Promise.all([
+  const [res, spools, supplies] = await Promise.all([
     fetch(`/api/projects?only_needing_parts=${onlyNeeding}`),
     fetch('/api/filament').then(r => r.json()),
+    fetch('/api/inventory').then(r => (r.ok ? r.json() : [])),
   ]);
   projectSpools = spools;
+  projectSupplies = supplies;
+  // typing a part name suggests (and, on pick, pre-fills type and cost from) the supplies you own
+  $('#supply-names').innerHTML = [...new Set(supplies.map(s => s.name))].map(n => `<option value="${esc(n)}"></option>`).join('');
   const projects = await res.json();
   $('#projects-list').innerHTML = projects.length
     ? projects.map(renderProject).join('')
@@ -575,26 +725,130 @@ async function loadProjects() {
   if (!$('#shopping-list').classList.contains('hidden')) loadShoppingList();
 }
 
+let shoppingCombine = false;
+
+// navigator.clipboard only exists on https / localhost, and this app is usually
+// opened over plain http on a LAN address, so fall back to a hidden textarea
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through to the textarea method */ }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  area.remove();
+  return ok;
+}
+
 async function loadShoppingList() {
-  const data = await (await fetch('/api/projects/shopping-list')).json();
+  const combine = shoppingCombine ? 'true' : 'false';
+  const data = await (await fetch(`/api/projects/shopping-list?combine=${combine}`)).json();
   const box = $('#shopping-list');
   box.classList.remove('hidden');
   const rows = data.items.map(i => `
     <tr>
       <td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.quantity_needed}</td>
+      <td>${i.in_stock ? `<span class="in-stock" title="Same-named item in Supplies">${i.in_stock} in stock</span>` : ''}</td>
       <td>${esc(i.project_name)}</td>
       <td>${i.cost_needed != null ? `$${i.cost_needed.toFixed(2)}` : ''}</td>
       <td>${safeUrl(i.purchase_url) ? `<a href="${esc(safeUrl(i.purchase_url))}" target="_blank" rel="noopener noreferrer">buy</a>` : ''}</td>
     </tr>`).join('');
   box.innerHTML = `
     <h3>Shopping List <small>(parts still needed for projects that aren't done)</small></h3>
+    <div class="toolbar">
+      <label><input type="checkbox" id="shopping-combine" ${shoppingCombine ? 'checked' : ''}> Combine identical parts across projects</label>
+      ${data.items.length ? `
+      <a class="button-link" href="/api/projects/shopping-list/export?format=csv&combine=${combine}" download>Download CSV</a>
+      <a class="button-link" href="/api/projects/shopping-list/export?format=txt&combine=${combine}" download>Download text</a>
+      <button id="shopping-copy">Copy as text</button>
+      <span id="shopping-copy-status" class="muted"></span>` : ''}
+    </div>
     ${data.items.length ? `
     <div class="table-scroll"><table class="parts-table"><thead><tr>
-      <th>Part</th><th>Type</th><th>Qty</th><th>Project</th><th>Cost</th><th></th>
+      <th>Part</th><th>Type</th><th>Qty</th><th>Have</th><th>Project</th><th>Cost</th><th></th>
     </tr></thead><tbody>${rows}</tbody></table></div>
     <div class="project-summary">Estimated total: $${data.total_cost.toFixed(2)}</div>`
       : '<p class="muted">Nothing to buy -- every project has the parts it needs.</p>'}`;
+  $('#shopping-combine').onchange = (e) => { shoppingCombine = e.target.checked; loadShoppingList(); };
+  const copyBtn = $('#shopping-copy');
+  if (copyBtn) {
+    copyBtn.onclick = async () => {
+      const res = await fetch(`/api/projects/shopping-list/export?format=txt&combine=${combine}`);
+      const ok = res.ok && await copyText(await res.text());
+      $('#shopping-copy-status').textContent = ok ? 'Copied.' : 'Could not copy -- use Download text instead.';
+    };
+  }
 }
+
+// ---------- Supplies on hand ----------
+let suppliesCache = [];
+
+async function loadSupplies() {
+  const params = new URLSearchParams();
+  const q = $('#supply-search').value.trim();
+  if (q) params.set('q', q);
+  if ($('#supply-filter-category').value) params.set('category', $('#supply-filter-category').value);
+  if ($('#supply-low-only').checked) params.set('low_stock', 'true');
+  const res = await fetch(`/api/inventory?${params}`);
+  suppliesCache = res.ok ? await res.json() : [];
+  $('#supplies-table tbody').innerHTML = suppliesCache.map(i => `
+    <tr data-id="${i.id}" class="${i.low_stock ? 'low-stock' : ''}">
+      <td><input class="supply-edit" data-field="name" value="${esc(i.name)}" aria-label="Name">
+        ${safeUrl(i.purchase_url) ? `<a href="${esc(safeUrl(i.purchase_url))}" target="_blank" rel="noopener noreferrer">buy</a>` : ''}
+        ${i.low_stock ? '<span class="low-flag">low</span>' : ''}</td>
+      <td><select class="supply-edit" data-field="category" aria-label="Type">${
+        ['electronics', 'parts', 'supplies'].map(c => `<option value="${c}" ${c === i.category ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
+      <td><input class="supply-edit supply-num" data-field="quantity" type="number" min="0" value="${i.quantity}" aria-label="Quantity"></td>
+      <td><input class="supply-edit supply-num" data-field="min_quantity" type="number" min="0" value="${i.min_quantity}" aria-label="Low stock at"></td>
+      <td><input class="supply-edit" data-field="location" value="${esc(i.location || '')}" aria-label="Location"></td>
+      <td><input class="supply-edit supply-num" data-field="unit_cost" type="number" min="0" step="0.01" value="${i.unit_cost ?? ''}" aria-label="Unit cost"></td>
+      <td><button class="supply-del">delete</button></td>
+    </tr>`).join('');
+  $('#supplies-empty').classList.toggle('hidden', suppliesCache.length > 0);
+}
+
+$('#add-supply-btn').addEventListener('click', async () => {
+  const name = $('#supply-name').value.trim();
+  if (!name) return;
+  const res = await jsonRequest('POST', '/api/inventory', {
+    name,
+    category: $('#supply-category').value,
+    quantity: $('#supply-qty').value || 0,
+    min_quantity: $('#supply-min').value || 0,
+    location: $('#supply-location').value,
+    unit_cost: $('#supply-cost').value,
+  });
+  if (!res.ok) return alert((await res.json().catch(() => ({}))).detail || 'Could not add item.');
+  $('#supply-name').value = '';
+  $('#supply-location').value = '';
+  $('#supply-cost').value = '';
+  loadSupplies();
+});
+$('#supply-search').addEventListener('input', debounce(loadSupplies, 300));
+$('#supply-filter-category').addEventListener('change', loadSupplies);
+$('#supply-low-only').addEventListener('change', loadSupplies);
+
+$('#supplies-table').addEventListener('change', async (e) => {
+  const input = e.target.closest('.supply-edit');
+  if (!input) return;
+  const id = input.closest('tr').dataset.id;
+  const res = await jsonRequest('PATCH', `/api/inventory/${id}`, { [input.dataset.field]: input.value });
+  if (!res.ok) alert((await res.json().catch(() => ({}))).detail || 'Could not save that change.');
+  loadSupplies();
+});
+$('#supplies-table').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('supply-del')) return;
+  if (!confirm('Delete this item from your supplies?')) return;
+  await fetch(`/api/inventory/${e.target.closest('tr').dataset.id}`, { method: 'DELETE' });
+  loadSupplies();
+});
 
 $('#add-project-btn').addEventListener('click', async () => {
   const name = $('#new-project-name').value.trim();
@@ -692,7 +946,17 @@ $('#projects-list').addEventListener('change', async (e) => {
   const card = e.target.closest('.project-card');
   if (!card) return;
   const projectId = card.dataset.project;
-  if (e.target.classList.contains('project-status')) {
+  if (e.target.classList.contains('new-part-name')) {
+    const owned = projectSupplies.find(s => s.name.toLowerCase() === e.target.value.trim().toLowerCase());
+    if (owned) {
+      card.querySelector('.new-part-category').value = owned.category;
+      const cost = card.querySelector('.new-part-cost');
+      if (!cost.value && owned.unit_cost != null) cost.value = owned.unit_cost;
+      if (!card.querySelector('.new-part-url').value && owned.purchase_url) {
+        card.querySelector('.new-part-url').value = owned.purchase_url;
+      }
+    }
+  } else if (e.target.classList.contains('project-status')) {
     const res = await jsonRequest('PATCH', `/api/projects/${projectId}`, { status: e.target.value });
     if (!res.ok) alert((await res.json().catch(() => ({}))).detail || 'Could not change status.');
     loadProjects();

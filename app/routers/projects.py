@@ -1,9 +1,12 @@
+import csv
+import io
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel import Session, select
 from app.db import get_session
-from app.models import Filament, Model3D, Project, ProjectModelFilament, ProjectModelLink, ProjectPart
+from app.models import Filament, InventoryItem, Model3D, Project, ProjectModelFilament, ProjectModelLink, ProjectPart
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -191,33 +194,113 @@ def list_projects(only_needing_parts: bool = False, session: Session = Depends(g
     return projects
 
 
-@router.get("/shopping-list")
-def shopping_list(session: Session = Depends(get_session)):
-    """Every part still needed across all unfinished projects, with the project
-    that needs it, so one trip/order can cover everything."""
+def _shopping_items(session: Session, combine: bool) -> list:
     rows = session.exec(
         select(ProjectPart, Project)
         .join(Project, ProjectPart.project_id == Project.id)
         .where(Project.status != "done")
         .order_by(ProjectPart.category, ProjectPart.name)
     ).all()
+    stock = {}
+    for item in session.exec(select(InventoryItem)).all():
+        key = item.name.strip().lower()
+        stock[key] = stock.get(key, 0) + item.quantity
+
     items = []
+    merged = {}
     for part, project in rows:
         needed = max(0, part.quantity - part.quantity_owned)
         if not needed:
             continue
-        items.append({
+        key = (part.name.strip().lower(), part.category)
+        if combine and key in merged:
+            entry = merged[key]
+            entry["quantity_needed"] += needed
+            entry["project_names"].append(project.name)
+            if entry["unit_cost"] is None:
+                entry["unit_cost"] = part.unit_cost
+            entry["purchase_url"] = entry["purchase_url"] or part.purchase_url
+            continue
+        entry = {
             "part_id": part.id,
             "name": part.name,
             "category": part.category,
             "quantity_needed": needed,
             "unit_cost": part.unit_cost,
-            "cost_needed": round(needed * part.unit_cost, 2) if part.unit_cost is not None else None,
             "purchase_url": part.purchase_url,
             "project_id": project.id,
-            "project_name": project.name,
-        })
+            "project_names": [project.name],
+            "in_stock": stock.get(part.name.strip().lower()),
+        }
+        items.append(entry)
+        if combine:
+            merged[key] = entry
+    for entry in items:
+        entry["project_name"] = ", ".join(dict.fromkeys(entry["project_names"]))
+        entry["cost_needed"] = (round(entry["quantity_needed"] * entry["unit_cost"], 2)
+                                if entry["unit_cost"] is not None else None)
+    return items
+
+
+@router.get("/shopping-list")
+def shopping_list(combine: bool = False, session: Session = Depends(get_session)):
+    """Every part still needed across all unfinished projects, with the project
+    that needs it, so one trip/order can cover everything. combine=true merges
+    identical parts (same name and type) from different projects into one line.
+    in_stock is the quantity of a same-named part in the inventory, as a hint."""
+    items = _shopping_items(session, combine)
     return {"items": items, "total_cost": round(sum(i["cost_needed"] or 0 for i in items), 2)}
+
+
+def _spreadsheet_safe(value) -> str:
+    """Stop a cell that starts with = + - @ from being run as a formula when the
+    CSV is opened in Excel/Sheets (a part name or note is user-typed text)."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+@router.get("/shopping-list/export")
+def export_shopping_list(format: str = "csv", combine: bool = False, session: Session = Depends(get_session)):
+    if format not in ("csv", "txt"):
+        raise HTTPException(400, "format must be csv or txt")
+    items = _shopping_items(session, combine)
+    total = round(sum(i["cost_needed"] or 0 for i in items), 2)
+    stamp = datetime.utcnow().strftime("%Y-%m-%d")
+
+    if format == "csv":
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(["Part", "Type", "Quantity", "Unit cost", "Line cost", "In stock", "Projects", "Link"])
+        for i in items:
+            writer.writerow([
+                _spreadsheet_safe(i["name"]), i["category"], i["quantity_needed"],
+                "" if i["unit_cost"] is None else f"{i['unit_cost']:.2f}",
+                "" if i["cost_needed"] is None else f"{i['cost_needed']:.2f}",
+                "" if i["in_stock"] is None else i["in_stock"],
+                _spreadsheet_safe(i["project_name"]), _spreadsheet_safe(i["purchase_url"]),
+            ])
+        writer.writerow([])
+        writer.writerow(["Estimated total", "", "", "", f"{total:.2f}"])
+        body, media = out.getvalue(), "text/csv"
+    else:
+        lines = [f"Shopping list - {stamp}", f"{len(items)} item(s), estimated ${total:.2f}", ""]
+        for category in PART_CATEGORIES:
+            group = [i for i in items if i["category"] == category]
+            if not group:
+                continue
+            lines.append(category.upper())
+            for i in group:
+                cost = f" - ${i['cost_needed']:.2f}" if i["cost_needed"] is not None else ""
+                stock = f" (have {i['in_stock']} in stock)" if i["in_stock"] else ""
+                lines.append(f"[ ] {i['quantity_needed']} x {i['name']}{cost}{stock}  [{i['project_name']}]")
+                if i["purchase_url"]:
+                    lines.append(f"    {i['purchase_url']}")
+            lines.append("")
+        body, media = "\n".join(lines).rstrip() + "\n", "text/plain"
+
+    filename = f"shopping-list-{stamp}.{format}"
+    return Response(body, media_type=f"{media}; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.post("")
