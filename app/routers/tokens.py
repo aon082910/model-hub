@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, select
 
-from app import tokens
+from app import activity, tokens
 from app.db import get_session
 from app.models import ApiToken
 
@@ -38,14 +38,17 @@ def create_token(payload: dict, request: Request, session: Session = Depends(get
         raise HTTPException(400, f"At most {MAX_TOKENS} tokens")
     user = getattr(request.state, "user", None) or {}
     row, key = tokens.create(session, name.strip()[:80], scope, user.get("username"), days)
+    activity.record(session, activity.actor_of(request), "token", f"Made the {row.scope} API token {row.name!r}")
     return {**_json(row), "token": key}
 
 
 @router.delete("/{token_id}")
-def revoke_token(token_id: int, session: Session = Depends(get_session)):
+def revoke_token(token_id: int, request: Request, session: Session = Depends(get_session)):
     row = session.get(ApiToken, token_id)
     if not row:
         raise HTTPException(404, "Not found")
+    name = row.name
     session.delete(row)
     session.commit()
+    activity.record(session, activity.actor_of(request), "token", f"Revoked the API token {name!r}")
     return {"status": "revoked"}

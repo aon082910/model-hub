@@ -3,13 +3,14 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlmodel import Session, select
 
 from app import printers as printing
 from app.config import LIBRARY_PATH
 from app.db import get_session
-from app.models import Model3D, Printer, PrinterJob
+from app import activity, print_files
+from app.models import Model3D, Printer, PrinterJob, PrintFile
 
 router = APIRouter(prefix="/api/printers", tags=["printers"])
 
@@ -63,13 +64,14 @@ def list_printers(session: Session = Depends(get_session)):
 
 
 @router.post("")
-def add_printer(payload: dict, session: Session = Depends(get_session)):
+def add_printer(payload: dict, request: Request, session: Session = Depends(get_session)):
     if len(session.exec(select(Printer.id)).all()) >= MAX_PRINTERS:
         raise HTTPException(400, f"At most {MAX_PRINTERS} printers")
     printer = Printer(**_fields(payload))
     session.add(printer)
     session.commit()
     session.refresh(printer)
+    activity.record(session, activity.actor_of(request), "printer", f"Added the printer {printer.name}")
     return _json(printer)
 
 
@@ -85,9 +87,12 @@ def update_printer(printer_id: int, payload: dict, session: Session = Depends(ge
 
 
 @router.delete("/{printer_id}")
-def delete_printer(printer_id: int, session: Session = Depends(get_session)):
-    session.delete(_get(session, printer_id))
+def delete_printer(printer_id: int, request: Request, session: Session = Depends(get_session)):
+    printer = _get(session, printer_id)
+    name = printer.name
+    session.delete(printer)
     session.commit()
+    activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")
     return {"status": "deleted"}
 
 
@@ -99,11 +104,13 @@ def printer_status(printer_id: int, session: Session = Depends(get_session)):
 
 @router.post("/{printer_id}/send")
 def send(printer_id: int, file: Optional[UploadFile] = File(None), model_id: Optional[int] = Form(None),
-         start: bool = Form(False), infill: float = Form(0.15), session: Session = Depends(get_session)):
-    """Send a G-code file (uploaded) or a model (sliced here first) to the printer. start=true also starts the print."""
+         print_file_id: Optional[int] = Form(None), start: bool = Form(False), infill: float = Form(0.15),
+         session: Session = Depends(get_session)):
+    """Send a G-code file (uploaded), a sliced file kept with a model, or a model (sliced here first) to the printer.
+    start=true also starts the print."""
     printer = _get(session, printer_id)
-    if file is None and model_id is None:
-        raise HTTPException(400, "Choose a G-code file, or a model to slice")
+    if file is None and model_id is None and print_file_id is None:
+        raise HTTPException(400, "Choose a G-code file, a kept sliced file, or a model to slice")
     if not (0.0 <= infill <= 1.0):
         raise HTTPException(400, "infill must be between 0 and 1")
     try:
@@ -122,6 +129,17 @@ def send(printer_id: int, file: Optional[UploadFile] = File(None), model_id: Opt
                         if written > printing.MAX_UPLOAD_BYTES:
                             raise printing.PrinterError("That file is larger than 1 GB")
                         out.write(chunk)
+            elif print_file_id is not None:
+                kept = session.get(PrintFile, print_file_id)
+                if not kept:
+                    raise HTTPException(404, "That sliced file was not found")
+                if kept.kind not in print_files.GCODE_KINDS:
+                    raise HTTPException(400, "A sliced .3mf cannot be sent from here; send its G-code")
+                path = print_files.stored_path(kept.stored_name)
+                if not path.is_file():
+                    raise HTTPException(404, "The file is missing from this server")
+                model_id = kept.model_id
+                name = printing.safe_gcode_name(kept.filename)
             else:
                 model = session.get(Model3D, model_id)
                 if not model:
@@ -133,7 +151,7 @@ def send(printer_id: int, file: Optional[UploadFile] = File(None), model_id: Opt
                 name = printing.safe_gcode_name(model.filename)
             result = printing.send_file(printer.kind, printer.url, printer.api_key, path, name, start)
             session.add(PrinterJob(printer_id=printer.id, filename=result["filename"], model_id=model_id if file is None else None,
-                                   started=bool(result["started"])))
+                                   print_file_id=print_file_id, started=bool(result["started"])))
             session.commit()
             return result
     except printing.PrinterError as e:

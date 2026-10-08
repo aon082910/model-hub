@@ -55,6 +55,7 @@
         <option value="">All models</option><option value="true">Printed</option><option value="false">Never printed</option>
       </select>
       <a href="#/duplicates" class="button-link">Review duplicates</a>
+      <a href="#/activity" class="button-link">Recent changes</a>
       <button id="select-mode-btn" type="button">Select</button>
       <span id="tag-progress"></span>
     </div>
@@ -129,6 +130,21 @@
     <div class="bulk-bar no-print"><button id="labels-all">Tick all</button><button id="labels-none">Untick all</button><button id="labels-print" class="primary">Print labels</button></div>
     <div id="labels-list" class="labels-list no-print"></div>
     <div id="labels-sheet" class="labels-sheet"></div>
+  </section>
+
+  <section id="tab-activity" class="tab">
+    <p><a href="#/library" class="back-link">&larr; Library</a></p>
+    <h2>Recent changes</h2>
+    <p class="muted">Who changed what. Bulk edits can be undone (anything changed again since is left alone). Passwords, keys, tokens and setting values are never recorded.</p>
+    <div class="row">
+      <select id="activity-actor"><option value="">everyone</option></select>
+      <select id="activity-action"><option value="">everything</option><option value="bulk_edit">bulk edits</option><option value="undo">undos</option>
+        <option value="remove_model">removed from the library</option><option value="duplicates">duplicate clean-ups</option><option value="user">logins</option>
+        <option value="token">API tokens</option><option value="share">share links</option><option value="printer">printers</option>
+        <option value="settings">settings</option><option value="restore">restores</option></select>
+    </div>
+    <div id="activity-list"></div>
+    <div id="activity-more" class="pagination hidden"><button id="activity-more-btn" type="button">Older changes</button></div>
   </section>
 
   <section id="tab-search" class="tab">
@@ -618,6 +634,7 @@
         <div class="panel" id="model-tags-panel"></div>
         <div class="panel" id="model-details-panel"></div>
         <div class="panel" id="model-settings-panel"></div>
+        <div class="panel" id="model-sliced-panel"></div>
         <div class="panel" id="model-versions-panel"></div>
         <div class="panel" id="model-share-panel"></div>
         <div class="panel" id="viewer-source"></div>

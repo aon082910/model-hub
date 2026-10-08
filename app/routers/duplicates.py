@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session
 
-from app import duplicates
+from app import activity, duplicates
 from app.db import get_session
 from app.library_maintenance import (
     acquire_library_maintenance, current_library_maintenance, release_library_maintenance,
@@ -29,7 +29,7 @@ def list_similar(session: Session = Depends(get_session)):
 
 
 @router.post("/merge")
-def merge_group(payload: dict, session: Session = Depends(get_session)):
+def merge_group(payload: dict, request: Request, session: Session = Depends(get_session)):
     """Keep one model and clean up its exact copies. delete_files must be true to delete anything from disk."""
     keep_id = payload.get("keep_id")
     if not isinstance(keep_id, int) or isinstance(keep_id, bool):
@@ -37,7 +37,10 @@ def merge_group(payload: dict, session: Session = Depends(get_session)):
     delete_files = payload.get("delete_files") is True
     _exclusive()
     try:
-        return duplicates.merge(session, keep_id, payload.get("remove_ids") or [], delete_files)
+        result = duplicates.merge(session, keep_id, payload.get("remove_ids") or [], delete_files)
+        activity.record(session, activity.actor_of(request), "duplicates",
+                        f"Cleaned up duplicates of model {keep_id}: {result['merged']} merged, {result['deleted_files']} file(s) deleted")
+        return result
     except duplicates.DuplicateError as e:
         raise HTTPException(400, str(e))
     finally:
@@ -45,7 +48,7 @@ def merge_group(payload: dict, session: Session = Depends(get_session)):
 
 
 @router.post("/merge-all")
-def merge_all(payload: dict, session: Session = Depends(get_session)):
+def merge_all(payload: dict, request: Request, session: Session = Depends(get_session)):
     """Clean up every group of copies, keeping the suggested model in each. Deleting files from disk
     needs confirm == "delete"; without it the copies only share their tags, collections and notes."""
     delete_files = payload.get("delete_files") is True
@@ -74,6 +77,8 @@ def merge_all(payload: dict, session: Session = Depends(get_session)):
             # go again while there are more groups than one page holds.
             if not delete_files or not progress or page["total"] <= duplicates.MAX_GROUPS:
                 break
+        activity.record(session, activity.actor_of(request), "duplicates",
+                        f"Cleaned up every group of duplicates: {total['merged']} merged, {total['deleted_files']} file(s) deleted")
         return total
     except duplicates.DuplicateError as e:
         raise HTTPException(400, str(e))

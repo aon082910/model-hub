@@ -33,6 +33,8 @@ def delete_model_records(session: Session, model_ids: Iterable[int]) -> int:
     # other rows that were marked as copies of a removed model are no longer copies
     session.exec(update(Model3D).where(Model3D.is_duplicate_of.in_(ids)).values(is_duplicate_of=None))
     from app.families import leave_families
+    from app.routers.print_files import remove_files
+    remove_files(session, ids)
     session.exec(delete(ShareLink).where(ShareLink.kind == "model", ShareLink.target_id.in_(ids)))   # a link must never outlive its model
     family_ids = {f for f in session.exec(select(Model3D.family_id).where(Model3D.id.in_(ids), Model3D.family_id.is_not(None))).all()}
     removed = session.exec(delete(Model3D).where(Model3D.id.in_(ids))).rowcount

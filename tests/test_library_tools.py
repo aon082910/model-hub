@@ -130,7 +130,7 @@ def test_bulk_tags(authed, models):
     tag, big, small, tall = models
     ids = [big["id"], small["id"], tall["id"]]
     r = authed.post("/api/bulk", json={"action": "add_tag", "value": "  Bulk-Tag ", "ids": ids}).json()
-    assert r == {"changed": 3, "unchanged": 0, "models": 3}
+    assert (r["changed"], r["unchanged"], r["models"]) == (3, 0, 3)
     assert authed.post("/api/bulk", json={"action": "add_tag", "value": "bulk-tag", "ids": ids}).json()["changed"] == 0
     assert sorted(_names(authed, tag="bulk-tag", q=tag)) == sorted([big["filename"], small["filename"], tall["filename"]])
     assert authed.post("/api/bulk", json={"action": "remove_tag", "value": "bulk-tag", "ids": [big["id"]]}).json()["changed"] == 1
@@ -145,7 +145,8 @@ def test_bulk_collections_projects_and_queue(authed, models):
     proj = authed.post("/api/projects", json={"name": f"bulk proj {tag}"}).json()
     try:
         assert authed.post("/api/bulk", json={"action": "add_collection", "value": col["id"], "ids": ids}).json()["changed"] == 2
-        assert authed.post("/api/bulk", json={"action": "add_collection", "value": col["id"], "ids": ids}).json() == {"changed": 0, "unchanged": 2, "models": 2}
+        again = authed.post("/api/bulk", json={"action": "add_collection", "value": col["id"], "ids": ids}).json()
+        assert (again["changed"], again["unchanged"], again["models"]) == (0, 2, 2)
         assert sorted(_names(authed, collection_id=col["id"])) == sorted([big["filename"], small["filename"]])
         assert authed.post("/api/bulk", json={"action": "remove_collection", "value": col["id"], "ids": [small["id"]]}).json()["changed"] == 1
         assert authed.post("/api/bulk", json={"action": "add_project", "value": proj["id"], "ids": ids}).json()["changed"] == 2
@@ -192,7 +193,7 @@ def test_bad_bulk_requests_are_refused(authed, payload):
 
 
 def test_bulk_on_nothing_is_harmless(authed):
-    assert authed.post("/api/bulk", json={"action": "add_tag", "value": "x", "ids": [987654321]}).json() == {"changed": 0, "unchanged": 0, "models": 0}
+    assert authed.post("/api/bulk", json={"action": "add_tag", "value": "x", "ids": [987654321]}).json() == {"changed": 0, "unchanged": 0, "models": 0, "activity_id": None}
 
 
 def test_viewers_cannot_bulk_edit(authed, models):

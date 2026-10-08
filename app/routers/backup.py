@@ -3,10 +3,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from app import backup
+from app import activity, backup
 from app.config import CONFIG_PATH
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
@@ -62,15 +62,20 @@ def delete_saved(name: str):
     return {"status": "deleted"}
 
 
-def _restore(path: Path) -> dict:
+def _restore(path: Path, request: Request) -> dict:
     try:
-        return backup.restore_backup(path)
+        result = backup.restore_backup(path)
     except backup.BackupError as e:
         raise HTTPException(400, str(e))
+    from sqlmodel import Session
+    from app.db import engine
+    with Session(engine) as session:                       # the restore replaced the data, so write the note afterwards
+        activity.record(session, activity.actor_of(request), "restore", f"Restored a backup (made {result.get('created') or 'at an unknown time'})")
+    return result
 
 
 @router.post("/restore")
-def restore_uploaded(file: UploadFile = File(...), confirm: str = Form("")):
+def restore_uploaded(request: Request, file: UploadFile = File(...), confirm: str = Form("")):
     """Replace the data with an uploaded backup. confirm must be "replace"."""
     if confirm != "replace":
         raise HTTPException(400, 'Send confirm=replace to restore (this replaces your current data)')
@@ -84,17 +89,17 @@ def restore_uploaded(file: UploadFile = File(...), confirm: str = Form("")):
                 if written > MAX_UPLOAD_BYTES:
                     raise HTTPException(413, "That file is larger than this server will restore")
                 out.write(chunk)
-        return _restore(path)
+        return _restore(path, request)
     finally:
         path.unlink(missing_ok=True)
 
 
 @router.post("/saved/{name}/restore")
-def restore_saved(name: str, payload: dict):
+def restore_saved(name: str, payload: dict, request: Request):
     if payload.get("confirm") != "replace":
         raise HTTPException(400, 'Send {"confirm": "replace"} to restore (this replaces your current data)')
     try:
         path = backup.saved_path(name)
     except backup.BackupError as e:
         raise HTTPException(404, str(e))
-    return _restore(path)
+    return _restore(path, request)

@@ -1,9 +1,10 @@
 """The administrator's list of other logins."""
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, select
 
+from app import activity
 from app.auth import ROLES, hash_password
 from app.db import get_session
 from app.models import AppUser
@@ -39,7 +40,7 @@ def list_users(session: Session = Depends(get_session)):
 
 
 @router.post("")
-def create_user(payload: dict, session: Session = Depends(get_session)):
+def create_user(payload: dict, request: Request, session: Session = Depends(get_session)):
     username = payload.get("username")
     if not isinstance(username, str) or not _NAME.fullmatch(username.strip()):
         raise HTTPException(400, "The user name must be 1-40 letters, numbers or . _ @ - (starting with a letter or number)")
@@ -55,11 +56,12 @@ def create_user(payload: dict, session: Session = Depends(get_session)):
     session.add(user)
     session.commit()
     session.refresh(user)
+    activity.record(session, activity.actor_of(request), "user", f"Added the {user.role} login {user.username}")
     return _json(user)
 
 
 @router.patch("/{user_id}")
-def update_user(user_id: int, payload: dict, session: Session = Depends(get_session)):
+def update_user(user_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
     user = session.get(AppUser, user_id)
     if not user:
         raise HTTPException(404, "Not found")
@@ -70,14 +72,18 @@ def update_user(user_id: int, payload: dict, session: Session = Depends(get_sess
     session.add(user)
     session.commit()
     session.refresh(user)
+    changes = [x for x, k in (("role to " + user.role, "role"), ("password reset", "password")) if k in payload]
+    activity.record(session, activity.actor_of(request), "user", f"Changed the login {user.username}: {', '.join(changes) or 'nothing'}")
     return _json(user)
 
 
 @router.delete("/{user_id}")
-def delete_user(user_id: int, session: Session = Depends(get_session)):
+def delete_user(user_id: int, request: Request, session: Session = Depends(get_session)):
     user = session.get(AppUser, user_id)
     if not user:
         raise HTTPException(404, "Not found")
+    name = user.username
     session.delete(user)
     session.commit()
+    activity.record(session, activity.actor_of(request), "user", f"Removed the login {name}")
     return {"status": "deleted"}

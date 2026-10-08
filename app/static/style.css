@@ -342,3 +342,10 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .bar { fill: var(--accent); }
 .bar-label { fill: var(--muted); font-size: 9px; }
 .update-badge { background: #e6b800; color: #14161a; border-radius: 10px; padding: 1px 9px; font-size: 12px; text-decoration: none; font-weight: 600; }
+
+/* ---------- Sliced files, activity ---------- */
+.sliced-row { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.sliced-row .row { margin: 4px 0; }
+.activity-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.activity-row .grow { flex: 1; min-width: 200px; }
+.activity-row.undone { opacity: .6; }

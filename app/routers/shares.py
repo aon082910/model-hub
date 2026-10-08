@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlmodel import Session, select
 
-from app import sources
+from app import activity, sources
 from app.config import LIBRARY_PATH, THUMB_DIR
 from app.db import get_session
 from app.models import Filament, Model3D, Project, ProjectModelFilament, ProjectModelLink, ProjectPart, ShareLink
@@ -80,16 +80,19 @@ def create_share(payload: dict, request: Request, session: Session = Depends(get
     session.add(link)
     session.commit()
     session.refresh(link)
+    activity.record(session, activity.actor_of(request), "share", f"Made a share link for the {kind} {_target_name(session, link) or target}")
     return _json(session, link)
 
 
 @router.delete("/{share_id}")
-def revoke_share(share_id: int, session: Session = Depends(get_session)):
+def revoke_share(share_id: int, request: Request, session: Session = Depends(get_session)):
     link = session.get(ShareLink, share_id)
     if not link:
         raise HTTPException(404, "Not found")
+    what = f"{link.kind} {_target_name(session, link) or link.target_id}"
     session.delete(link)
     session.commit()
+    activity.record(session, activity.actor_of(request), "share", f"Stopped sharing the {what}")
     return {"status": "revoked"}
 
 

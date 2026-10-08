@@ -101,6 +101,8 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Statistics | Done — the **Stats** tab: prints, models printed, filament used, print time and filament cost per month (charts for the last 6, 12 or 24 months), most printed models, filament by material, printer success rate (from the finished and cancelled prints printers report), and how much of the library has never been printed |
 | Update notice | Done — Model Hub looks for a newer release once a day (switch off in Settings → Updates; only the public GitHub release information is requested) and shows an *Update* badge to the administrator, plus a notification once per new version |
 | API tokens | Done — **Settings → API tokens**: read, write and import keys for scripts and other programs; shown once, stored only as a hash. See [API tokens](#api-tokens) |
+| Sliced files per model | Done — keep G-code or a sliced `.3mf` with a model (a *Sliced files* panel on its page); Model Hub reads the slicer's time, filament weight, filament type and layer height from the file, and can send a kept G-code file to a printer without any slicer in the container. See [Sliced files](#sliced-files) |
+| Recent changes and undo | Done — **Library → Recent changes** records who changed what; bulk edits can be undone. See [Recent changes](#recent-changes) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -331,6 +333,29 @@ API keys are never shown again after you save them, are never in an error messag
 **Status of testing:** the Moonraker and OctoPrint code follows their documented HTTP APIs and is tested against simulated printers and a stand-in slicer, and the whole flow was
 exercised in a browser against a simulated Klipper host. It has **not** been tried against a real printer or a real slicer, so try it with an idle printer first. Bambu Lab printers
 (which use their own protocol) are not supported.
+
+## Sliced files
+
+On a model's page, **Sliced files** keeps the G-code (`.gcode .gco .g .bgcode`) or sliced `.3mf` you made for it, with an optional note. Model Hub reads the comments the slicer wrote:
+
+| Slicer | What is read |
+|---|---|
+| PrusaSlicer, OrcaSlicer | slicer and version, estimated printing time, filament used (g), filament type, layer height |
+| Bambu Studio | slicer, total estimated time, total filament weight, filament type, layer height (also from a sliced `.3mf`'s `Metadata/slice_info.config`) |
+| Cura | slicer, `;TIME`, layer height (Cura does not write grams) |
+
+Binary `.bgcode` files are stored and sent but not read. Nothing here runs a slicer, and what is read is shown, not trusted: you can correct it through the API. A kept G-code file can be **sent to a printer** (Print Queue's printer
+setup is needed; the administrator only) with the *Send to printer* button, optionally starting it. When that print finishes, the print log records the file's estimated grams (or completes the waiting queue entry), as described under
+[Things Model Hub does by itself](#things-model-hub-does-by-itself). Files are stored in `/config/print_files`, are **not** in backups (they can be large and can be made again; a restore leaves rows that say *file missing*),
+are deleted with their model, and the same file is kept once per model. The limit is 1 GB per file and 50 per model.
+
+## Recent changes
+
+**Library → Recent changes** lists who changed what, newest first, and can be filtered by person or kind. It records bulk edits, models removed from the library index, duplicate clean-ups, backup restores, logins added/changed/removed, API tokens,
+share links, printers, and the *names* of settings that changed. It never records passwords, keys, tokens or setting values. The newest 2000 entries are kept, and the list is part of a backup.
+
+**Undo** is offered for bulk edits (tags, collections, projects, designer, license, print queue), right after you apply one and from this page. An undo only touches what the edit changed and leaves anything changed again since alone
+(a designer you edited afterwards is not overwritten; a queue entry that has already started stays). Members and the administrator can undo; viewers cannot. Each undo is itself recorded, and an edit can be undone once.
 
 ## API tokens
 

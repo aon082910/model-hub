@@ -278,6 +278,7 @@ class PrinterJob(SQLModel, table=True):
     filename: str
     model_id: Optional[int] = None
     started: bool = False
+    print_file_id: Optional[int] = None
     sent_at: datetime = Field(default_factory=datetime.utcnow)
     finished_at: Optional[datetime] = None
     outcome: Optional[str] = None            # done, stopped
@@ -331,6 +332,37 @@ class ApiToken(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
+
+
+class PrintFile(SQLModel, table=True):
+    """A sliced file (G-code, or a sliced 3MF) kept with a model, with what the slicer said about it."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model_id: int = Field(index=True)
+    filename: str                           # the name it was uploaded with
+    stored_name: str                        # where it lives in CONFIG_PATH/print_files
+    kind: str                               # gcode, gco, g, bgcode, 3mf
+    size_bytes: int = 0
+    sha256: str = Field(default="", index=True)
+    slicer: Optional[str] = None
+    est_minutes: Optional[float] = None
+    est_grams: Optional[float] = None
+    filament_type: Optional[str] = None
+    layer_height: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ActivityLog(SQLModel, table=True):
+    """Who changed what, and (for bulk edits) how to take it back."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    actor: str = "system"
+    action: str = Field(index=True)
+    summary: str
+    undo_json: Optional[str] = None
+    undone: bool = False
+    undone_at: Optional[datetime] = None
+    undone_by: Optional[str] = None
 
 
 class AppUser(SQLModel, table=True):

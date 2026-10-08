@@ -2,7 +2,7 @@ import io
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlmodel import Session
 from app.db import get_session
 from app.settings_store import all_settings, set_setting
@@ -28,13 +28,19 @@ def get_settings(session: Session = Depends(get_session)):
 
 
 @router.put("")
-def update_settings(payload: dict, session: Session = Depends(get_session)):
+def update_settings(payload: dict, request: Request, session: Session = Depends(get_session)):
+    changed = []
     for k, v in payload.items():
         if k in RESERVED_SETTING_KEYS:
             continue  # these have their own dedicated, more-restricted endpoints
         if v == "********":
             continue  # unchanged secret, skip
         set_setting(session, k, str(v))
+        changed.append(k)
+    if changed:
+        from app import activity
+        shown = ", ".join(changed[:8]) + (f" and {len(changed) - 8} more" if len(changed) > 8 else "")
+        activity.record(session, activity.actor_of(request), "settings", f"Changed settings: {shown}")      # names only, never values
     return {"status": "ok"}
 
 

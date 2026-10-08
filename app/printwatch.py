@@ -15,7 +15,7 @@ from pathlib import Path
 from sqlmodel import Session, select
 
 from app import printers as printing
-from app.models import Model3D, Printer, PrinterJob, QueueItem
+from app.models import Model3D, Printer, PrinterJob, PrintFile, QueueItem
 from app.notify import notify_event
 
 logger = logging.getLogger("modelhub.printwatch")
@@ -73,7 +73,8 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
         if waiting:
             complete_item(session, waiting, minutes)
         else:
-            log_print(session, model.id, minutes=minutes, source="printer", deduct=False)
+            kept = session.get(PrintFile, job.print_file_id) if job and job.print_file_id else None
+            log_print(session, model.id, minutes=minutes, grams=kept.est_grams if kept else None, source="printer", deduct=False)
         label = model.filename
     session.commit()
     if outcome == "done":

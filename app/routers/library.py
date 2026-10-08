@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_
@@ -330,11 +330,14 @@ def get_thumbnail(filename: str):
 
 
 @router.delete("/models/{model_id}")
-def delete_model_record(model_id: int, session: Session = Depends(get_session)):
+def delete_model_record(model_id: int, request: Request, session: Session = Depends(get_session)):
     """Removes the DB record only. Does not touch the file on disk."""
     model = session.get(Model3D, model_id)
     if not model:
         raise HTTPException(404, "Model not found")
+    name = model.filename
     delete_model_records(session, [model_id])
     session.commit()
+    from app import activity
+    activity.record(session, activity.actor_of(request), "remove_model", f"Removed {name} from the library index (the file was not touched)")
     return {"status": "deleted"}

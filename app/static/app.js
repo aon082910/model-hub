@@ -65,7 +65,7 @@ function ensureViewerColorControl() {
 // Hash routing, so every page has an address that survives a reload and works with
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
-  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(),
+  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(), activity: () => loadActivity(),
   collections: () => loadCollections(), projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
@@ -138,6 +138,126 @@ async function loadModels() {
   const models = await res.json();
   renderGrid(models);
 }
+
+// ---------- Sliced files kept with a model ----------
+function formatMinutes(m) {
+  if (m == null) return '';
+  const h = Math.floor(m / 60), min = Math.round(m % 60);
+  return h ? `${h} h ${min} min` : `${min} min`;
+}
+
+async function renderSlicedFiles(model) {
+  const panel = $('#model-sliced-panel');
+  const [files, printerInfo] = await Promise.all([
+    fetch(`/api/print-files?model_id=${model.id}`).then(r => (r.ok ? r.json() : [])),
+    currentUser.role === 'admin' ? fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] })) : Promise.resolve({ printers: [] }),
+  ]);
+  if (!currentModel || currentModel.id !== model.id) return;
+  const printers = printerInfo.printers || [];
+  panel.innerHTML = `
+    <h3>Sliced files</h3>
+    <p class="muted">G-code or a sliced .3mf you made for this model, kept here with what the slicer said about it. Not part of a backup (they can be big).</p>
+    ${files.length ? files.map(f => `
+      <div class="sliced-row" data-id="${f.id}">
+        <b>${esc(f.filename)}</b> <span class="muted">${formatBytes(f.size_bytes)}</span>
+        <div class="muted">${[f.slicer, f.est_minutes != null ? formatMinutes(f.est_minutes) : '', f.est_grams != null ? `${f.est_grams} g` : '', f.filament_type, f.layer_height ? `${f.layer_height} mm layers` : ''].filter(Boolean).map(esc).join(' &middot; ') || 'no details found in the file'}</div>
+        ${f.notes ? `<div>${esc(f.notes)}</div>` : ''}
+        ${f.file_exists ? '' : '<div class="warn-text">The file is missing from this server (it is not in backups). Upload it again.</div>'}
+        <div class="row">
+          <a class="button-link" href="/api/print-files/${f.id}/download">Download</a>
+          ${f.sendable && f.file_exists && printers.length ? `<select class="sliced-printer">${printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+            <label class="inline-check"><input type="checkbox" class="sliced-start"> start</label><button class="sliced-send">Send to printer</button>` : ''}
+          <button class="sliced-delete">Delete</button>
+        </div>
+      </div>`).join('') : '<p class="muted">None yet.</p>'}
+    <div class="row">
+      <input id="sliced-file" type="file" accept=".gcode,.gco,.g,.bgcode,.3mf">
+      <input id="sliced-notes" placeholder="Note (optional)">
+      <button id="sliced-upload" class="primary">Keep this file</button><span id="sliced-status" class="muted"></span>
+    </div>`;
+  $('#sliced-upload').onclick = async () => {
+    const file = $('#sliced-file').files[0];
+    if (!file) { $('#sliced-status').textContent = 'Choose a file first.'; return; }
+    $('#sliced-status').textContent = 'Uploading...';
+    const form = new FormData();
+    form.append('model_id', String(model.id));
+    form.append('file', file);
+    if ($('#sliced-notes').value) form.append('notes', $('#sliced-notes').value);
+    const res = await fetch('/api/print-files', { method: 'POST', body: form });
+    if (res.ok) renderSlicedFiles(model); else $('#sliced-status').textContent = await sourceErrorText(res);
+  };
+  $$('#model-sliced-panel .sliced-delete').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this sliced file?')) return;
+    await fetch(`/api/print-files/${b.closest('.sliced-row').dataset.id}`, { method: 'DELETE' });
+    renderSlicedFiles(model);
+  });
+  $$('#model-sliced-panel .sliced-send').forEach(b => b.onclick = async () => {
+    const row = b.closest('.sliced-row');
+    const start = row.querySelector('.sliced-start').checked;
+    if (start && !confirm('Start printing as soon as the file arrives? Check that the bed is clear and the printer is ready.')) return;
+    const form = new FormData();
+    form.append('print_file_id', row.dataset.id);
+    form.append('start', start ? 'true' : 'false');
+    b.disabled = true;
+    const res = await fetch(`/api/printers/${row.querySelector('.sliced-printer').value}/send`, { method: 'POST', body: form });
+    b.disabled = false;
+    $('#sliced-status').textContent = res.ok ? ((await res.json()).started ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.') : await sourceErrorText(res);
+  });
+}
+
+// ---------- Recent changes ----------
+const activityState = { offset: 0, total: 0 };
+
+function activityRow(e) {
+  return `
+    <div class="activity-row ${e.undone ? 'undone' : ''}" data-id="${e.id}">
+      <span class="muted">${esc(String(e.at).slice(0, 16).replace('T', ' '))}</span>
+      <b>${esc(e.actor)}</b>
+      <span class="grow">${esc(e.summary)}</span>
+      ${e.undone ? `<span class="muted">undone${e.undone_by ? ' by ' + esc(e.undone_by) : ''}</span>` : ''}
+      ${e.undoable ? '<button class="activity-undo">Undo</button>' : ''}
+    </div>`;
+}
+
+async function loadActivity(append) {
+  if (!append) { activityState.offset = 0; $('#activity-list').innerHTML = ''; }
+  const params = new URLSearchParams({ limit: 50, offset: activityState.offset });
+  if ($('#activity-actor').value) params.set('actor', $('#activity-actor').value);
+  if ($('#activity-action').value) params.set('action', $('#activity-action').value);
+  const res = await fetch(`/api/activity?${params}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  activityState.total = data.total;
+  if (!append) {
+    const keep = $('#activity-actor').value;
+    $('#activity-actor').innerHTML = '<option value="">everyone</option>' + data.actors.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+    $('#activity-actor').value = keep;
+  }
+  $('#activity-list').insertAdjacentHTML('beforeend', data.items.length || append ? data.items.map(activityRow).join('') : '<p class="muted">Nothing recorded yet.</p>');
+  activityState.offset += data.items.length;
+  $('#activity-more').classList.toggle('hidden', activityState.offset >= data.total);
+}
+
+async function undoActivity(id) {
+  const res = await fetch(`/api/activity/${id}/undo`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  showNotice(res.ok ? `Undone: ${data.restored} put back.` : (data.detail || 'Could not undo that.'));
+  return res.ok;
+}
+
+$('#activity-actor').addEventListener('change', () => loadActivity());
+$('#activity-action').addEventListener('change', () => loadActivity());
+$('#activity-more-btn').addEventListener('click', () => loadActivity(true));
+$('#activity-list').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('activity-undo')) return;
+  e.target.disabled = true;
+  if (await undoActivity(e.target.closest('.activity-row').dataset.id)) loadActivity();
+  else e.target.disabled = false;
+});
+$('#bulk-status').addEventListener('click', async (e) => {
+  if (e.target.id !== 'bulk-undo') return;
+  if (await undoActivity(e.target.dataset.id)) { $('#bulk-status').textContent = 'Undone.'; loadModels(); }
+});
 
 // ---------- Library filters, saved searches, bulk edit ----------
 let libraryTotal = 0;
@@ -272,7 +392,7 @@ $('#bulk-apply').addEventListener('click', async () => {
   if (!confirm(`Apply "${$('#bulk-action').selectedOptions[0].textContent}" to ${bulk.picked.size} model${bulk.picked.size === 1 ? '' : 's'}?`)) return;
   const res = await jsonRequest('POST', '/api/bulk', body);
   const data = await res.json().catch(() => ({}));
-  $('#bulk-status').textContent = res.ok ? `Changed ${data.changed}, already so: ${data.unchanged}.` : (data.detail || 'Could not apply that.');
+  $('#bulk-status').innerHTML = res.ok ? `Changed ${data.changed}, already so: ${data.unchanged}.${data.activity_id ? ` <button id="bulk-undo" data-id="${data.activity_id}">Undo</button>` : ''}` : esc(data.detail || 'Could not apply that.');
   if (res.ok) loadModels();
 });
 
@@ -421,6 +541,7 @@ function renderModelPage(model) {
   renderModelPrinter(model);
   renderPrintSettings(model);
   renderVersions(model);
+  renderSlicedFiles(model);
   renderSharePanel('#model-share-panel', 'model', model.id);
 }
 

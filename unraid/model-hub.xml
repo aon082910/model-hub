@@ -40,6 +40,15 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.10.0
+Each model's page can keep sliced files (G-code or a sliced 3MF) and reads the
+estimated time, filament weight and layer height from the slicer's comments;
+a kept G-code file can be sent to a printer without a slicer in the container.
+New Recent changes page (Library) records who changed what, and bulk edits can
+be undone (right after applying one, or from that page). Sliced files are not
+part of backups. No new settings are required; new tables are added
+automatically on first start.
+
 ### 2.9.0
 New Stats tab: prints, filament used and its cost, print time per month,
 most printed models, filament by material, printer success rate and how much of
