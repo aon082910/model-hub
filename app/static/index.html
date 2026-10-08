@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <title>Model Hub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14161a">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/assets/icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icons/icon-192.png">
 <link rel="stylesheet" href="/assets/style.css">
 <script type="importmap">
 { "imports": { "three": "/assets/vendor/three.module.min.js" } }
@@ -29,7 +33,14 @@
       <button data-tab="queue">Print Queue</button>
       <button data-tab="settings">Settings</button>
     </nav>
+    <div id="whoami" class="whoami hidden">
+      <span id="whoami-name"></span>
+      <button id="whoami-password" class="hidden">Password</button>
+      <button id="whoami-logout">Sign out</button>
+    </div>
   </header>
+
+  <div id="notice-bar" class="notice-bar hidden" role="status"></div>
 
   <section id="tab-library" class="tab active">
     <div class="toolbar">
@@ -321,6 +332,34 @@
   </section>
 
   <section id="tab-queue" class="tab">
+    <div id="printers-panel" class="panel admin-only">
+      <h3>Printers</h3>
+      <p class="muted">Klipper (Moonraker) and OctoPrint printers on your network: see what they are doing and send them a G-code file
+        (or a model, if a slicer is set up). Nothing is ever started unless you tick <b>Start printing</b>.</p>
+      <div id="printers-list"></div>
+      <details id="printers-add-box">
+        <summary>Add a printer</summary>
+        <div class="row">
+          <input id="printer-name" placeholder="Name (e.g. Voron)">
+          <select id="printer-kind"><option value="moonraker">Klipper / Moonraker</option><option value="octoprint">OctoPrint</option></select>
+        </div>
+        <div class="row">
+          <input id="printer-url" placeholder="http://192.168.1.60:7125 (OctoPrint: http://octopi.local)">
+          <input id="printer-key" type="password" placeholder="API key (needed for OctoPrint)" autocomplete="off">
+          <button id="printer-add">Add</button>
+        </div>
+      </details>
+      <details id="printers-send-box">
+        <summary>Send a G-code file</summary>
+        <div class="row">
+          <select id="send-printer"></select>
+          <input id="send-file" type="file" accept=".gcode,.gco,.g,.bgcode">
+        </div>
+        <label class="inline-check"><input type="checkbox" id="send-start"> Start printing as soon as it arrives</label>
+        <div class="row"><button id="send-go" class="primary">Send</button></div>
+      </details>
+      <span id="printers-status" class="muted"></span>
+    </div>
     <h2>Print Queue</h2>
     <ul id="queue-list"></ul>
   </section>
@@ -434,6 +473,20 @@
       <button id="backup-restore-btn" class="danger">Restore from this file</button>
     </div>
 
+    <h2>People</h2>
+    <div class="settings-form">
+      <p class="muted">Other logins for this Model Hub. A <b>member</b> can use everything in the library, projects, supplies, wishlist and so on, but not
+        Settings, backups, user management or deleting duplicate files. A <b>viewer</b> can only look. Your own login is the administrator.</p>
+      <div id="users-list"></div>
+      <div class="row">
+        <input id="new-user-name" placeholder="User name" autocomplete="off">
+        <input id="new-user-password" type="password" placeholder="Password (8+ characters)" autocomplete="new-password">
+        <select id="new-user-role"><option value="member">member</option><option value="viewer">viewer</option></select>
+        <button id="add-user-btn">Add</button>
+        <span id="users-status" class="muted"></span>
+      </div>
+    </div>
+
     <h2>Account</h2>
     <div class="settings-form">
       <label>Current password <input id="cur-password" type="password"></label>
@@ -455,6 +508,7 @@
         <div id="viewer-info"></div>
         <div class="panel" id="model-links-panel"></div>
         <div class="panel" id="model-prints-panel"></div>
+        <div class="panel admin-only hidden" id="model-printer-panel"></div>
       </div>
       <aside class="page-side">
         <div class="panel" id="model-facts"></div>

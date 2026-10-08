@@ -5,13 +5,13 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, engine
 from app.config import SCAN_INTERVAL_SECONDS
-from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, queue, settings, ai, slicer, auth_router
-from app.auth import path_requires_auth, request_is_authenticated, bootstrap_from_env, ensure_extension_api_key
+from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, queue, settings, ai, slicer, auth_router
+from app.auth import path_requires_auth, current_user, forbidden_reason, bootstrap_from_env, ensure_extension_api_key
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("modelhub")
@@ -44,6 +44,8 @@ app.include_router(prints.router)
 app.include_router(duplicates.router)
 app.include_router(designers.router)
 app.include_router(source_updates.router)
+app.include_router(users.router)
+app.include_router(printers.router)
 app.include_router(queue.router)
 app.include_router(settings.router)
 app.include_router(ai.router)
@@ -58,8 +60,13 @@ async def auth_gate(request: Request, call_next):
     if request.method != "OPTIONS" and path_requires_auth(request.url.path):
         from sqlmodel import Session
         with Session(engine) as session:
-            if not request_is_authenticated(request, session):
-                return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            user = current_user(request, session)
+        if user is None:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        reason = forbidden_reason(user, request.method, request.url.path)
+        if reason:
+            return JSONResponse({"detail": reason}, status_code=403)
+        request.state.user = user
     return await call_next(request)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -105,6 +112,19 @@ app.mount("/assets", RevalidatingStaticFiles(directory=STATIC_DIR), name="assets
 def index():
     # no-cache: the page that carries the version tokens must itself never be stale
     return HTMLResponse(INDEX_HTML, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest():
+    return FileResponse(STATIC_DIR / "pwa" / "manifest.webmanifest", media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/sw.js")
+def service_worker():
+    # served from the root so it may control the whole app; never cached, so an upgrade replaces it
+    return FileResponse(STATIC_DIR / "pwa" / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
 @app.get("/api/health")

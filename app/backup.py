@@ -36,6 +36,8 @@ FORMAT = 1
 # folders of pictures that go in a backup: name in the zip -> where they live
 PICTURE_FOLDERS = {"source_images": IMAGE_ROOT, "print_photos": PHOTO_ROOT}
 SETTINGS_TABLE = AppSettings.__tablename__
+# logins belong to this installation: never written into a backup, never replaced by a restore
+LOGIN_TABLES = ("appuser",)
 MAX_UNPACKED_BYTES = 4 * 1024 ** 3
 MAX_FILES = 200_000
 KEEP_SAFETY_COPIES = 3
@@ -75,6 +77,9 @@ def make_backup(destination: Path, include_images: bool = True) -> dict:
             source.backup(target)              # a consistent copy even while the app is writing
             marks = ",".join("?" for _ in sensitive_settings())
             target.execute(f'DELETE FROM "{SETTINGS_TABLE}" WHERE key IN ({marks})', tuple(sensitive_settings()))
+            for table in LOGIN_TABLES:
+                target.execute(f'DELETE FROM "{table}"')
+            target.execute('UPDATE "printer" SET api_key = NULL')
             target.commit()
             counts = {t: target.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in _data_tables(target)}
             target.execute("VACUUM")
@@ -189,8 +194,10 @@ def _swap_tables(backup_db: Path) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         try:
             backup_tables = set(_data_tables(conn, "bk"))
+            kept_keys = {row[0]: (row[1], row[2]) for row in conn.execute('SELECT id, url, api_key FROM main."printer"').fetchall()
+                         if row[2]} if "printer" in _data_tables(conn) else {}
             for table in _data_tables(conn):
-                if table == SETTINGS_TABLE:
+                if table == SETTINGS_TABLE or table in LOGIN_TABLES:
                     continue
                 conn.execute(f'DELETE FROM main."{table}"')
                 if table in backup_tables:
@@ -198,6 +205,8 @@ def _swap_tables(backup_db: Path) -> dict:
                     cols = ",".join(f'"{c}"' for c in shared)
                     conn.execute(f'INSERT INTO main."{table}" ({cols}) SELECT {cols} FROM bk."{table}"')
                 restored[table] = conn.execute(f'SELECT COUNT(*) FROM main."{table}"').fetchone()[0]
+            for printer_id, (url, key) in kept_keys.items():
+                conn.execute('UPDATE main."printer" SET api_key = ? WHERE id = ? AND url = ? AND api_key IS NULL', (key, printer_id, url))
             if SETTINGS_TABLE in backup_tables:
                 skip = sensitive_settings()
                 for key, value in conn.execute(f'SELECT key, value FROM bk."{SETTINGS_TABLE}"').fetchall():

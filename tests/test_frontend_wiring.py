@@ -33,3 +33,12 @@ def test_pages_and_routes_line_up():
         assert re.search(rf"\b{tab}:\s*\(\)\s*=>", js), f"no route loader for tab {tab}"
     # the old popup is gone
     assert "viewer-modal" not in html and "openViewer" not in js
+
+
+def test_a_spent_viewer_canvas_is_replaced_not_reused():
+    """forceContextLoss() permanently kills a canvas's WebGL context. disposeViewer must put a new canvas in
+    its place, or every 3D view after the first model page is blank until a reload."""
+    js = _read("app.js")
+    start = js.index("function disposeViewer()")
+    body = js[start:js.index("function initViewer", start)]
+    assert "forceContextLoss()" in body and "document.createElement('canvas')" in body and "replaceWith(fresh)" in body

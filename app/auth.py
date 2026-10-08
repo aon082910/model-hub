@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from fastapi import Request
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.config import CONFIG_PATH
 from app.settings_store import get_setting, set_setting
@@ -18,7 +18,7 @@ SECRET_KEY_PATH = CONFIG_PATH / "secret.key"
 # Paths reachable with no session at all -- health checks, the login/setup API
 # itself, static assets needed to render the login page, and the browser
 # extension's own upload endpoint (which authenticates via API key instead).
-PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status"}
+PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js"}
 PUBLIC_PREFIXES = ("/assets/",)
 
 # The extension API key is intentionally weaker than a full login session: it's
@@ -132,16 +132,51 @@ def ensure_extension_api_key(session: Session) -> str:
     return key
 
 
-def request_is_authenticated(request: Request, session: Session) -> bool:
+ROLES = ("member", "viewer")
+
+# Only the administrator may use these at all (reading them included)...
+ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers")
+# ...and these they alone may change (members can still look): they delete files from disk
+ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
+ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove"}
+
+
+def current_user(request: Request, session: Session):
+    """Who is making this request: {"username", "role"} with role admin / member / viewer, or
+    "importer" for the browser extension's API key. None when not signed in. Roles are looked up
+    on every request, so deleting a user or changing a role takes effect immediately."""
     token = request.cookies.get(SESSION_COOKIE)
-    if token and verify_session_token(token):
-        return True
+    username = verify_session_token(token) if token else None
+    if username is not None:
+        if username == get_setting(session, "auth_username"):
+            return {"username": username, "role": "admin"}
+        from app.models import AppUser
+        row = session.exec(select(AppUser).where(AppUser.username == username)).first()
+        if row:
+            return {"username": row.username, "role": row.role if row.role in ROLES else "viewer"}
     if request.url.path in API_KEY_ALLOWED_PATHS:
         api_key = request.headers.get("x-model-hub-api-key")
         stored_key = get_setting(session, "extension_api_key")
         if api_key and stored_key and hmac.compare_digest(api_key, stored_key):
-            return True
-    return False
+            return {"username": "extension", "role": "importer"}
+    return None
+
+
+def request_is_authenticated(request: Request, session: Session) -> bool:
+    return current_user(request, session) is not None
+
+
+def forbidden_reason(user: dict, method: str, path: str):
+    """Why this signed-in user may not do this, or None if they may."""
+    role = user["role"]
+    if role in ("admin", "importer") or path == "/api/auth/logout":
+        return None
+    writing = method not in ("GET", "HEAD")
+    if path.startswith(ADMIN_ONLY_PREFIXES) or path in ADMIN_ONLY_PATHS or (writing and path.startswith(ADMIN_ONLY_WRITE_PREFIXES)):
+        return "Only the administrator can do that."
+    if role == "viewer" and writing and path != "/api/auth/me/password":
+        return "Your account is read-only."
+    return None
 
 
 def path_requires_auth(path: str) -> bool:

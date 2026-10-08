@@ -266,6 +266,7 @@ function renderModelPage(model) {
   renderViewerSource(model);
   renderModelLinks(model);
   renderModelPrints(model);
+  renderModelPrinter(model);
 }
 
 // ---------- Print history on a model's page ----------
@@ -531,7 +532,17 @@ function disposeViewer() {
     });
   }
   if (controls) controls.dispose();
-  if (renderer) { renderer.dispose(); renderer.forceContextLoss(); }
+  if (renderer) {
+    const spent = renderer.domElement;
+    renderer.dispose();
+    renderer.forceContextLoss();
+    // a canvas whose context was force-lost can never get a working one again, so the next model's
+    // view gets a fresh canvas in its place (reusing it left every later 3D view blank)
+    const fresh = document.createElement('canvas');
+    fresh.id = spent.id;
+    fresh.className = spent.className;
+    spent.replaceWith(fresh);
+  }
   renderer = scene = camera = controls = null;
 }
 
@@ -2369,8 +2380,118 @@ $('#add-filament-btn').addEventListener('click', async () => {
   loadFilament();
 });
 
+// ---------- Printers (administrator) ----------
+let printerPoll = null;
+let printerInfo = { printers: [], slicer_ready: false, slicer_note: '' };
+
+function printerStatusText(st) {
+  if (!st.online) return `<span class="error-text">${esc(st.message || 'offline')}</span>`;
+  const bits = [`<span class="status-badge status-${st.state === 'printing' ? 'building' : 'done'}">${esc(st.state)}</span>`];
+  if (st.file) bits.push(esc(st.file));
+  if (st.progress != null) bits.push(`${st.progress}%`);
+  if (st.nozzle != null) bits.push(`nozzle ${st.nozzle}\u00b0`);
+  if (st.bed != null) bits.push(`bed ${st.bed}\u00b0`);
+  if (st.message) bits.push(`<span class="muted">${esc(st.message)}</span>`);
+  return bits.join(' &middot; ');
+}
+
+async function refreshPrinterStatuses() {
+  for (const p of printerInfo.printers) {
+    const res = await fetch(`/api/printers/${p.id}/status`);
+    const cell = document.querySelector(`.printer-row[data-id="${p.id}"] .printer-state`);
+    if (cell && res.ok) cell.innerHTML = printerStatusText(await res.json());
+  }
+}
+
+async function loadPrinters() {
+  if (currentUser.role !== 'admin') return;
+  const res = await fetch('/api/printers');
+  if (!res.ok) return;
+  printerInfo = await res.json();
+  $('#printers-list').innerHTML = printerInfo.printers.length ? printerInfo.printers.map(p => `
+    <div class="printer-row" data-id="${p.id}">
+      <b>${esc(p.name)}</b> <span class="badge">${p.kind === 'moonraker' ? 'Klipper' : 'OctoPrint'}</span>
+      <span class="muted">${esc(p.url)}</span>
+      <span class="printer-state muted">checking...</span>
+      <button class="printer-delete">Remove</button>
+    </div>`).join('') : '<p class="muted">No printers yet.</p>';
+  $('#send-printer').innerHTML = printerInfo.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  refreshPrinterStatuses();
+  if (!printerPoll) printerPoll = setInterval(() => {
+    if (location.hash === '#/queue' && printerInfo.printers.length) refreshPrinterStatuses();
+    else if (location.hash !== '#/queue') { clearInterval(printerPoll); printerPoll = null; }
+  }, 5000);
+}
+
+$('#printer-add').addEventListener('click', async () => {
+  const body = { name: $('#printer-name').value, kind: $('#printer-kind').value, url: $('#printer-url').value };
+  if ($('#printer-key').value) body.api_key = $('#printer-key').value;
+  const res = await jsonRequest('POST', '/api/printers', body);
+  $('#printers-status').textContent = res.ok ? 'Added.' : await sourceErrorText(res);
+  if (res.ok) { $('#printer-name').value = ''; $('#printer-url').value = ''; $('#printer-key').value = ''; loadPrinters(); }
+});
+$('#printers-list').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('printer-delete')) return;
+  if (!confirm('Remove this printer from Model Hub? (The printer itself is not touched.)')) return;
+  await fetch(`/api/printers/${e.target.closest('.printer-row').dataset.id}`, { method: 'DELETE' });
+  loadPrinters();
+});
+$('#send-go').addEventListener('click', async () => {
+  const file = $('#send-file').files[0];
+  const printer = $('#send-printer').value;
+  if (!printer || !file) { $('#printers-status').textContent = 'Choose a printer and a G-code file.'; return; }
+  const start = $('#send-start').checked;
+  if (start && !confirm('Start printing as soon as the file arrives? Check that the bed is clear.')) return;
+  $('#printers-status').textContent = 'Sending...';
+  const form = new FormData();
+  form.append('file', file);
+  form.append('start', start ? 'true' : 'false');
+  const res = await fetch(`/api/printers/${printer}/send`, { method: 'POST', body: form });
+  $('#printers-status').textContent = res.ok
+    ? (await res.json()).started ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.'
+    : await sourceErrorText(res);
+  refreshPrinterStatuses();
+});
+
+// "Slice and send" on a model's page
+async function renderModelPrinter(model) {
+  const panel = $('#model-printer-panel');
+  if (currentUser.role !== 'admin') { panel.classList.add('hidden'); return; }
+  const res = await fetch('/api/printers');
+  if (!res.ok || !currentModel || currentModel.id !== model.id) return;
+  const info = await res.json();
+  if (!info.printers.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const sliceable = ['.stl', '.3mf', '.obj', '.step', '.stp'].includes(model.extension);
+  panel.innerHTML = `
+    <h3>Send to a printer</h3>
+    ${info.slicer_ready && sliceable ? `
+      <div class="row">
+        <select id="model-printer">${info.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+        <input id="model-infill" type="number" min="0" max="100" step="1" value="15" aria-label="Infill percent" title="Infill %">
+      </div>
+      <label class="inline-check"><input type="checkbox" id="model-print-start"> Start printing as soon as it arrives</label>
+      <div class="row"><button id="model-slice-send" class="primary">Slice and send</button><span id="model-printer-status" class="muted"></span></div>`
+      : `<p class="muted">${esc(info.slicer_note)} G-code files can be sent from the Print Queue tab.</p>`}`;
+  const go = $('#model-slice-send');
+  if (go) go.onclick = async () => {
+    const start = $('#model-print-start').checked;
+    if (start && !confirm('Start printing as soon as the file arrives? Check that the bed is clear and the printer is ready.')) return;
+    $('#model-printer-status').textContent = 'Slicing and sending (this can take a minute)...';
+    const form = new FormData();
+    form.append('model_id', String(model.id));
+    form.append('start', start ? 'true' : 'false');
+    form.append('infill', String((parseFloat($('#model-infill').value) || 15) / 100));
+    const r = await fetch(`/api/printers/${$('#model-printer').value}/send`, { method: 'POST', body: form });
+    $('#model-printer-status').textContent = r.ok
+      ? ((await r.json()).started ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.')
+      : await sourceErrorText(r);
+  };
+}
+
 // ---------- Queue ----------
 async function loadQueue() {
+  loadPrinters();
   const [items, models] = await Promise.all([
     (await fetch('/api/queue')).json(),
     (await fetch('/api/library/models?limit=1000')).json(),
@@ -2675,6 +2796,7 @@ async function loadSettings() {
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
   await renderSiteSettings(s);
   refreshBackups();
+  loadUsers();
   const keyRes = await fetch('/api/settings/extension-key');
   $('#ext-api-key').value = keyRes.ok ? (await keyRes.json()).extension_api_key : '';
 }
@@ -2773,6 +2895,94 @@ $('#logout-btn').addEventListener('click', async () => {
   location.reload();
 });
 
+// ---------- Who is signed in ----------
+let currentUser = { username: null, role: 'admin' };
+
+function showNotice(message) {
+  const bar = $('#notice-bar');
+  bar.textContent = message;
+  bar.classList.remove('hidden');
+  clearTimeout(showNotice.timer);
+  showNotice.timer = setTimeout(() => bar.classList.add('hidden'), 5000);
+}
+
+// a refused action explains itself instead of failing silently
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await nativeFetch(...args);
+  if (res.status === 403) {
+    res.clone().json().then(d => showNotice(d.detail || 'Your account is not allowed to do that.')).catch(() => {});
+  }
+  return res;
+};
+
+function applyUser(user) {
+  currentUser = user;
+  const admin = user.role === 'admin';
+  $('#whoami').classList.remove('hidden');
+  $('#whoami-name').textContent = `${user.username}${admin ? '' : ' (' + user.role + ')'}`;
+  $('#whoami-password').classList.toggle('hidden', admin);
+  document.querySelector('#tabs button[data-tab="settings"]').classList.toggle('hidden', !admin);
+  document.body.classList.toggle('read-only', user.role === 'viewer');
+  document.body.classList.toggle('not-admin', !admin);
+}
+
+$('#whoami-logout').addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  location.reload();
+});
+$('#whoami-password').addEventListener('click', async () => {
+  const current = prompt('Your current password:');
+  if (current === null) return;
+  const next = prompt('A new password (8 or more characters):');
+  if (next === null) return;
+  const res = await jsonRequest('POST', '/api/auth/me/password', { current_password: current, new_password: next });
+  showNotice(res.ok ? 'Password changed.' : await sourceErrorText(res));
+});
+
+// ---------- People (Settings, administrator) ----------
+async function loadUsers() {
+  const res = await fetch('/api/users');
+  if (!res.ok) return;
+  const data = await res.json();
+  $('#users-list').innerHTML = `
+    <div class="user-row"><b>${esc(data.admin || '')}</b> <span class="status-badge status-done">administrator</span></div>
+    ${data.users.map(u => `
+      <div class="user-row" data-id="${u.id}">
+        <b>${esc(u.username)}</b>
+        <select class="user-role">${data.roles.map(r => `<option value="${r}" ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>
+        <button class="user-reset">Set a new password</button>
+        <button class="user-delete danger">Remove</button>
+      </div>`).join('')}`;
+}
+
+$('#add-user-btn').addEventListener('click', async () => {
+  const res = await jsonRequest('POST', '/api/users', {
+    username: $('#new-user-name').value.trim(), password: $('#new-user-password').value, role: $('#new-user-role').value,
+  });
+  $('#users-status').textContent = res.ok ? 'Added.' : await sourceErrorText(res);
+  if (res.ok) { $('#new-user-name').value = ''; $('#new-user-password').value = ''; loadUsers(); }
+});
+$('#users-list').addEventListener('change', async (e) => {
+  if (!e.target.classList.contains('user-role')) return;
+  const res = await jsonRequest('PATCH', `/api/users/${e.target.closest('.user-row').dataset.id}`, { role: e.target.value });
+  $('#users-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+});
+$('#users-list').addEventListener('click', async (e) => {
+  const row = e.target.closest('.user-row');
+  if (!row || !row.dataset.id) return;
+  if (e.target.classList.contains('user-delete')) {
+    if (!confirm('Remove this login? They are signed out at once.')) return;
+    await fetch(`/api/users/${row.dataset.id}`, { method: 'DELETE' });
+    loadUsers();
+  } else if (e.target.classList.contains('user-reset')) {
+    const password = prompt('A new password for this person (8 or more characters):');
+    if (password === null) return;
+    const res = await jsonRequest('PATCH', `/api/users/${row.dataset.id}`, { password });
+    $('#users-status').textContent = res.ok ? 'Password changed.' : await sourceErrorText(res);
+  }
+});
+
 // ---------- Auth gate ----------
 async function boot() {
   const status = await (await fetch('/api/auth/status')).json();
@@ -2780,15 +2990,21 @@ async function boot() {
     showAuthOverlay('setup');
     return;
   }
-  const probe = await fetch('/api/settings');
-  if (probe.status === 401) {
+  const who = await fetch('/api/auth/me');
+  if (who.status === 401) {
     showAuthOverlay('login');
     return;
   }
-  const settings = await probe.json();
-  viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
+  applyUser(await who.json());
+  await loadViewerColor();
   route();
   refreshFollowBadge();
+}
+
+async function loadViewerColor() {
+  if (currentUser.role !== 'admin') return;           // the setting is part of Settings; others keep the default
+  const res = await fetch('/api/settings');
+  if (res.ok) viewerModelColor = normalizeViewerModelColor((await res.json()).viewer_model_color);
 }
 
 function showAuthOverlay(mode) {
@@ -2818,14 +3034,17 @@ function showAuthOverlay(mode) {
       });
     }
     overlay.classList.add('hidden');
-    const settingsRes = await fetch('/api/settings');
-    if (settingsRes.ok) {
-      const settings = await settingsRes.json();
-      viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
-    }
+    const whoRes = await fetch('/api/auth/me');
+    if (whoRes.ok) applyUser(await whoRes.json());
+    await loadViewerColor();
     route();
     refreshFollowBadge();
   };
 }
 
 boot();
+
+// installable as an app (phone home screen, desktop)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
+}

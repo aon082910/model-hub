@@ -24,7 +24,7 @@ weight estimates, projects that track the electronics/parts/supplies each
 build needs (with an exportable shopping list and a Supplies page for what you
 already own) and subtract the filament used when a project is marked printed,
 matching of your models (one by one or your whole library) to their Printables/MakerWorld
-listings (pictures, designer, license, tags, parts lists), a Search page across sites with a wishlist, a print log, duplicate cleanup, backup and restore, a page for every model and project with
+listings (pictures, designer, license, tags, parts lists), a Search page across sites with a wishlist, a print log, duplicate cleanup, backup and restore, several logins, printer status and G-code upload, a page for every model and project with
 PDF export, a browser extension for one-click import, and optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
@@ -40,6 +40,18 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.5.0
+More than one login: the first account stays the administrator, and Settings,
+People adds members (use everything except Settings, backups and user
+management) and read-only viewers. Model Hub can be installed on a phone
+(Add to Home screen) and its pages fit a phone screen. Print Queue has a new
+Printers panel: add Klipper/Moonraker or OctoPrint printers, see their status,
+and send them a G-code file (or slice a model first when you give the
+container a slicer and your printer profile); nothing starts unless you ask.
+Also fixes the 3D view going blank on every model page after the first one
+you visit until the page was reloaded. No new settings are required; new
+tables are added automatically on first start.
+
 ### 2.4.0
 New Following tab: follow a designer from one of their listings and see
 their new uploads (Printables and Sketchfab need no account; Thingiverse uses

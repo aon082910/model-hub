@@ -290,3 +290,16 @@ button.danger { color: #e0645a; border-color: #e0645a; }
 #wishlist-links { width: 100%; box-sizing: border-box; }
 #wishlist-collection-url { flex: 1; min-width: 200px; }
 #wishlist-import-box { margin-bottom: 10px; }
+
+/* ---------- People, who is signed in ---------- */
+.whoami { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.notice-bar { position: sticky; top: 0; z-index: 20; background: #3a2a14; border-bottom: 1px solid #e6b800; color: #ffd966; padding: 8px 20px; font-size: 13px; }
+.user-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+body.read-only #scan-btn, body.read-only #tag-all-btn { opacity: .5; }
+
+/* ---------- Printers ---------- */
+body.not-admin .admin-only { display: none !important; }
+.printer-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.printer-state { flex: 1 1 240px; }
+#printers-panel { margin-bottom: 14px; }
+#printers-panel .row, #model-printer-panel .row { margin: 6px 0; }

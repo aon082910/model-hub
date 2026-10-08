@@ -86,6 +86,9 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Follow designers | Done — **Follow** a designer from one of their listings; the **Following** tab shows their new uploads (Printables and Sketchfab need no account, Thingiverse uses your token). See [Following designers](#following-designers) |
 | Listing updates | Done — **Matches → Listing updates** checks the online listing of every linked model and flags changed descriptions, pictures, tags, licenses and files; refresh the model from the listing or dismiss the flag. See [Listing updates](#listing-updates) |
 | Project costs | Done — give each spool a price (Filament tab) and a project shows what it costs: filament, every part (owned or not), and optionally electricity (price per kWh and printer watts in Settings); it is in the project PDF too. See [Project costs](#project-costs) |
+| More than one login | Done — the first account is the administrator; **Settings → People** adds *members* (everything except Settings, backups, user management and deleting duplicate files) and read-only *viewers*. See [People](#people) |
+| Install on a phone | Done — Model Hub is an installable web app (manifest, icons, a service worker that caches nothing); pages are checked for horizontal overflow at phone width. See [On your phone](#on-your-phone) |
+| Printers | Done — add Klipper/Moonraker and OctoPrint printers, see their status, send them a G-code file, or slice a model first when a slicer is configured. Never starts a print unless you ask. See [Printers](#printers) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -275,6 +278,47 @@ Each item has a **priority** (high items sort first and are downloaded first) an
 the first is included in **Add all to library**). **Export as CSV** downloads the list. **Import links** takes any text with links (up to 40 at a time) and
 adds each recognised listing; **Import my likes** and **Import this collection** pull things from Thingiverse with your token (these follow
 Thingiverse's documented API and are tested against a simulated server only). Printables likes and collections need a login and can't be read from here.
+
+## People
+
+The login you create on first start is the **administrator**. **Settings → People** adds more logins:
+
+| Role | Can |
+|---|---|
+| administrator | everything |
+| member | use the library, projects, supplies, wishlist, following, matching, print log and so on; **not** Settings, backups, user management, printers, or deleting duplicate files |
+| viewer | look at everything above, change nothing |
+
+Roles are checked on every request, so changing a role or removing a person takes effect at once (a removed person's open session stops working). Members and viewers
+can change their own password (the **Password** button next to their name). Logins are not part of a backup and a restore never replaces them.
+The browser extension's API key is unchanged: it only opens the import door.
+
+## On your phone
+
+Open Model Hub in your phone's browser and use **Add to Home screen** (Android: *Install app*). It then opens like an app. Nothing from the app itself is cached (so an
+upgrade can never leave an old version running); if the server cannot be reached you get a short note saying so. The pages were checked at phone width: nothing scrolls sideways,
+the navigation scrolls along the top, and the 3D view fits the screen.
+
+## Printers
+
+**Print Queue → Printers** (administrator only). Add a printer by its address:
+
+- **Klipper / Moonraker** (Mainsail, Fluidd...): e.g. `http://192.168.1.60:7125`; the API key is optional (only if you set one).
+- **OctoPrint**: e.g. `http://octopi.local`; the API key (OctoPrint settings → API) is required.
+
+Each printer shows its state, the file and progress, and the nozzle and bed temperatures, refreshed every few seconds while the tab is open. **Send a G-code file** uploads a file
+you choose to the printer; **Start printing as soon as it arrives** is off by default and asks for confirmation. Printers print G-code, not models, so sending a *model* needs slicing:
+
+- Give the container a headless slicer and the printer profile exported from it, for example PrusaSlicer or OrcaSlicer's command line:
+  `-e SLICER_CLI_PATH=/slicer/prusa-slicer -e SLICER_CONFIG_PATH=/slicer/printer.ini -v /mnt/user/appdata/slicer:/slicer:ro`.
+  Both must be set. Without your profile the slicer would use defaults that do not match your machine, and the wrong G-code can damage a printer, so slicing stays off.
+- A model's page then shows **Slice and send** (infill percentage, optional start). Slicing runs the slicer as `<slicer> --export-gcode --load <profile> --fill-density N% -o <out> <model>`
+  (the PrusaSlicer family's command line).
+
+API keys are never shown again after you save them, are never in an error message, and are left out of backups (a restore keeps the key of a printer that is the same printer).
+**Status of testing:** the Moonraker and OctoPrint code follows their documented HTTP APIs and is tested against simulated printers and a stand-in slicer, and the whole flow was
+exercised in a browser against a simulated Klipper host. It has **not** been tried against a real printer or a real slicer, so try it with an idle printer first. Bambu Lab printers
+(which use their own protocol) are not supported.
 
 ## Auth
 

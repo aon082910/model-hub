@@ -256,6 +256,28 @@ class PrintLog(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class Printer(SQLModel, table=True):
+    """A printer on your network that Model Hub can show the status of and send G-code to.
+    api_key is never returned by the API and is left out of backups."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    kind: str                       # moonraker, octoprint
+    url: str
+    api_key: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AppUser(SQLModel, table=True):
+    """A login besides the first (admin) account, which lives in the settings. role is
+    "member" (uses everything except settings, backups and user management) or
+    "viewer" (read-only)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(index=True, unique=True)
+    password_hash: str
+    role: str = "member"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class AppSettings(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str = Field(index=True, unique=True)
