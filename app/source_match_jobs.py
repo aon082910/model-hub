@@ -1,7 +1,9 @@
 """Background job: look up Printables / MakerWorld matches for every library
 model that is not linked to a listing yet, and keep the best few as candidates
-to review. Nothing is linked automatically -- a match found by file name can be
-wrong, so a person accepts or rejects each one (see the Matches tab).
+to review. By default nothing is linked automatically -- a match found by file name can be
+wrong, so a person accepts or rejects each one (see the Matches tab). An opt-in
+"auto-link" threshold links only clear winners (a very high score, and well
+clear of the runner-up); those are marked so they can be double-checked.
 
 The job is gentle on the sites (one pair of searches, then a pause), stops by
 itself if a site starts rate limiting or keeps failing, and can be resumed any
@@ -17,6 +19,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app import sources
+from app.config import MODEL_EXTENSIONS
 from app.db import engine
 from app.models import Model3D, SourceCandidate, SourceMatchState
 
@@ -27,6 +30,8 @@ MAX_CANDIDATES = 3
 PAUSE_SECONDS = 1.0              # between models
 BACKOFF_SECONDS = 5.0            # after a model where both sites failed
 MAX_CONSECUTIVE_FAILURES = 5
+AUTO_LINK_MARGIN = 0.1           # an auto-link also needs to beat the runner-up by this much
+AUTO_LINK_FLOOR = 0.9            # never auto-link below this, whatever is asked
 
 
 class JobBusy(Exception):
@@ -37,7 +42,8 @@ _lock = threading.Lock()
 _stop = threading.Event()
 _state = {
     "running": False, "started_at": None, "finished_at": None,
-    "total": 0, "checked": 0, "with_candidates": 0, "no_match": 0, "errors": 0, "message": "",
+    "total": 0, "checked": 0, "with_candidates": 0, "no_match": 0, "auto_linked": 0, "errors": 0, "message": "",
+    "auto_link_min": None,
 }
 
 
@@ -68,13 +74,14 @@ def clear_match_data(session: Session, model_id: int) -> None:
 
 def summary(session: Session) -> dict:
     """Live counts for the Matches tab."""
-    total = session.exec(select(func.count()).select_from(Model3D)).one()
+    is_model = Model3D.extension.in_(MODEL_EXTENSIONS)
+    total = session.exec(select(func.count()).select_from(Model3D).where(is_model)).one()
     linked = session.exec(
-        select(func.count()).select_from(Model3D).where(Model3D.source_provider.is_not(None))).one()
+        select(func.count()).select_from(Model3D).where(is_model, Model3D.source_provider.is_not(None))).one()
     by_status = dict(session.exec(
         select(SourceMatchState.status, func.count())
         .join(Model3D, Model3D.id == SourceMatchState.model_id)
-        .where(Model3D.source_provider.is_(None))
+        .where(is_model, Model3D.source_provider.is_(None))
         .group_by(SourceMatchState.status)
     ).all())
     waiting, none, skipped = by_status.get("candidates", 0), by_status.get("none", 0), by_status.get("skipped", 0)
@@ -96,15 +103,26 @@ def _models_to_check(recheck_none: bool, only_ids: Optional[list] = None) -> lis
                 session.delete(state)
             session.commit()
         done = select(SourceMatchState.model_id)
-        wanted = select(Model3D.id).where(Model3D.source_provider.is_(None), Model3D.id.not_in(done))
+        wanted = select(Model3D.id).where(
+            Model3D.extension.in_(MODEL_EXTENSIONS), Model3D.source_provider.is_(None), Model3D.id.not_in(done))
         if only_ids is not None:
             wanted = wanted.where(Model3D.id.in_(only_ids))
         return list(session.exec(wanted.order_by(Model3D.id)).all())
 
 
-def _check_one(model_id: int) -> str:
-    """Look one model up. Returns 'candidates', 'none', 'error' or 'limited'
-    (a site asked us to slow down)."""
+def clear_winner(ranked: list, minimum: float) -> bool:
+    """True when the best candidate is good enough, and far enough ahead of the
+    runner-up, to be linked without asking."""
+    if not ranked or minimum is None:
+        return False
+    best = ranked[0]["score"]
+    runner_up = ranked[1]["score"] if len(ranked) > 1 else 0.0
+    return best >= max(minimum, AUTO_LINK_FLOOR) and best - runner_up >= AUTO_LINK_MARGIN
+
+
+def _check_one(model_id: int, auto_link_min: Optional[float] = None) -> str:
+    """Look one model up. Returns 'candidates', 'none', 'linked' (auto-linked),
+    'error' or 'limited' (a site asked us to slow down)."""
     with Session(engine) as session:
         model = session.get(Model3D, model_id)
         if not model or model.source_provider:
@@ -114,14 +132,24 @@ def _check_one(model_id: int) -> str:
             session.add(SourceMatchState(model_id=model_id, status="none", query=""))
             session.commit()
             return "none"
-        found = sources.search(query, limit=6)
+        credentials = sources.load_credentials(session)
+        found = sources.search(query, limit=6, credentials=credentials)
         errors = found["errors"]
-        if errors and len(errors) >= len(sources.PROVIDERS):
+        if errors and len(errors) >= len(sources.available_providers(credentials)):
             return "limited" if any("rate limiting" in m for m in errors.values()) else "error"
 
         ranked = [r for r in sources.rank(found["results"], query) if r["score"] >= MIN_SCORE][:MAX_CANDIDATES]
         if not ranked and errors:
             return "error"     # one site was down and the other had nothing: look again next time
+        if clear_winner(ranked, auto_link_min):
+            from app.source_linking import link_model_to_listing   # lazy: that module imports this one
+            try:
+                link_model_to_listing(session, model, ranked[0]["provider"], ranked[0]["source_id"],
+                                      images=True, fill_details=True, add_tags=False, linked_by="auto")
+                return "linked"
+            except sources.SourceError as e:
+                logger.info("Auto-link for %s failed (%s); keeping it for review", model.filename, e)
+                session.rollback()
         for candidate in session.exec(select(SourceCandidate).where(SourceCandidate.model_id == model_id)).all():
             session.delete(candidate)
         status = "candidates" if ranked else "none"
@@ -137,7 +165,7 @@ def _check_one(model_id: int) -> str:
         return status
 
 
-def run_job(recheck_none: bool = False, only_ids: Optional[list] = None) -> None:
+def run_job(recheck_none: bool = False, only_ids: Optional[list] = None, auto_link_min: Optional[float] = None) -> None:
     """The job body (runs in its own thread; callable directly in tests).
     only_ids limits it to those models; normally it covers the whole library."""
     try:
@@ -149,7 +177,7 @@ def run_job(recheck_none: bool = False, only_ids: Optional[list] = None) -> None
                 _set(message="Stopped. Start again to continue where it left off.")
                 return
             try:
-                outcome = _check_one(model_id)
+                outcome = _check_one(model_id, auto_link_min)
             except sources.SourceError as e:
                 outcome = "error"
                 logger.info("Match lookup failed: %s", e)
@@ -168,7 +196,7 @@ def run_job(recheck_none: bool = False, only_ids: Optional[list] = None) -> None
                 continue
             failures = 0
             _bump("checked")
-            _bump("with_candidates" if outcome == "candidates" else "no_match")
+            _bump({"candidates": "with_candidates", "linked": "auto_linked"}.get(outcome, "no_match"))
             _stop.wait(PAUSE_SECONDS)
         _set(message="Finished.")
     except Exception:
@@ -178,14 +206,15 @@ def run_job(recheck_none: bool = False, only_ids: Optional[list] = None) -> None
         _set(running=False, finished_at=datetime.utcnow().isoformat())
 
 
-def start_job(recheck_none: bool = False) -> dict:
+def start_job(recheck_none: bool = False, auto_link_min: Optional[float] = None) -> dict:
     with _lock:
         if _state["running"]:
             raise JobBusy("A matching job is already running")
         _state.update(running=True, started_at=datetime.utcnow().isoformat(), finished_at=None,
-                      total=0, checked=0, with_candidates=0, no_match=0, errors=0, message="Starting...")
+                      total=0, checked=0, with_candidates=0, no_match=0, auto_linked=0, errors=0,
+                      message="Starting...", auto_link_min=auto_link_min)
     _stop.clear()
-    threading.Thread(target=run_job, args=(recheck_none,), name="source-match", daemon=True).start()
+    threading.Thread(target=run_job, args=(recheck_none, None, auto_link_min), name="source-match", daemon=True).start()
     return job_status()
 
 
@@ -237,3 +266,26 @@ def skip_model(session: Session, model_id: int) -> Optional[SourceMatchState]:
     session.add(state)
     session.commit()
     return state
+
+
+def auto_linked_models(session: Session, limit: int = 50) -> list:
+    """Models the job linked on its own, newest first, for a second look."""
+    rows = session.exec(
+        select(Model3D).where(Model3D.source_linked_by == "auto").order_by(Model3D.updated_at.desc()).limit(limit)
+    ).all()
+    return [{
+        "id": m.id, "filename": m.filename, "extension": m.extension, "thumbnail_path": m.thumbnail_path,
+        "source_provider": m.source_provider, "source_title": m.source_title, "source_url": m.source_url,
+        "designer": m.designer,
+    } for m in rows]
+
+
+def confirm_auto_link(session: Session, model_id: int) -> bool:
+    """'Looks right': the link stays, and it stops being listed for review."""
+    model = session.get(Model3D, model_id)
+    if not model or model.source_linked_by != "auto":
+        return False
+    model.source_linked_by = "manual"
+    session.add(model)
+    session.commit()
+    return True

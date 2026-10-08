@@ -35,6 +35,19 @@ def add_model_to_collection(collection_id: int, model_id: int, session: Session 
     return collection
 
 
+@router.delete("/{collection_id}/models/{model_id}")
+def remove_model_from_collection(collection_id: int, model_id: int, session: Session = Depends(get_session)):
+    collection = session.get(Collection, collection_id)
+    model = session.get(Model3D, model_id)
+    if not collection or not model:
+        raise HTTPException(404, "Not found")
+    if model in collection.models:
+        collection.models.remove(model)
+        session.add(collection)
+        session.commit()
+    return {"status": "removed"}
+
+
 @router.delete("/{collection_id}")
 def delete_collection(collection_id: int, session: Session = Depends(get_session)):
     c = session.get(Collection, collection_id)

@@ -122,14 +122,23 @@
   </section>
 
   <section id="tab-matches" class="tab">
-    <h2>Match your library to Printables / MakerWorld</h2>
-    <p class="muted">Looks up each model that is not linked yet by its file name and keeps the closest listings here for you to confirm.
-      Nothing is linked until you say so, and matching by name can be wrong, so check the picture and title.</p>
+    <h2>Match your library to online listings</h2>
+    <p class="muted">Looks up each model that is not linked yet by its file name (on Printables, MakerWorld, Sketchfab and, with a token in Settings, Thingiverse)
+      and keeps the closest listings here for you to confirm. Matching by name can be wrong, so check the picture and title.
+      You can also let it link clear winners on its own; those are listed below for a second look.</p>
     <div id="match-summary" class="match-summary"></div>
     <div class="toolbar">
       <button id="match-start">Find matches</button>
       <button id="match-stop" class="hidden">Stop</button>
       <label><input type="checkbox" id="match-recheck"> Also search again for models that had no match</label>
+      <label>Link clear winners automatically
+        <select id="match-auto">
+          <option value="">never (I'll review everything)</option>
+          <option value="0.98">at 98% or better</option>
+          <option value="0.95">at 95% or better</option>
+          <option value="0.9">at 90% or better</option>
+        </select>
+      </label>
       <span id="match-progress" class="muted"></span>
     </div>
     <div class="toolbar">
@@ -149,6 +158,7 @@
       <button id="match-link-selected">Link ticked (best match each)</button>
       <span id="match-link-status" class="muted"></span>
     </div>
+    <div id="match-auto-list" class="hidden"></div>
     <div id="match-queue"></div>
     <div class="pagination hidden" id="match-pager">
       <button id="match-prev" type="button">Previous</button>
@@ -230,6 +240,23 @@
       <button id="save-estimate-settings-btn">Save Estimate Defaults</button>
     </div>
 
+    <h2>Model Sites</h2>
+    <div class="settings-form">
+      <p class="muted">Printables, MakerWorld and Sketchfab can be searched with no account. Thingiverse needs a free access token:
+        create an app at thingiverse.com/developers and paste its token here. It is kept on this server and never shown again.</p>
+      <label>Thingiverse access token <input id="thingiverse-token" type="password" autocomplete="off" placeholder="(not set)"></label>
+      <div><button id="save-thingiverse-btn">Save</button> <span id="thingiverse-status"></span></div>
+    </div>
+
+    <h2>Library Cleanup</h2>
+    <div class="settings-form">
+      <p class="muted">Model Hub only lists model files (.stl .3mf .obj .step .stp .fbx). Entries for other file types
+        (zips, notes, drawings) that were indexed before this limit can be removed from the index. The files themselves are never touched.</p>
+      <div><button id="nonmodel-check-btn">Check for non-model entries</button></div>
+      <span id="nonmodel-status"></span>
+      <div><button id="nonmodel-remove-btn" class="hidden">Remove them from the index</button></div>
+    </div>
+
     <h2>Notifications</h2>
     <div class="settings-form">
       <label>Webhook URL <small>(ntfy.sh, Discord, Slack, or any endpoint accepting a JSON POST -- fired when a scan finds new files or a tagging job finishes)</small>
@@ -256,35 +283,32 @@
     </div>
   </section>
 
-  <div id="viewer-modal" class="modal hidden">
-    <div class="modal-content">
-      <button id="close-viewer">&times;</button>
-      <div id="viewer-canvas-wrap"><canvas id="viewer-canvas"></canvas></div>
-      <div id="viewer-info"></div>
-      <div id="viewer-source"></div>
-      <div class="row" id="viewer-estimate-row" style="margin-top:8px">
-        <select id="viewer-est-material">
-          <option value="PLA">PLA</option>
-          <option value="PETG">PETG</option>
-          <option value="ABS">ABS</option>
-          <option value="TPU">TPU</option>
-          <option value="Nylon">Nylon</option>
-        </select>
-        <input id="viewer-est-infill" placeholder="Infill % (default 15)" style="width:130px">
-        <button id="viewer-estimate-btn">Estimate Print</button>
-        <span id="viewer-estimate-result"></span>
-      </div>
-      <div class="row" style="margin-top:4px">
-        <select id="viewer-queue-filament"><option value="">(no filament selected)</option></select>
-        <button id="viewer-add-queue-btn">Add to Print Queue</button>
-      </div>
-      <div class="row" style="margin-top:4px">
-        <select id="viewer-project"><option value="">(choose a project)</option></select>
-        <button id="viewer-add-project-btn">Add to Project</button>
-        <span id="viewer-project-result"></span>
-      </div>
+  <section id="page-model" class="tab page">
+    <div class="page-bar">
+      <a href="#/library" class="back-link">&larr; Library</a>
     </div>
-  </div>
+    <h2 id="model-title" class="page-title"></h2>
+    <div class="page-grid">
+      <div class="page-main">
+        <div id="viewer-canvas-wrap"><canvas id="viewer-canvas"></canvas></div>
+        <div id="viewer-info"></div>
+        <div class="panel" id="model-links-panel"></div>
+      </div>
+      <aside class="page-side">
+        <div class="panel" id="model-facts"></div>
+        <div class="panel" id="model-tags-panel"></div>
+        <div class="panel" id="model-details-panel"></div>
+        <div class="panel" id="viewer-source"></div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="page-project" class="tab page">
+    <div class="page-bar">
+      <a href="#/projects" class="back-link">&larr; Projects</a>
+    </div>
+    <div id="project-page-body"></div>
+  </section>
 
   <div id="auth-overlay" class="modal hidden">
     <div class="modal-content" style="width:340px">

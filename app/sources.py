@@ -1,11 +1,13 @@
 """Match library models to their listings on model sites and pull in the
 title, designer, license, description, tags and pictures.
 
-Supported: Printables (public GraphQL API) and MakerWorld (the JSON API behind
-api.bambulab.com; makerworld.com itself sits behind a bot challenge that blocks
-server-side page fetches, the API host does not). Both are unofficial, public,
-read-only endpoints, so they can change without notice -- every failure here is
-turned into a SourceError with a message that is fine to show to the user.
+Supported, no account needed: Printables (public GraphQL API), MakerWorld (the
+JSON API behind api.bambulab.com; makerworld.com itself sits behind a bot
+challenge that blocks server-side page fetches, the API host does not) and
+Sketchfab (public search API). With an access token entered in Settings:
+Thingiverse. All are read-only endpoints; the unofficial ones can change without
+notice, so every failure here is turned into a SourceError with a message that
+is fine to show to the user.
 
 Only these fixed hosts are ever contacted, and pictures are only downloaded
 from the sites' own CDNs, so a pasted URL can't make the server fetch anything
@@ -17,23 +19,34 @@ import io
 import re
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from PIL import Image, ImageOps
 
 from app.config import CONFIG_PATH
 
-USER_AGENT = "ModelHub/1.8 (self-hosted model library; +https://github.com/aon082910/model-hub)"
+USER_AGENT = "ModelHub/2.0 (self-hosted model library; +https://github.com/aon082910/model-hub)"
 TIMEOUT = httpx.Timeout(12.0, connect=5.0)
 
 PRINTABLES_API = "https://api.printables.com/graphql/"
 PRINTABLES_MEDIA = "https://media.printables.com/"
 MAKERWORLD_API = "https://api.bambulab.com/v1"
 
-PROVIDERS = ("printables", "makerworld")
-PROVIDER_LABELS = {"printables": "Printables", "makerworld": "MakerWorld"}
-IMAGE_HOSTS = {"media.printables.com", "makerworld.bblmw.com", "public-cdn.bblmw.com"}
+SKETCHFAB_API = "https://api.sketchfab.com/v3"
+THINGIVERSE_API = "https://api.thingiverse.com"
+
+PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse")
+PROVIDER_LABELS = {
+    "printables": "Printables", "makerworld": "MakerWorld", "sketchfab": "Sketchfab", "thingiverse": "Thingiverse",
+}
+# providers that need a credential, and the Settings key it is stored under
+CREDENTIAL_SETTINGS = {"thingiverse": "thingiverse_token"}
+KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_SETTINGS)
+IMAGE_HOSTS = {
+    "media.printables.com", "makerworld.bblmw.com", "public-cdn.bblmw.com",
+    "media.sketchfab.com", "cdn.thingiverse.com",
+}
 
 MAX_IMAGES = 6
 MAX_IMAGE_BYTES = 16 * 1024 * 1024   # largest download we will read
@@ -44,6 +57,12 @@ IMAGE_ROOT = CONFIG_PATH / "source_images"
 
 _PRINTABLES_URL = re.compile(r"^https?://(?:www\.)?printables\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?model/(\d+)", re.I)
 _MAKERWORLD_URL = re.compile(r"^https?://(?:www\.)?makerworld\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?models/(\d+)", re.I)
+_SKETCHFAB_URL = re.compile(r"^https?://(?:www\.)?sketchfab\.com/(?:3d-models|models)/(?:[^/?#]*-)?([0-9a-f]{32})(?:[/?#]|$)", re.I)
+_THINGIVERSE_URL = re.compile(r"^https?://(?:www\.)?thingiverse\.com/thing:(\d+)", re.I)
+_URL_PATTERNS = (
+    ("printables", _PRINTABLES_URL), ("makerworld", _MAKERWORLD_URL),
+    ("sketchfab", _SKETCHFAB_URL), ("thingiverse", _THINGIVERSE_URL),
+)
 
 
 class SourceError(Exception):
@@ -55,13 +74,37 @@ def _client() -> httpx.Client:
 
 
 def parse_url(url: str) -> Optional[tuple]:
-    """(provider, id) for a Printables/MakerWorld model URL, else None."""
+    """(provider, id) for a supported model URL, else None."""
     url = (url or "").strip()
-    for provider, pattern in (("printables", _PRINTABLES_URL), ("makerworld", _MAKERWORLD_URL)):
+    for provider, pattern in _URL_PATTERNS:
         match = pattern.match(url)
         if match:
-            return provider, match.group(1)
+            return provider, match.group(1).lower()
     return None
+
+
+def valid_source_id(provider: str, source_id) -> bool:
+    source_id = str(source_id or "")
+    if provider == "sketchfab":
+        return re.fullmatch(r"[0-9a-f]{32}", source_id) is not None
+    return provider in PROVIDERS and source_id.isdigit()
+
+
+def load_credentials(session) -> dict:
+    """{provider: secret} for the providers whose credential is set in Settings."""
+    from app.settings_store import get_setting
+    found = {}
+    for provider, key in CREDENTIAL_SETTINGS.items():
+        value = (get_setting(session, key) or "").strip()
+        if value:
+            found[provider] = value
+    return found
+
+
+def available_providers(credentials: Optional[dict] = None) -> tuple:
+    """Providers to search by default: the keyless ones plus any with a credential."""
+    credentials = credentials or {}
+    return tuple(p for p in PROVIDERS if p in KEYLESS_PROVIDERS or credentials.get(p))
 
 
 def html_to_text(value: Optional[str]) -> str:
@@ -145,14 +188,19 @@ query($id: ID!) { print(id: $id) {
 """
 
 
-def fetch_details(provider: str, source_id: str) -> dict:
+def fetch_details(provider: str, source_id: str, credentials: Optional[dict] = None) -> dict:
     """Normalised details for one listing; raises SourceError."""
-    if provider not in PROVIDERS or not str(source_id).isdigit():
+    if not valid_source_id(provider, source_id):
         raise SourceError("Unsupported listing")
+    source_id = str(source_id)
     with _client() as client:
         if provider == "printables":
-            return _printables_details(client, str(source_id))
-        return _makerworld_details(client, str(source_id))
+            return _printables_details(client, source_id)
+        if provider == "makerworld":
+            return _makerworld_details(client, source_id)
+        if provider == "sketchfab":
+            return _sketchfab_details(client, source_id)
+        return _thingiverse_details(client, source_id, _thingiverse_token(credentials))
 
 
 def _printables_details(client: httpx.Client, source_id: str) -> dict:
@@ -179,6 +227,7 @@ def _printables_details(client: httpx.Client, source_id: str) -> dict:
         "likes": item.get("likesCount"),
         "downloads": item.get("downloadCount"),
         "parts": [],
+        "filaments": [],
     }
 
 
@@ -210,7 +259,152 @@ def _makerworld_details(client: httpx.Client, source_id: str) -> dict:
         "likes": data.get("likeCount"),
         "downloads": data.get("downloadCount"),
         "parts": makerworld_parts(extension),
+        "filaments": makerworld_filaments(extension),
     }
+
+
+# ---------- Sketchfab (no account needed) ----------
+
+def _sketchfab_get(client: httpx.Client, path: str, **params) -> dict:
+    return _get_json(client, f"{SKETCHFAB_API}{path}", params=params or None)
+
+
+def _sketchfab_thumbnail(images: list, target_width: int) -> Optional[str]:
+    candidates = [i for i in images or [] if i.get("url") and i.get("width")]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda i: abs(i["width"] - target_width))["url"]
+
+
+def _sketchfab_details(client: httpx.Client, source_id: str) -> dict:
+    data = _sketchfab_get(client, f"/models/{source_id}")
+    if not data.get("uid"):
+        raise SourceError("That listing was not found (it may have been removed)")
+    images = (data.get("thumbnails") or {}).get("images") or []
+    cover = _sketchfab_thumbnail(images, 1600)
+    categories = data.get("categories") or []
+    user = data.get("user") or {}
+    license_info = data.get("license") or {}
+    return {
+        "provider": "sketchfab",
+        "source_id": source_id,
+        "url": data.get("viewerUrl") or f"https://sketchfab.com/3d-models/{source_id}",
+        "title": data.get("name") or "",
+        "designer": user.get("displayName") or user.get("username") or "",
+        "license": license_info.get("label") or license_info.get("fullName") or "",
+        "description": html_to_text(data.get("description")),
+        "tags": [t["name"] for t in (data.get("tags") or []) if t.get("name")],
+        "category": categories[0].get("name", "") if categories else "",
+        "images": [cover] if cover else [],
+        "likes": data.get("likeCount"),
+        "downloads": data.get("downloadCount"),
+        "parts": [],
+        "filaments": [],
+    }
+
+
+def _search_sketchfab(client: httpx.Client, query: str, limit: int) -> list:
+    data = _sketchfab_get(client, "/search", type="models", q=query, count=limit, downloadable="true")
+    found = []
+    for r in data.get("results") or []:
+        if not r.get("uid"):
+            continue
+        user = r.get("user") or {}
+        license_info = r.get("license") or {}
+        found.append({
+            "provider": "sketchfab",
+            "source_id": r["uid"],
+            "url": r.get("viewerUrl") or f"https://sketchfab.com/3d-models/{r['uid']}",
+            "title": r.get("name") or "",
+            "designer": user.get("displayName") or user.get("username") or "",
+            "license": license_info.get("label") or "",
+            "thumbnail": _sketchfab_thumbnail((r.get("thumbnails") or {}).get("images"), 320),
+        })
+    return found
+
+
+# ---------- Thingiverse (needs an access token from Settings) ----------
+
+def _thingiverse_token(credentials: Optional[dict]) -> str:
+    token = ((credentials or {}).get("thingiverse") or "").strip()
+    if not token:
+        raise SourceError("Add a Thingiverse access token in Settings to search Thingiverse")
+    return token
+
+
+def _thingiverse_get(client: httpx.Client, path: str, token: str, **params):
+    """GET a Thingiverse API path. The token goes in a header, never the URL,
+    so it can't end up in a log or an error message."""
+    try:
+        response = client.get(f"{THINGIVERSE_API}{path}", params=params or None,
+                              headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as e:
+        raise SourceError(f"Could not reach Thingiverse ({e.__class__.__name__})")
+    if response.status_code in (401, 403):
+        raise SourceError("Thingiverse rejected the access token; check it in Settings")
+    if response.status_code == 404:
+        raise SourceError("That listing was not found (it may have been removed)")
+    if response.status_code == 429:
+        raise SourceError("Thingiverse is rate limiting requests; try again in a few minutes")
+    if response.status_code != 200:
+        raise SourceError(f"Thingiverse answered with an error ({response.status_code})")
+    try:
+        return response.json()
+    except ValueError:
+        raise SourceError("Thingiverse returned something unexpected (it may have changed its API)")
+
+
+def _thingiverse_image_url(image: dict) -> Optional[str]:
+    for size in image.get("sizes") or []:
+        if size.get("type") == "display" and size.get("size") == "large" and size.get("url"):
+            return size["url"]
+    return image.get("url")
+
+
+def _thingiverse_details(client: httpx.Client, source_id: str, token: str) -> dict:
+    thing = _thingiverse_get(client, f"/things/{source_id}", token)
+    if not isinstance(thing, dict) or not thing.get("id"):
+        raise SourceError("That listing was not found (it may have been removed)")
+    images = []
+    for image in _thingiverse_get(client, f"/things/{source_id}/images", token) or []:
+        url = _thingiverse_image_url(image)
+        if url and url not in images:
+            images.append(url)
+    if not images and thing.get("thumbnail"):
+        images = [thing["thumbnail"]]
+    tags = [t["name"] for t in (_thingiverse_get(client, f"/things/{source_id}/tags", token) or []) if t.get("name")]
+    description = html_to_text(thing.get("description_html")) or html_to_text(thing.get("description"))
+    instructions = html_to_text(thing.get("instructions_html")) or html_to_text(thing.get("instructions"))
+    return {
+        "provider": "thingiverse",
+        "source_id": source_id,
+        "url": thing.get("public_url") or f"https://www.thingiverse.com/thing:{source_id}",
+        "title": thing.get("name") or "",
+        "designer": (thing.get("creator") or {}).get("name") or "",
+        "license": thing.get("license") or "",
+        "description": "\n\n".join(part for part in (description, instructions) if part),
+        "tags": tags,
+        "category": "",
+        "images": images,
+        "likes": thing.get("like_count"),
+        "downloads": thing.get("download_count"),
+        "parts": [],
+        "filaments": [],
+    }
+
+
+def _search_thingiverse(client: httpx.Client, query: str, limit: int, token: str) -> list:
+    data = _thingiverse_get(client, f"/search/{quote(query, safe='')}", token, type="things", per_page=limit)
+    hits = data.get("hits") if isinstance(data, dict) else None
+    return [{
+        "provider": "thingiverse",
+        "source_id": str(h["id"]),
+        "url": h.get("public_url") or f"https://www.thingiverse.com/thing:{h['id']}",
+        "title": h.get("name") or "",
+        "designer": (h.get("creator") or {}).get("name") or "",
+        "license": "",
+        "thumbnail": h.get("thumbnail") or h.get("preview_image"),
+    } for h in (hits or []) if h.get("id")]
 
 
 # ---------- parts lists (MakerWorld "what you need to buy") ----------
@@ -330,6 +524,38 @@ def makerworld_parts(extension: dict) -> list:
     return unique
 
 
+# ---------- filament a listing suggests (MakerWorld) ----------
+
+_COLOR_PAREN = re.compile(r"\s*\(([^)]*)\).*$")
+
+
+def makerworld_filaments(extension: dict) -> list:
+    """The filament a MakerWorld listing recommends, e.g. 'PLA Basic' in 'Gray
+    (10103) / Refill / 1kg', as {material, brand, color, code, label}."""
+    found, seen = [], set()
+    for item in extension.get("boms_of_filaments") or []:
+        parent = (item.get("displayParentTitle") or item.get("parentTitle") or "").strip()
+        title = (item.get("displayTitle") or item.get("title") or "").strip()
+        if not parent:
+            continue
+        material = parent.split()[0].upper()
+        color_text = title.split("/")[0].strip()
+        code = None
+        paren = re.search(r"\(([^)]*)\)", color_text)
+        if paren and paren.group(1).strip().isdigit():
+            code = paren.group(1).strip()
+        color = _COLOR_PAREN.sub("", color_text).strip()
+        key = (material, color.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append({
+            "material": material, "brand": "Bambu Lab", "color": color, "code": code,
+            "label": f"{parent} {color}".strip(),
+        })
+    return found
+
+
 # ---------- search ----------
 
 _PRINTABLES_SEARCH = """
@@ -339,19 +565,28 @@ query($q: String!, $limit: Int!) { result: searchPrints2(query: $q, printType: p
 """
 
 
-def search(query: str, providers=PROVIDERS, limit: int = 6) -> dict:
+def search(query: str, providers=None, limit: int = 6, credentials: Optional[dict] = None) -> dict:
     """{'results': [...], 'errors': {provider: message}}. One site being down
-    does not hide the other's results."""
+    does not hide the other's results. providers defaults to every site that can
+    be searched right now (the keyless ones, plus any with a credential)."""
     query = (query or "").strip()
     if not query:
         raise SourceError("Type something to search for")
+    providers = available_providers(credentials) if providers is None else providers
     results, errors = [], {}
     with _client() as client:
         for provider in providers:
             if provider not in PROVIDERS:
                 continue
             try:
-                found = (_search_printables if provider == "printables" else _search_makerworld)(client, query, limit)
+                if provider == "printables":
+                    found = _search_printables(client, query, limit)
+                elif provider == "makerworld":
+                    found = _search_makerworld(client, query, limit)
+                elif provider == "sketchfab":
+                    found = _search_sketchfab(client, query, limit)
+                else:
+                    found = _search_thingiverse(client, query, limit, _thingiverse_token(credentials))
                 results.extend(found)
             except SourceError as e:
                 errors[provider] = str(e)

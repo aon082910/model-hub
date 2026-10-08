@@ -8,7 +8,7 @@ import secrets
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Keys never echoed back in plaintext to the frontend after being set
-SECRET_KEYS = {"ai_api_key"}
+SECRET_KEYS = {"ai_api_key", "thingiverse_token"}
 
 
 @router.get("")

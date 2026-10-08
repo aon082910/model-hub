@@ -61,22 +61,46 @@ function ensureViewerColorControl() {
   };
 }
 
-// ---------- Tabs ----------
-$$('#tabs button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    $$('#tabs button').forEach(b => b.classList.remove('active'));
-    $$('.tab').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    $(`#tab-${btn.dataset.tab}`).classList.add('active');
-    if (btn.dataset.tab === 'collections') loadCollections();
-    if (btn.dataset.tab === 'projects') loadProjects();
-    if (btn.dataset.tab === 'supplies') loadSupplies();
-    if (btn.dataset.tab === 'matches') loadMatches();
-    if (btn.dataset.tab === 'filament') loadFilament();
-    if (btn.dataset.tab === 'queue') loadQueue();
-    if (btn.dataset.tab === 'settings') loadSettings();
-  });
-});
+// ---------- Tabs and pages ----------
+// Hash routing, so every page has an address that survives a reload and works with
+// the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
+const TAB_LOADERS = {
+  library: () => loadModels(), collections: () => loadCollections(), projects: () => loadProjects(),
+  supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
+  queue: () => loadQueue(), settings: () => loadSettings(),
+};
+
+function showSection(sectionId, activeTab) {
+  $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === activeTab));
+  $$('.tab').forEach(t => t.classList.toggle('active', t.id === sectionId));
+}
+
+let routeToken = 0;   // a page that finishes loading after you moved on must not draw itself
+function route() {
+  const hash = location.hash || '#/library';
+  const token = ++routeToken;
+  disposeViewer();
+  window.scrollTo(0, 0);
+  const detail = hash.match(/^#\/(model|project)\/(\d+)$/);
+  if (detail && detail[1] === 'model') {
+    showSection('page-model', 'library');
+    return openModelPage(parseInt(detail[2]), token);
+  }
+  if (detail) {
+    showSection('page-project', 'projects');
+    return openProjectPage(parseInt(detail[2]), token);
+  }
+  const tab = hash.replace(/^#\//, '');
+  const name = TAB_LOADERS[tab] ? tab : 'library';
+  document.title = 'Model Hub';
+  showSection(`tab-${name}`, name);
+  return TAB_LOADERS[name]();
+}
+window.addEventListener('hashchange', route);
+$$('#tabs button').forEach(btn => btn.addEventListener('click', () => {
+  const target = `#/${btn.dataset.tab}`;
+  if (location.hash === target) route(); else location.hash = target;
+}));
 
 // ---------- Library ----------
 async function loadModels() {
@@ -94,19 +118,19 @@ function renderGrid(models) {
   const grid = $('#grid');
   grid.innerHTML = '';
   for (const m of models) {
-    const card = document.createElement('div');
+    const card = document.createElement('a');
     card.className = 'card' + (m.is_duplicate_of ? ' duplicate' : '');
+    card.href = `#/model/${m.id}`;
     // models the renderer couldn't thumbnail (STEP, FBX...) borrow the first picture from their site listing
     const siteImages = parseJsonList(m.source_images);
     const thumb = m.thumbnail_path ? `/api/library/thumbnails/${m.thumbnail_path}`
       : (siteImages.length ? `/api/library/models/${m.id}/source/images/${siteImages[0]}` : '');
     card.innerHTML = `
-      ${thumb ? `<img src="${thumb}" loading="lazy">` : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:#666">${m.extension}</div>`}
+      ${thumb ? `<img src="${thumb}" loading="lazy" alt="">` : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:#666">${esc(m.extension)}</div>`}
       <div class="meta">
-        <div class="fname" title="${m.filename}">${m.filename}</div>
-        <div class="tags">${(m.tags || []).map(t => t.name).join(', ')}</div>
+        <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
+        <div class="tags">${esc((m.tags || []).map(t => t.name).join(', '))}</div>
       </div>`;
-    card.addEventListener('click', () => openViewer(m));
     grid.appendChild(card);
   }
 }
@@ -162,6 +186,7 @@ function debounce(fn, ms) {
 
 // ---------- 3D Viewer ----------
 let renderer, scene, camera, controls, animId;
+let viewerGeneration = 0;
 
 // The browser parses the whole file to preview it, at many times the file's
 // size -- a multi-plate .3mf holds several times its zipped size in XML.
@@ -176,56 +201,216 @@ function previewIsTooLarge(model) {
   return (model.size_bytes || 0) > limit;
 }
 
-function openViewer(model) {
+let currentModel = null;   // the full model record the page is showing
+
+function formatBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function clearModelPage() {
+  currentModel = null;
+  $('#model-title').textContent = 'Loading...';
+  ['#model-facts', '#model-tags-panel', '#model-details-panel', '#viewer-source', '#model-links-panel', '#viewer-info']
+    .forEach(sel => { $(sel).innerHTML = ''; });
+}
+
+async function openModelPage(id, token) {
+  clearModelPage();
+  const res = await fetch(`/api/library/models/${id}/full`);
+  if (token !== routeToken) return;
+  if (!res.ok) { $('#model-title').textContent = 'Model not found'; return; }
+  const model = await res.json();
+  if (token !== routeToken) return;
+  currentModel = model;
   viewerSessionColor = viewerModelColor;
-  $('#viewer-modal').classList.remove('hidden');
-  $('#viewer-info').innerHTML = `
-    <div><b>${model.filename}</b></div>
-    <div>${model.ai_description || ''}</div>
-    <div id="viewer-tags">Tags: ${(model.tags || []).map(t => t.name).join(', ') || '(none)'}</div>
-    <div>Vertices: ${model.vertex_count ?? '?'} | Faces: ${model.face_count ?? '?'}</div>
-    <div><a href="/api/library/models/${model.id}/file" download>Download original file</a></div>
-    <div class="row" style="margin-top:8px">
-      <button id="viewer-tag-btn">Tag with AI</button>
-      <input id="viewer-designer" placeholder="Designer" value="${model.designer || ''}">
-      <input id="viewer-license" placeholder="License" value="${model.license || ''}">
-      <button id="viewer-save-meta-btn">Save</button>
-    </div>`;
+  document.title = `${model.filename} - Model Hub`;
+  renderModelPage(model);
+  startModelViewer(model);
+}
 
-  viewerSourceChanged = false;
+// re-draw the panels after a change; the 3D view is left alone
+async function refreshModelPage() {
+  if (!currentModel) return;
+  const res = await fetch(`/api/library/models/${currentModel.id}/full`);
+  if (!res.ok || !currentModel) return;
+  currentModel = await res.json();
+  renderModelPage(currentModel);
+}
+
+function renderModelPage(model) {
+  $('#model-title').textContent = model.filename;
+  renderModelFacts(model);
+  renderModelTags(model);
+  renderModelDetails(model);
   renderViewerSource(model);
+  renderModelLinks(model);
+}
 
-  $('#viewer-tag-btn').onclick = async () => {
-    const res = await fetch(`/api/ai/tag/${model.id}`, { method: 'POST' });
-    const result = await res.json();
-    alert(result.status === 'ok' ? `Tagged: ${result.tags.join(', ')}` : (result.reason || 'skipped'));
+function renderModelFacts(m) {
+  const dims = m.bbox_x != null && m.bbox_y != null && m.bbox_z != null
+    ? `${m.bbox_x.toFixed(1)} × ${m.bbox_y.toFixed(1)} × ${m.bbox_z.toFixed(1)} mm` : '';
+  const rows = [
+    ['Type', m.extension], ['Size', formatBytes(m.size_bytes)], ['Dimensions', dims],
+    ['Volume', m.volume_mm3 != null ? `${(m.volume_mm3 / 1000).toFixed(2)} cm³` : ''],
+    ['Vertices / faces', `${m.vertex_count ?? '?'} / ${m.face_count ?? '?'}`],
+    ['Watertight', m.is_watertight == null ? 'unknown' : (m.is_watertight ? 'yes' : 'no')],
+    ['File', m.path], ['Added', m.created_at ? String(m.created_at).slice(0, 10) : ''],
+  ].filter(([, value]) => value);
+  $('#model-facts').innerHTML = `
+    <h3>Details</h3>
+    <table class="facts"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
+    ${m.file_exists === false ? '<p class="warn-text">The file is missing from the library folder.</p>' : ''}
+    ${m.ai_description ? `<p class="model-desc">${esc(m.ai_description)}</p>` : ''}
+    <div class="row"><a class="button-link" href="/api/library/models/${m.id}/file" download>Download file</a></div>`;
+}
+
+function renderModelTags(m) {
+  const tags = m.tags || [];
+  $('#model-tags-panel').innerHTML = `
+    <h3>Tags</h3>
+    <div class="source-tags">${tags.length ? tags.map(t =>
+      `<span class="chip">${esc(t.name)}${t.ai_generated ? ' ✨' : ''} <button class="chip-x" data-tag="${esc(t.name)}" title="Remove this tag">&times;</button></span>`).join('')
+      : '<span class="muted">No tags yet</span>'}</div>
+    <div class="row">
+      <input id="model-new-tag" placeholder="Add a tag">
+      <button id="model-add-tag">Add</button>
+      <button id="model-ai-tag">Tag with AI</button>
+    </div>
+    <span id="model-tag-status" class="muted"></span>`;
+  const add = async () => {
+    const name = $('#model-new-tag').value.trim();
+    if (!name) return;
+    await jsonRequest('POST', `/api/tags/models/${m.id}`, { name });
+    refreshModelPage();
   };
-  $('#viewer-save-meta-btn').onclick = async () => {
-    await fetch(`/api/library/models/${model.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        designer: $('#viewer-designer').value,
-        license: $('#viewer-license').value,
-      }),
+  $('#model-add-tag').onclick = add;
+  $('#model-new-tag').onkeydown = (e) => { if (e.key === 'Enter') add(); };
+  $$('#model-tags-panel .chip-x').forEach(btn => btn.onclick = async () => {
+    await fetch(`/api/tags/models/${m.id}/${encodeURIComponent(btn.dataset.tag)}`, { method: 'DELETE' });
+    refreshModelPage();
+  });
+  $('#model-ai-tag').onclick = async () => {
+    $('#model-tag-status').textContent = 'Asking the AI...';
+    const res = await fetch(`/api/ai/tag/${m.id}`, { method: 'POST' });
+    const result = await res.json().catch(() => ({}));
+    if (result.status === 'ok') refreshModelPage();
+    else $('#model-tag-status').textContent = result.reason || result.detail || 'The AI did not tag this model.';
+  };
+}
+
+function renderModelDetails(m) {
+  $('#model-details-panel').innerHTML = `
+    <h3>Info</h3>
+    <div class="stack">
+      <label>Designer <input id="model-designer" value="${esc(m.designer || '')}"></label>
+      <label>License <input id="model-license" value="${esc(m.license || '')}"></label>
+      <label>Source link <input id="model-source-url" value="${esc(m.source_url || '')}" placeholder="Where this model came from"></label>
+      <label>Notes <textarea id="model-notes" rows="4" placeholder="Print settings, mods, reminders...">${esc(m.notes || '')}</textarea></label>
+      <div class="row"><button id="model-save-meta">Save</button><span id="model-meta-status" class="muted"></span></div>
+    </div>`;
+  $('#model-save-meta').onclick = async () => {
+    const res = await jsonRequest('PATCH', `/api/library/models/${m.id}`, {
+      designer: $('#model-designer').value, license: $('#model-license').value,
+      source_url: $('#model-source-url').value, notes: $('#model-notes').value,
     });
+    $('#model-meta-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    if (res.ok) setTimeout(() => { const el = $('#model-meta-status'); if (el) el.textContent = ''; }, 2000);
   };
+}
 
+async function renderModelLinks(model) {
+  const panel = $('#model-links-panel');
+  const [projects, collections, spools] = await Promise.all([
+    fetch('/api/projects').then(r => (r.ok ? r.json() : [])),
+    fetch('/api/collections').then(r => (r.ok ? r.json() : [])),
+    fetch('/api/filament').then(r => (r.ok ? r.json() : [])),
+  ]);
+  if (!currentModel || currentModel.id !== model.id) return;      // moved on while this loaded
+  const inProject = new Set(model.projects.map(p => p.id));
+  const inCollection = new Set(model.collections.map(c => c.id));
+  const spoolText = f => esc([f.material, f.brand, f.color].filter(Boolean).join(' '));
+  panel.innerHTML = `
+    <h3>Projects</h3>
+    ${model.projects.length ? `<ul class="link-list">${model.projects.map(p =>
+      `<li><a href="#/project/${p.id}">${esc(p.name)}</a><span class="status-badge status-${esc(p.status)}">${esc(p.status)}</span></li>`).join('')}</ul>`
+      : '<p class="muted">Not in any project yet.</p>'}
+    <div class="row">
+      <select id="viewer-project"><option value="">(choose a project)</option>${projects.filter(p => !inProject.has(p.id)).map(p =>
+        `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+      <button id="viewer-add-project-btn">Add to project</button>
+      <span id="viewer-project-result" class="muted"></span>
+    </div>
+
+    <h3>Collections</h3>
+    ${model.collections.length ? `<div class="source-tags">${model.collections.map(c =>
+      `<span class="chip">${esc(c.name)} <button class="chip-x collection-x" data-collection="${c.id}" title="Remove from this collection">&times;</button></span>`).join('')}</div>`
+      : '<p class="muted">Not in any collection.</p>'}
+    <div class="row">
+      <select id="model-collection"><option value="">(choose a collection)</option>${collections.filter(c => !inCollection.has(c.id)).map(c =>
+        `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      <button id="model-add-collection">Add to collection</button>
+    </div>
+
+    <h3>Print</h3>
+    <div class="row">
+      <select id="viewer-est-material">
+        <option value="PLA">PLA</option><option value="PETG">PETG</option><option value="ABS">ABS</option>
+        <option value="TPU">TPU</option><option value="Nylon">Nylon</option>
+      </select>
+      <input id="viewer-est-infill" placeholder="Infill % (default 15)">
+      <button id="viewer-estimate-btn">Estimate print</button>
+    </div>
+    <div id="viewer-estimate-result" class="muted"></div>
+    ${model.queue.length ? `<ul class="link-list">${model.queue.map(q =>
+      `<li>Print queue #${q.position + 1}<span class="status-badge status-${esc(q.status)}">${esc(q.status)}</span>${
+        q.estimated_grams != null ? `<span class="muted">${q.estimated_grams} g</span>` : ''}</li>`).join('')}</ul>` : ''}
+    <div class="row">
+      <select id="viewer-queue-filament"><option value="">(no filament selected)</option>${spools.map(f =>
+        `<option value="${f.id}">${spoolText(f)} (${f.remaining_g}g left)</option>`).join('')}</select>
+      <button id="viewer-add-queue-btn">Add to print queue</button>
+    </div>
+
+    ${model.duplicates.length ? `<h3>Same file elsewhere</h3><ul class="link-list">${model.duplicates.map(d =>
+      `<li><a href="#/model/${d.id}">${esc(d.filename)}</a><span class="muted">${esc(d.path)}</span></li>`).join('')}</ul>` : ''}`;
+
+  $('#viewer-add-project-btn').onclick = async () => {
+    const projectId = $('#viewer-project').value;
+    if (!projectId) { $('#viewer-project-result').textContent = 'Choose a project first.'; return; }
+    const res = await fetch(`/api/projects/${projectId}/models/${model.id}`, { method: 'POST' });
+    if (res.ok) refreshModelPage(); else $('#viewer-project-result').textContent = 'Could not add to the project.';
+  };
+  $('#model-add-collection').onclick = async () => {
+    const collectionId = $('#model-collection').value;
+    if (!collectionId) return;
+    await fetch(`/api/collections/${collectionId}/models/${model.id}`, { method: 'POST' });
+    refreshModelPage();
+  };
+  $$('#model-links-panel .collection-x').forEach(btn => btn.onclick = async () => {
+    await fetch(`/api/collections/${btn.dataset.collection}/models/${model.id}`, { method: 'DELETE' });
+    refreshModelPage();
+  });
+  $('#viewer-estimate-btn').onclick = () => runEstimate(model.id);
+  $('#viewer-add-queue-btn').onclick = () => addToQueue(model.id);
+}
+
+// ---- the 3D view ----
+function startModelViewer(model) {
   initViewer();
   ensureViewerColorControl();
   const fileUrl = `/api/library/models/${model.id}/file`;
   const loaders = {
-    '.stl': loadSTL,
-    '.obj': loadOBJ,
-    '.3mf': load3MF,
-    '.fbx': loadFBX,
-    '.step': loadSTEP,
-    '.stp': loadSTEP,
+    '.stl': loadSTL, '.obj': loadOBJ, '.3mf': load3MF, '.fbx': loadFBX, '.step': loadSTEP, '.stp': loadSTEP,
   };
   const loadFn = loaders[model.extension];
+  const info = $('#viewer-info');
   if (loadFn && previewIsTooLarge(model)) {
     const faces = model.face_count ? `${(model.face_count / 1e6).toFixed(1)}M faces` : `${Math.round(model.size_bytes / 2 ** 20)} MB`;
-    $('#viewer-info').insertAdjacentHTML('beforeend',
-      `<div id="large-preview-note" style="color:#e0a800">This model is very large (${faces}) and may freeze or crash this browser tab to preview live. `
+    info.insertAdjacentHTML('beforeend',
+      `<div id="large-preview-note" class="warn-text">This model is very large (${faces}) and may freeze or crash this browser tab to preview live. `
       + `<button id="large-preview-load-btn">Load anyway</button></div>`);
     $('#large-preview-load-btn').onclick = () => {
       $('#large-preview-note').remove();
@@ -234,27 +419,31 @@ function openViewer(model) {
   } else if (loadFn) {
     loadFn(fileUrl);
   } else {
-    $('#viewer-info').insertAdjacentHTML('beforeend',
-      `<div style="color:#e0a800">Live viewer not available for ${model.extension} yet -- see the thumbnail and download the original file above.</div>`);
+    info.insertAdjacentHTML('beforeend',
+      `<div class="warn-text">Live viewer not available for ${esc(model.extension)} yet -- download the original file instead.</div>`);
   }
-
-  loadFilamentOptionsForQueue();
-  loadProjectOptionsForViewer();
-  $('#viewer-project-result').textContent = '';
-  $('#viewer-estimate-btn').onclick = () => runEstimate(model.id);
-  $('#viewer-add-queue-btn').onclick = () => addToQueue(model.id);
-  $('#viewer-add-project-btn').onclick = () => addModelToProject(model.id);
 }
 
-$('#close-viewer').addEventListener('click', () => {
-  $('#viewer-modal').classList.add('hidden');
-  if (viewerSourceChanged) { viewerSourceChanged = false; loadModels(); }
-  if (animId) cancelAnimationFrame(animId);
-  if (viewerResizeHandler) {
-    window.removeEventListener('resize', viewerResizeHandler);
-    viewerResizeHandler = null;
+// Releases the WebGL context and GPU memory. Browsers allow only a handful of
+// live contexts, so leaving a model page without this would eventually blank the viewer.
+function disposeViewer() {
+  viewerGeneration += 1;                 // late-arriving loader callbacks must not touch the next view
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+  if (viewerResizeHandler) { window.removeEventListener('resize', viewerResizeHandler); viewerResizeHandler = null; }
+  if (scene) {
+    scene.traverse((object) => {
+      if (object.geometry) object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : (object.material ? [object.material] : []);
+      for (const material of materials) {
+        for (const value of Object.values(material)) if (value && value.isTexture) value.dispose();
+        material.dispose();
+      }
+    });
   }
-});
+  if (controls) controls.dispose();
+  if (renderer) { renderer.dispose(); renderer.forceContextLoss(); }
+  renderer = scene = camera = controls = null;
+}
 
 let viewerResizeHandler = null;
 
@@ -293,44 +482,49 @@ function initViewer() {
   window.addEventListener('resize', viewerResizeHandler);
 }
 
+// A loader finishing after you moved to another model (or page) must not add its
+// geometry to the new scene, so each remembers which view it was started for.
+function addToScene(object, generation) {
+  if (generation !== viewerGeneration || !scene) return;
+  scene.add(object);
+  frameCameraOn(object);
+}
+
 function loadSTL(url) {
+  const generation = viewerGeneration;
   const loader = new STLLoader();
   loader.load(url, (geometry) => {
     geometry.center();
-    const mesh = new THREE.Mesh(geometry, createViewerMaterial());
-    scene.add(mesh);
-    frameCameraOn(mesh);
-  });
+    addToScene(new THREE.Mesh(geometry, createViewerMaterial()), generation);
+  }, undefined, (err) => showViewerError(err, generation));
 }
 
 function loadOBJ(url) {
+  const generation = viewerGeneration;
   const loader = new OBJLoader();
   loader.load(url, (object) => {
     object.traverse((child) => {
       if (child.isMesh) child.material = createViewerMaterial();
     });
-    scene.add(object);
-    frameCameraOn(object);
-  }, undefined, (err) => showViewerError(err));
+    addToScene(object, generation);
+  }, undefined, (err) => showViewerError(err, generation));
 }
 
 function load3MF(url) {
+  const generation = viewerGeneration;
   const loader = new ThreeMFLoader();
-  loader.load(url, (object) => {
-    scene.add(object);
-    frameCameraOn(object);
-  }, undefined, (err) => showViewerError(err));
+  loader.load(url, (object) => addToScene(object, generation), undefined, (err) => showViewerError(err, generation));
 }
 
 function loadFBX(url) {
+  const generation = viewerGeneration;
   const loader = new FBXLoader();
   loader.load(url, (object) => {
     object.traverse((child) => {
       if (child.isMesh) child.material = createViewerMaterial();
     });
-    scene.add(object);
-    frameCameraOn(object);
-  }, undefined, (err) => showViewerError(err));
+    addToScene(object, generation);
+  }, undefined, (err) => showViewerError(err, generation));
 }
 
 // occt-import-js is a ~7MB WASM CAD kernel -- loaded lazily on first STEP
@@ -345,6 +539,7 @@ function getOcctModule() {
 }
 
 async function loadSTEP(url) {
+  const generation = viewerGeneration;
   $('#viewer-info').insertAdjacentHTML('beforeend',
     '<div id="step-loading-note">Loading STEP geometry (this can take a few seconds)…</div>');
   try {
@@ -352,6 +547,7 @@ async function loadSTEP(url) {
     if (!res.ok) throw new Error(`Could not fetch file (${res.status})`);
     const fileBuffer = new Uint8Array(await res.arrayBuffer());
     const occt = await getOcctModule();
+    if (generation !== viewerGeneration) return;
     const result = occt.ReadStepFile(fileBuffer, null);
     if (!result.success || !result.meshes.length) {
       throw new Error('STEP file parsed but contained no visible geometry (assembly-only or metadata-only file?)');
@@ -371,19 +567,19 @@ async function loadSTEP(url) {
         : defaultMaterial;
       group.add(new THREE.Mesh(geometry, material));
     }
-    scene.add(group);
-    frameCameraOn(group);
+    addToScene(group, generation);
   } catch (err) {
-    showViewerError(err);
+    showViewerError(err, generation);
   } finally {
     document.getElementById('step-loading-note')?.remove();
   }
 }
 
-function showViewerError(err) {
+function showViewerError(err, generation) {
   console.error(err);
+  if (generation !== undefined && generation !== viewerGeneration) return;
   $('#viewer-info').insertAdjacentHTML('beforeend',
-    `<div style="color:#e0645a">Failed to load model preview: ${err.message || err}</div>`);
+    `<div class="error-text">Failed to load model preview: ${esc(err.message || err)}</div>`);
 }
 
 // centers geometry at the origin and points the camera/orbit target at it,
@@ -402,8 +598,7 @@ function frameCameraOn(object3d) {
 }
 
 // ---------- Match a model to its Printables / MakerWorld listing ----------
-let viewerSourceChanged = false;
-const PROVIDER_LABELS = { printables: 'Printables', makerworld: 'MakerWorld' };
+const PROVIDER_LABELS = { printables: 'Printables', makerworld: 'MakerWorld', sketchfab: 'Sketchfab', thingiverse: 'Thingiverse' };
 
 function parseJsonList(value) {
   try { const list = JSON.parse(value || '[]'); return Array.isArray(list) ? list : []; }
@@ -420,7 +615,7 @@ function renderViewerSource(model) {
     box.innerHTML = `
       <div class="source-card">
         <div class="row">
-          <button id="source-find">Find on MakerWorld / Printables</button>
+          <button id="source-find">Find this model online</button>
           <input id="source-url" placeholder="...or paste a model link">
           <button id="source-link-url">Link</button>
         </div>
@@ -448,6 +643,7 @@ function renderViewerSource(model) {
     <div class="source-card">
       <div class="source-head">
         <span class="badge">${esc(PROVIDER_LABELS[model.source_provider] || model.source_provider)}</span>
+        ${model.source_linked_by === 'auto' ? '<span class="badge warn-badge" title="Linked automatically by the matching job">auto-linked</span>' : ''}
         ${safeHttpUrl(model.source_url)
           ? `<a href="${esc(model.source_url)}" target="_blank" rel="noopener noreferrer">${esc(model.source_title || model.source_url)}</a>`
           : esc(model.source_title || '')}
@@ -458,12 +654,20 @@ function renderViewerSource(model) {
       ${tags.length ? `<div class="source-tags">${tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
       ${description ? `<details><summary>Description</summary><div class="source-desc">${esc(description)}</div></details>` : ''}
       <div class="row">
+        ${model.source_linked_by === 'auto' ? '<button id="source-confirm">Looks right</button>' : ''}
         <button id="source-refresh">Re-fetch from site</button>
         <button id="source-add-tags">Add site tags</button>
         <button id="source-unlink">Unlink</button>
         <span id="source-status" class="muted"></span>
       </div>
     </div>`;
+  if ($('#source-confirm')) {
+    $('#source-confirm').onclick = async () => {
+      await fetch(`/api/source-match/models/${model.id}/confirm`, { method: 'POST' });
+      model.source_linked_by = 'manual';
+      renderModelPage(model);
+    };
+  }
   $('#source-refresh').onclick = () => linkSource(model, { provider: model.source_provider, source_id: model.source_id });
   $('#source-add-tags').onclick = () => linkSource(model,
     { provider: model.source_provider, source_id: model.source_id, images: false, fill_details: false, add_tags: true });
@@ -472,15 +676,9 @@ function renderViewerSource(model) {
     const res = await fetch(`/api/library/models/${model.id}/source`, { method: 'DELETE' });
     if (res.ok) {
       Object.assign(model, await res.json());
-      viewerSourceChanged = true;
-      renderViewerSource(model);
-      showViewerTags(model);
+      renderModelPage(model);
     }
   };
-}
-
-function showViewerTags(model) {
-  $('#viewer-tags').textContent = `Tags: ${(model.tags || []).map(t => t.name).join(', ') || '(none)'}`;
 }
 
 async function sourceErrorText(res) {
@@ -530,15 +728,11 @@ async function linkSource(model, listing) {
   const res = await jsonRequest('POST', `/api/library/models/${model.id}/source`, body);
   if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
   Object.assign(model, await res.json());
-  viewerSourceChanged = true;
-  renderViewerSource(model);
-  $('#viewer-designer').value = model.designer || '';
-  $('#viewer-license').value = model.license || '';
-  showViewerTags(model);
+  renderModelPage(model);
   $('#source-status').textContent = 'Saved.';
 }
 
-// ---------- Print estimate + add-to-queue (from viewer) ----------
+// ---------- Print estimate + add-to-queue (model page) ----------
 let lastEstimate = null;
 
 async function runEstimate(modelId) {
@@ -547,7 +741,7 @@ async function runEstimate(modelId) {
   const infill = isNaN(infillPct) ? 0.15 : infillPct / 100;
   $('#viewer-estimate-result').textContent = 'Estimating…';
   const res = await fetch(`/api/library/models/${modelId}/estimate?material=${material}&infill=${infill}`);
-  const est = await res.json();
+  const est = res.ok ? await res.json() : {};
   lastEstimate = est;
   if (est.estimated_grams == null && est.estimated_minutes == null) {
     $('#viewer-estimate-result').textContent = est.note || 'Estimate unavailable.';
@@ -556,13 +750,6 @@ async function runEstimate(modelId) {
   const grams = est.estimated_grams != null ? `${est.estimated_grams} g` : '? g';
   const mins = est.estimated_minutes != null ? `${Math.round(est.estimated_minutes)} min` : '? min';
   $('#viewer-estimate-result').textContent = `${grams} · ${mins} (${est.source})`;
-}
-
-async function loadFilamentOptionsForQueue() {
-  const items = await (await fetch('/api/filament')).json();
-  const sel = $('#viewer-queue-filament');
-  sel.innerHTML = '<option value="">(no filament selected)</option>' +
-    items.map(f => `<option value="${f.id}">${f.material} ${f.color || ''} (${f.remaining_g}g left)</option>`).join('');
 }
 
 async function addToQueue(modelId) {
@@ -576,7 +763,7 @@ async function addToQueue(modelId) {
       estimated_minutes: lastEstimate ? lastEstimate.estimated_minutes : null,
     }),
   });
-  $('#viewer-estimate-result').textContent = 'Added to print queue.';
+  await refreshModelPage();
 }
 
 // ---------- Projects ----------
@@ -594,19 +781,6 @@ function jsonRequest(method, url, body) {
     method, headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-}
-
-async function loadProjectOptionsForViewer() {
-  const projects = await (await fetch('/api/projects')).json();
-  $('#viewer-project').innerHTML = '<option value="">(choose a project)</option>' +
-    projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
-}
-
-async function addModelToProject(modelId) {
-  const projectId = $('#viewer-project').value;
-  if (!projectId) { $('#viewer-project-result').textContent = 'Choose a project first.'; return; }
-  const res = await fetch(`/api/projects/${projectId}/models/${modelId}`, { method: 'POST' });
-  $('#viewer-project-result').textContent = res.ok ? 'Added to project.' : 'Could not add to project.';
 }
 
 function renderPartRow(projectId, part) {
@@ -641,16 +815,27 @@ function renderProjectModel(m, locked) {
       <input class="line-grams" type="number" min="0" step="0.1" value="${l.grams}" aria-label="Grams" ${locked ? 'disabled' : ''}> g
       ${locked ? '' : '<button class="line-del" title="Remove this filament">&times;</button>'}
     </div>`).join('');
+  const picture = (m.source_images || [])[0];
+  const thumb = m.thumbnail_path ? `/api/library/thumbnails/${esc(m.thumbnail_path)}`
+    : (picture ? `/api/library/models/${m.id}/source/images/${picture}` : '');
+  const by = [m.designer && `by ${esc(m.designer)}`, m.license && esc(m.license)].filter(Boolean).join(' · ');
   return `
     <div class="project-model" data-model="${m.id}" data-source-id="${esc(m.source_id || '')}">
-      <div class="project-model-head">
-        <b>${esc(m.filename)}</b>
-        ${m.filament_grams ? `<span class="muted">${m.filament_grams}g</span>` : ''}
-        ${m.source_provider === 'makerworld' ? '<button class="model-import-parts" title="Add the parts list from the MakerWorld listing this model is linked to">Import parts</button>' : ''}
-        ${locked ? '' : `<button class="model-estimate" title="Estimate filament use for this model">Estimate</button>
-        <button class="model-unlink" title="Remove from project">&times;</button>`}
-        <span class="model-estimate-note muted"></span>
+      <div class="project-model-top">
+        ${thumb ? `<a href="#/model/${m.id}"><img class="pm-thumb" src="${thumb}" alt="" loading="lazy"></a>` : ''}
+        <div class="project-model-head">
+          <a href="#/model/${m.id}"><b>${esc(m.filename)}</b></a>
+          ${m.filament_grams ? `<span class="muted">${m.filament_grams}g</span>` : ''}
+          ${by || safeUrl(m.source_url) ? `<div class="muted pm-by">${by}${safeUrl(m.source_url) ? ` <a href="${esc(m.source_url)}" target="_blank" rel="noopener noreferrer">listing</a>` : ''}</div>` : ''}
+          <div class="pm-actions">
+            ${m.source_provider === 'makerworld' ? '<button class="model-import-parts" title="Add the parts list from the MakerWorld listing this model is linked to">Import parts</button>' : ''}
+            ${locked ? '' : `<button class="model-estimate" title="Estimate filament use for this model">Estimate</button>
+            <button class="model-unlink" title="Remove from project">&times;</button>`}
+          </div>
+          <span class="model-estimate-note muted"></span>
+        </div>
       </div>
+      <div class="filament-suggest"></div>
       ${lines}
       ${locked ? '' : `
       <div class="filament-line filament-add">
@@ -661,11 +846,15 @@ function renderProjectModel(m, locked) {
     </div>`;
 }
 
-function renderProject(p) {
+function projectSummaryText(p) {
   const cost = p.cost_needed ? ` · $${p.cost_needed.toFixed(2)} to buy` : '';
-  const summary = p.parts_total
+  return p.parts_total
     ? (p.parts_missing ? `${p.parts_missing} of ${p.parts_total} parts needed${cost}` : 'all parts on hand')
     : 'no parts listed';
+}
+
+// one project, full page (#/project/ID)
+function renderProject(p) {
   const locked = p.filament_deducted;
   const models = p.models.map(m => renderProjectModel(m, locked)).join('');
   const totals = p.filament_totals.map(t => `
@@ -675,24 +864,34 @@ function renderProject(p) {
         ${locked ? '<br><small>Already subtracted from inventory. Move the project back to planning/building to undo.</small>' : ''}</div>`
     : '';
   return `
-    <div class="project-card" data-project="${p.id}">
+    <div class="project-card page-card" data-project="${p.id}" data-locked="${locked ? 1 : 0}">
       <div class="project-head">
-        <h3>${esc(p.name)}</h3>
-        <select class="project-status">
+        <input class="project-field project-title" data-field="name" value="${esc(p.name)}" aria-label="Project name">
+        <select class="project-status" aria-label="Status">
           ${['planning', 'building', 'printed', 'done'].map(s => `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
-        <button class="project-del">delete project</button>
+        <a class="button-link" href="/api/projects/${p.id}/export.pdf" download>Export PDF</a>
+        <button class="project-del">Delete project</button>
       </div>
-      ${p.description ? `<div class="project-desc">${esc(p.description)}</div>` : ''}
-      <div class="project-summary">${summary}</div>
+      <span class="project-save-status muted"></span>
+      <div class="stack">
+        <label>Description <textarea class="project-field" data-field="description" rows="2" placeholder="What is this project?">${esc(p.description || '')}</textarea></label>
+        <label>Notes <textarea class="project-field" data-field="notes" rows="4" placeholder="Print settings, assembly notes, links...">${esc(p.notes || '')}</textarea></label>
+      </div>
+      <div class="project-summary">${projectSummaryText(p)}</div>
       ${filamentSummary}
-      ${models ? `<div class="project-models">${models}</div>` : ''}
+
+      <h3>3D models</h3>
+      ${models ? `<div class="project-models">${models}</div>`
+        : '<p class="muted">No models yet. Open a model from the Library and use <b>Add to project</b>.</p>'}
+
+      <h3>Parts</h3>
       ${p.parts.length ? `
       <div class="table-scroll">
         <table class="parts-table"><thead><tr>
           <th>Part</th><th>Type</th><th>Need</th><th>Own</th><th>To get</th><th>Unit cost</th><th></th><th></th>
         </tr></thead><tbody>${p.parts.map(part => renderPartRow(p.id, part)).join('')}</tbody></table>
-      </div>` : ''}
+      </div>` : '<p class="muted">No parts yet.</p>'}
       <div class="row part-add">
         <input class="new-part-name" list="supply-names" placeholder="Part name (e.g. ESP32, M3x8 screws, solder)">
         <select class="new-part-category">
@@ -720,20 +919,74 @@ function renderProject(p) {
     </div>`;
 }
 
-async function loadProjects() {
-  const onlyNeeding = $('#projects-needing-only').checked;
+let currentProjectId = null;
+
+async function openProjectPage(id, token) {
+  const body = $('#project-page-body');
+  body.innerHTML = '<p class="muted">Loading...</p>';
   const [res, spools, supplies] = await Promise.all([
-    fetch(`/api/projects?only_needing_parts=${onlyNeeding}`),
+    fetch(`/api/projects/${id}`),
     fetch('/api/filament').then(r => r.json()),
     fetch('/api/inventory').then(r => (r.ok ? r.json() : [])),
   ]);
+  if (token !== routeToken) return;
+  if (!res.ok) { body.innerHTML = '<p class="muted">Project not found.</p>'; return; }
   projectSpools = spools;
   projectSupplies = supplies;
   // typing a part name suggests (and, on pick, pre-fills type and cost from) the supplies you own
-  $('#supply-names').innerHTML = [...new Set(supplies.map(s => s.name))].map(n => `<option value="${esc(n)}"></option>`).join('');
-  const projects = await res.json();
+  $('#supply-names').innerHTML = [...new Set(supplies.map(i => i.name))].map(n => `<option value="${esc(n)}"></option>`).join('');
+  const project = await res.json();
+  if (token !== routeToken) return;
+  currentProjectId = id;
+  document.title = `${project.name} - Model Hub`;
+  body.innerHTML = renderProject(project);
+  loadFilamentSuggestions(body);
+}
+
+// after a change on the project page, redraw it; elsewhere refresh the list
+function refreshProjectViews() {
+  if (/^#\/project\/\d+$/.test(location.hash)) return openProjectPage(currentProjectId, routeToken);
+  return loadProjects();
+}
+
+// What the model's listing recommends (MakerWorld), matched to the spools you own
+async function loadFilamentSuggestions(root) {
+  const card = root.querySelector('.project-card');
+  if (!card || card.dataset.locked === '1') return;
+  const projectId = card.dataset.project;
+  for (const box of card.querySelectorAll('.project-model')) {
+    if (!box.dataset.sourceId) continue;
+    const res = await fetch(`/api/projects/${projectId}/models/${box.dataset.model}/filament-suggestions`);
+    if (!res.ok || !document.contains(box)) continue;
+    const rows = await res.json();
+    if (!rows.length) continue;
+    box.querySelector('.filament-suggest').innerHTML = '<div class="muted">The listing suggests:</div>' + rows.map(r => `
+      <div class="suggest-row" data-material="${esc(r.material)}" data-spool="${r.spool_id ?? ''}">
+        <span>${esc(r.label)}</span>
+        ${r.spool_id
+          ? (r.already_added ? '<span class="muted">already added</span>'
+            : `<button class="suggest-add">Use ${esc(r.spool_label)}</button>`)
+          : '<span class="muted">no matching spool in your Filament list</span>'}
+      </div>`).join('');
+  }
+}
+
+// the Projects tab: an overview, each card opens the project's page
+function renderProjectSummary(p) {
+  return `
+    <a class="project-summary-card" href="#/project/${p.id}">
+      <div class="psc-top"><b>${esc(p.name)}</b><span class="status-badge status-${esc(p.status)}">${esc(p.status)}</span></div>
+      ${p.description ? `<div class="muted psc-desc">${esc(p.description)}</div>` : ''}
+      <div class="project-summary">${p.models.length} model${p.models.length === 1 ? '' : 's'} &middot; ${projectSummaryText(p)}</div>
+    </a>`;
+}
+
+async function loadProjects() {
+  const onlyNeeding = $('#projects-needing-only').checked;
+  const res = await fetch(`/api/projects?only_needing_parts=${onlyNeeding}`);
+  const projects = res.ok ? await res.json() : [];
   $('#projects-list').innerHTML = projects.length
-    ? projects.map(renderProject).join('')
+    ? `<div class="project-summary-grid">${projects.map(renderProjectSummary).join('')}</div>`
     : `<p class="muted">${onlyNeeding ? 'No projects need parts right now.' : 'No projects yet. Add one above.'}</p>`;
   if (!$('#shopping-list').classList.contains('hidden')) loadShoppingList();
 }
@@ -866,10 +1119,11 @@ $('#supplies-table').addEventListener('click', async (e) => {
 $('#add-project-btn').addEventListener('click', async () => {
   const name = $('#new-project-name').value.trim();
   if (!name) return;
-  await jsonRequest('POST', '/api/projects', { name, description: $('#new-project-description').value });
+  const res = await jsonRequest('POST', '/api/projects', { name, description: $('#new-project-description').value });
   $('#new-project-name').value = '';
   $('#new-project-description').value = '';
-  loadProjects();
+  if (res.ok) location.hash = `#/project/${(await res.json()).id}`;   // straight to the new project's page
+  else loadProjects();
 });
 $('#projects-needing-only').addEventListener('change', loadProjects);
 $('#shopping-list-btn').addEventListener('click', () => {
@@ -878,7 +1132,7 @@ $('#shopping-list-btn').addEventListener('click', () => {
   else box.classList.add('hidden');
 });
 
-$('#projects-list').addEventListener('click', async (e) => {
+$('#project-page-body').addEventListener('click', async (e) => {
   const card = e.target.closest('.project-card');
   if (!card) return;
   const projectId = card.dataset.project;
@@ -887,6 +1141,18 @@ $('#projects-list').addEventListener('click', async (e) => {
   if (target.classList.contains('project-del')) {
     if (!confirm('Delete this project and its parts list?')) return;
     await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+    location.hash = '#/projects';
+    return;
+  } else if (target.classList.contains('suggest-add')) {
+    const row = target.closest('.suggest-row');
+    const box = target.closest('.project-model');
+    target.disabled = true;
+    target.textContent = 'Adding...';
+    const est = await fetch(`/api/library/models/${box.dataset.model}/estimate?material=${encodeURIComponent(row.dataset.material)}`)
+      .then(r => (r.ok ? r.json() : {})).catch(() => ({}));
+    const res = await jsonRequest('POST', `/api/projects/${projectId}/models/${box.dataset.model}/filament`,
+      { filament_id: row.dataset.spool, grams: est.estimated_grams ?? 0 });
+    if (!res.ok) { target.disabled = false; return alert((await res.json().catch(() => ({}))).detail || 'Could not add filament.'); }
   } else if (target.classList.contains('part-del')) {
     await fetch(`/api/projects/${projectId}/parts/${target.closest('tr').dataset.part}`, { method: 'DELETE' });
   } else if (target.classList.contains('model-unlink')) {
@@ -937,7 +1203,7 @@ $('#projects-list').addEventListener('click', async (e) => {
   } else {
     return;
   }
-  loadProjects();
+  refreshProjectViews();
 });
 
 // ---------- Import a listing's parts list into a project ----------
@@ -990,7 +1256,7 @@ async function addImportedParts(card, projectId) {
   }));
   const res = await jsonRequest('POST', `/api/projects/${projectId}/parts/bulk`, { parts });
   if (!res.ok) { card.querySelector('.parts-import-status').textContent = await sourceErrorText(res); return; }
-  loadProjects();
+  refreshProjectViews();
 }
 
 // Fills in filament grams from the print estimate, using the material of the
@@ -1015,17 +1281,28 @@ async function estimateProjectModel(projectId, box) {
     for (const row of lineRows) {
       await jsonRequest('PATCH', `/api/projects/${projectId}/filament/${row.dataset.line}`, { grams: each });
     }
-    loadProjects();
+    refreshProjectViews();
   } else {
     box.querySelector('.new-line-grams').value = est.estimated_grams;
     note.textContent = `~${est.estimated_grams}g (${est.source}) -- pick a spool and click Add filament.`;
   }
 }
 
-$('#projects-list').addEventListener('change', async (e) => {
+$('#project-page-body').addEventListener('change', async (e) => {
   const card = e.target.closest('.project-card');
   if (!card) return;
   const projectId = card.dataset.project;
+  if (e.target.classList.contains('project-field')) {
+    // name / description / notes save on their own, without redrawing the page under your cursor
+    const field = e.target.dataset.field;
+    const status = card.querySelector('.project-save-status');
+    const res = await jsonRequest('PATCH', `/api/projects/${projectId}`, { [field]: e.target.value });
+    if (!res.ok) { status.textContent = await sourceErrorText(res); refreshProjectViews(); return; }
+    status.textContent = 'Saved.';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+    if (field === 'name') document.title = `${e.target.value.trim()} - Model Hub`;
+    return;
+  }
   if (e.target.classList.contains('new-part-name')) {
     const owned = projectSupplies.find(s => s.name.toLowerCase() === e.target.value.trim().toLowerCase());
     if (owned) {
@@ -1039,19 +1316,19 @@ $('#projects-list').addEventListener('change', async (e) => {
   } else if (e.target.classList.contains('project-status')) {
     const res = await jsonRequest('PATCH', `/api/projects/${projectId}`, { status: e.target.value });
     if (!res.ok) alert((await res.json().catch(() => ({}))).detail || 'Could not change status.');
-    loadProjects();
+    refreshProjectViews();
   } else if (e.target.classList.contains('line-grams') || e.target.classList.contains('line-spool')) {
     const row = e.target.closest('.filament-line');
     const body = e.target.classList.contains('line-grams')
       ? { grams: e.target.value || 0 } : { filament_id: e.target.value };
     const res = await jsonRequest('PATCH', `/api/projects/${projectId}/filament/${row.dataset.line}`, body);
     if (!res.ok) alert((await res.json().catch(() => ({}))).detail || 'Could not update filament.');
-    loadProjects();
+    refreshProjectViews();
   } else if (e.target.classList.contains('part-owned')) {
     const res = await jsonRequest('PATCH', `/api/projects/${projectId}/parts/${e.target.closest('tr').dataset.part}`,
       { quantity_owned: e.target.value });
     if (!res.ok) alert('Quantity owned must be a whole number, 0 or more.');
-    loadProjects();
+    refreshProjectViews();
   }
 });
 
@@ -1073,7 +1350,41 @@ function matchLinkOptions() {
 async function loadMatches() {
   await refreshMatchStatus();
   await loadMatchQueue();
+  await loadAutoLinked();
 }
+
+async function loadAutoLinked() {
+  const res = await fetch('/api/source-match/auto-linked');
+  const items = res.ok ? await res.json() : [];
+  const box = $('#match-auto-list');
+  box.classList.toggle('hidden', !items.length);
+  box.innerHTML = items.length ? `
+    <h3>Linked automatically &mdash; please double-check</h3>
+    ${items.map(i => `
+      <div class="auto-row" data-model="${i.id}">
+        <a href="#/model/${i.id}"><b>${esc(i.filename)}</b></a>
+        <span class="muted">&rarr; ${esc(PROVIDER_LABELS[i.source_provider] || i.source_provider)}: ${esc(i.source_title || '')}${i.designer ? ` by ${esc(i.designer)}` : ''}</span>
+        ${safeHttpUrl(i.source_url) ? `<a href="${esc(i.source_url)}" target="_blank" rel="noopener noreferrer">listing</a>` : ''}
+        <button class="auto-ok">Looks right</button>
+        <button class="auto-unlink">Unlink</button>
+      </div>`).join('')}` : '';
+}
+
+$('#match-auto-list').addEventListener('click', async (e) => {
+  const row = e.target.closest('.auto-row');
+  if (!row) return;
+  const id = row.dataset.model;
+  if (e.target.classList.contains('auto-ok')) {
+    await fetch(`/api/source-match/models/${id}/confirm`, { method: 'POST' });
+  } else if (e.target.classList.contains('auto-unlink')) {
+    if (!confirm('Unlink this model from the listing and delete its saved pictures?')) return;
+    await fetch(`/api/library/models/${id}/source`, { method: 'DELETE' });
+  } else {
+    return;
+  }
+  loadAutoLinked();
+  refreshMatchStatus();
+});
 
 async function refreshMatchStatus() {
   const res = await fetch('/api/source-match/status');
@@ -1086,12 +1397,13 @@ async function refreshMatchStatus() {
   $('#match-start').disabled = job.running;
   $('#match-stop').classList.toggle('hidden', !job.running);
   $('#match-progress').textContent = job.running
-    ? `Searching... ${job.checked} of ${job.total} checked, ${job.with_candidates} with matches${job.errors ? `, ${job.errors} errors` : ''}`
-    : (job.message ? `${job.message}${job.checked ? ` (${job.checked} checked, ${job.with_candidates} with matches)` : ''}` : '');
+    ? `Searching... ${job.checked} of ${job.total} checked, ${job.with_candidates} with matches${job.auto_linked ? `, ${job.auto_linked} linked automatically` : ''}${job.errors ? `, ${job.errors} errors` : ''}`
+    : (job.message ? `${job.message}${job.checked ? ` (${job.checked} checked, ${job.with_candidates} with matches${job.auto_linked ? `, ${job.auto_linked} linked automatically` : ''})` : ''}` : '');
   if (job.running && !matchPoll) {
     matchPoll = setInterval(async () => {
       await refreshMatchStatus();
       await loadMatchQueue();
+      await loadAutoLinked();
     }, 2500);
   } else if (!job.running && matchPoll) {
     clearInterval(matchPoll);
@@ -1128,7 +1440,7 @@ function renderMatchRow(item) {
       <div class="match-model">
         <input type="checkbox" class="match-pick" aria-label="Link the best match for ${esc(m.filename)}">
         ${thumb}
-        <div class="match-name" title="${esc(m.filename)}">${esc(m.filename)}</div>
+        <a class="match-name" href="#/model/${m.id}" title="${esc(m.filename)}">${esc(m.filename)}</a>
         <button class="match-skip">None of these</button>
       </div>
       <div class="match-candidates">${item.candidates.map((c, i) => `
@@ -1152,7 +1464,9 @@ async function linkMatch(modelId, candidate) {
 }
 
 $('#match-start').addEventListener('click', async () => {
-  const res = await jsonRequest('POST', '/api/source-match/start', { recheck_none: $('#match-recheck').checked });
+  const auto = $('#match-auto').value;
+  const res = await jsonRequest('POST', '/api/source-match/start',
+    { recheck_none: $('#match-recheck').checked, auto_link_min: auto ? parseFloat(auto) : null });
   if (!res.ok) $('#match-progress').textContent = await sourceErrorText(res);
   matchOffset = 0;
   await refreshMatchStatus();
@@ -1317,6 +1631,7 @@ async function loadSettings() {
   $('#est-density').value = s.est_density || '';
   $('#est-infill').value = s.est_infill || '15';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
+  $('#thingiverse-token').value = s.thingiverse_token || '';
   const keyRes = await fetch('/api/settings/extension-key');
   $('#ext-api-key').value = keyRes.ok ? (await keyRes.json()).extension_api_key : '';
 }
@@ -1372,6 +1687,29 @@ $('#save-notify-btn').addEventListener('click', async () => {
   });
 });
 
+$('#save-thingiverse-btn').addEventListener('click', async () => {
+  const res = await jsonRequest('PUT', '/api/settings', { thingiverse_token: $('#thingiverse-token').value.trim() });
+  $('#thingiverse-status').textContent = res.ok ? 'Saved.' : 'Could not save.';
+  setTimeout(() => { $('#thingiverse-status').textContent = ''; }, 2500);
+});
+
+$('#nonmodel-check-btn').addEventListener('click', async () => {
+  const res = await fetch('/api/library/non-model-files');
+  if (!res.ok) return;
+  const data = await res.json();
+  $('#nonmodel-remove-btn').classList.toggle('hidden', data.count === 0);
+  $('#nonmodel-status').textContent = data.count
+    ? `${data.count} entr${data.count === 1 ? 'y' : 'ies'} for other file types (${Object.entries(data.by_extension).map(([k, v]) => `${k} x${v}`).join(', ')}). Examples: ${data.examples.join(', ')}`
+    : 'Nothing to clean up: the index only has model files.';
+});
+$('#nonmodel-remove-btn').addEventListener('click', async () => {
+  if (!confirm('Remove these entries from the index? The files themselves are not touched.')) return;
+  const res = await fetch('/api/library/non-model-files/remove', { method: 'POST' });
+  const data = res.ok ? await res.json() : { removed: 0 };
+  $('#nonmodel-remove-btn').classList.add('hidden');
+  $('#nonmodel-status').textContent = `Removed ${data.removed} entr${data.removed === 1 ? 'y' : 'ies'} from the index.`;
+});
+
 $('#regen-key-btn').addEventListener('click', async () => {
   const res = await fetch('/api/settings/regenerate-extension-key', { method: 'POST' });
   const data = await res.json();
@@ -1410,7 +1748,7 @@ async function boot() {
   }
   const settings = await probe.json();
   viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
-  loadModels();
+  route();
 }
 
 function showAuthOverlay(mode) {
@@ -1445,7 +1783,7 @@ function showAuthOverlay(mode) {
       const settings = await settingsRes.json();
       viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
     }
-    loadModels();
+    route();
   };
 }
 

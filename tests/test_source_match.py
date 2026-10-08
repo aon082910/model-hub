@@ -23,11 +23,14 @@ class SearchSites(FakeSites):
         super().__init__()
         self.searches = []
         self.gearbox_only_on = None      # e.g. 'printables': the one site that knows 'gearbox'
+        self.detail_fails = False        # listing detail lookups fail (the search still works)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
         if host == "api.printables.com":
             body = json.loads(request.content)
+            if "searchPrints2" not in body["query"] and self.detail_fails:
+                return httpx.Response(503)
             if "searchPrints2" in body["query"]:
                 term = body["variables"]["q"].lower()
                 self.searches.append(("printables", term))
@@ -40,6 +43,9 @@ class SearchSites(FakeSites):
                             "user": {"publicUsername": "Gear Guy"}, "license": {"abbreviation": "CC-BY"}, "image": None}
                     return httpx.Response(200, json={"data": {"result": {"items": [item]}}})
                 return httpx.Response(200, json={"data": {"result": {"items": []}}})
+        if host == "api.sketchfab.com" and request.url.path.endswith("/search"):
+            self.searches.append(("sketchfab", request.url.params["q"].lower()))
+            return httpx.Response(self.sketchfab_status, json={"results": []})
         if host == "api.bambulab.com" and "/search-service/" in str(request.url):
             term = request.url.params["keyword"].lower()
             self.searches.append(("makerworld", term))
@@ -71,12 +77,12 @@ def _model(c, filename, n):
     return r.json()["id"]
 
 
-def _run(*model_ids, recheck=False):
+def _run(*model_ids, recheck=False, auto=None):
     """Run the job over just these models (the shared test database holds hundreds
     of others), or over everything when none are given."""
     # what start_job does before handing over to the thread
-    jobs._state.update(running=True, total=0, checked=0, with_candidates=0, no_match=0, errors=0, message="")
-    jobs.run_job(recheck_none=recheck, only_ids=list(model_ids) or None)
+    jobs._state.update(running=True, total=0, checked=0, with_candidates=0, no_match=0, auto_linked=0, errors=0, message="")
+    jobs.run_job(recheck_none=recheck, only_ids=list(model_ids) or None, auto_link_min=auto)
     return jobs.job_status()
 
 
@@ -214,6 +220,7 @@ def test_site_down_with_no_results_is_retried_not_recorded_as_no_match(authed, s
 def test_job_stops_when_rate_limited(authed, sites):
     sites.printables_down = True
     sites.makerworld_status = 429
+    sites.sketchfab_status = 429
     model = _model(authed, "Benchy_limited.stl", 81)
     status = _run(model)
     assert "rate limiting" in status["message"] and status["running"] is False
@@ -223,6 +230,7 @@ def test_job_stops_when_rate_limited(authed, sites):
 def test_job_stops_after_repeated_failures(authed, sites):
     sites.printables_down = True
     sites.makerworld_status = 500
+    sites.sketchfab_status = 500
     ids = [_model(authed, f"Benchy_fail{i}.stl", 90 + i) for i in range(jobs.MAX_CONSECUTIVE_FAILURES + 2)]
     status = _run(*ids)
     assert "keep failing" in status["message"]
@@ -287,3 +295,65 @@ def test_summary_counts(authed, sites):
     assert s["unchecked"] == s["unlinked"] - s["waiting_review"] - s["no_match"] - s["skipped"]
     assert status["job"]["running"] is False
     assert PRINTABLES_PRINT                                  # (imported fixture, kept for the shared fake)
+
+
+# ---------- auto-linking clear winners ----------
+
+def test_clear_winner_rules():
+    ranked = lambda *scores: [{"score": s} for s in scores]
+    assert jobs.clear_winner(ranked(0.95, 0.60), 0.9) is True
+    assert jobs.clear_winner(ranked(0.95), 0.9) is True                  # a lone strong match
+    assert jobs.clear_winner(ranked(0.95, 0.90), 0.9) is False           # runner-up too close: ambiguous
+    assert jobs.clear_winner(ranked(0.85, 0.10), 0.5) is False           # never below the 90% floor, whatever is asked
+    assert jobs.clear_winner(ranked(0.92, 0.50), 0.95) is False          # under the asked-for threshold
+    assert jobs.clear_winner(ranked(0.99, 0.50), None) is False         # auto-link is opt-in
+    assert jobs.clear_winner([], 0.9) is False
+
+
+def test_auto_link_links_only_clear_winners_and_marks_them(authed, sites):
+    winner = _model(authed, "Benchy_v2.stl", 131)
+    status = _run(winner, auto=0.9)
+    assert status["auto_linked"] == 1 and status["with_candidates"] == 0
+    m = authed.get(f"/api/library/models/{winner}").json()
+    assert m["source_provider"] == "printables" and m["source_linked_by"] == "auto"
+    assert m["designer"] == "Prusa Research" and json.loads(m["source_images"])
+    assert winner not in _queue(authed)                                   # decided, so nothing left to review
+    assert _state(winner) == (None, 0)
+
+    listed = authed.get("/api/source-match/auto-linked").json()
+    entry = next(e for e in listed if e["id"] == winner)
+    assert entry["source_provider"] == "printables" and entry["source_title"] == "3D BENCHY"
+
+    assert authed.post(f"/api/source-match/models/{winner}/confirm").json() == {"status": "confirmed"}
+    assert winner not in {e["id"] for e in authed.get("/api/source-match/auto-linked").json()}
+    assert authed.get(f"/api/library/models/{winner}").json()["source_linked_by"] == "manual"
+    assert authed.post(f"/api/source-match/models/{winner}/confirm").status_code == 404      # no longer auto-linked
+
+
+def test_without_the_option_nothing_is_auto_linked(authed, sites):
+    model = _model(authed, "Benchy_manual_only.stl", 132)
+    status = _run(model)
+    assert status["auto_linked"] == 0 and status["with_candidates"] == 1
+    assert authed.get(f"/api/library/models/{model}").json()["source_provider"] is None
+    assert model in _queue(authed)
+
+
+def test_auto_linked_model_can_be_unlinked(authed, sites):
+    model = _model(authed, "Benchy_v3 (2).stl", 133)
+    _run(model, auto=0.9)
+    r = authed.delete(f"/api/library/models/{model}/source").json()
+    assert r["source_provider"] is None and r["source_linked_by"] is None
+    assert model not in {e["id"] for e in authed.get("/api/source-match/auto-linked").json()}
+
+
+def test_auto_link_failure_keeps_the_candidates_for_review(authed, sites):
+    model = _model(authed, "Benchy_v2 (3).stl", 134)
+    sites.detail_fails = True
+    _run(model, auto=0.9)
+    assert authed.get(f"/api/library/models/{model}").json()["source_provider"] is None
+    assert _state(model)[0] == "candidates"                              # fell back to asking a person
+
+
+def test_start_endpoint_validates_the_auto_link_threshold(authed, sites):
+    for bad in (0.5, 1.5, "lots", -1):
+        assert authed.post("/api/source-match/start", json={"auto_link_min": bad}).status_code == 400, bad

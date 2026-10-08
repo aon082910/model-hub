@@ -24,8 +24,8 @@ weight estimates, projects that track the electronics/parts/supplies each
 build needs (with an exportable shopping list and a Supplies page for what you
 already own) and subtract the filament used when a project is marked printed,
 matching of your models (one by one or your whole library) to their Printables/MakerWorld
-listings (pictures, designer, license, tags, parts lists), a browser extension for one-click import, and
-optional webhook notifications (ntfy/Discord/Slack).
+listings (pictures, designer, license, tags, parts lists), a page for every model and project with
+PDF export, a browser extension for one-click import, and optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8420]/</WebUI>
@@ -40,6 +40,23 @@ optional webhook notifications (ntfy/Discord/Slack).
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.0.0
+Every model and every project now has its own page instead of a popup (the
+back button works, and each page has an address you can bookmark). The model
+page shows the 3D view, details, editable tags, notes, its online listing,
+and the projects and collections it belongs to. The project page has an
+editable name, description and notes, its models with pictures and filament,
+the parts list, and an Export PDF button that makes a one-file summary of the
+whole project. The library now only lists and imports model files (.stl .3mf
+.obj .step .stp .fbx): zips, notes and other files in the library folder are
+ignored, importing a zip keeps just the models inside, and Settings has a
+cleanup for older entries. Model matching now also searches Sketchfab, and
+Thingiverse once you paste a free access token in Settings. The matching job
+can optionally link clear winners automatically (listed for a second look),
+and a project can use the filament a MakerWorld listing recommends, matched to
+your own spools. No new settings are required; new tables and columns are
+added automatically on first start.
+
 ### 1.9.0
 New Matches tab: a background job searches Printables and MakerWorld for
 every model in your library that is not linked yet and builds a review queue

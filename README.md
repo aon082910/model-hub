@@ -72,15 +72,18 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | AI auto-tagging, local or API | Done — pluggable provider (`app/ai/`), pausable/resumable batch job, rough cost estimate for paid API mode. Batch runs checkpoint (session release + GC) every 20 models, provider responses are streamed with a hard size cap so one pathological response can't OOM the container, and the job checks the container's own cgroup memory usage before each model and stops itself cleanly if it's running critically high |
 | Semantic search | Done — embeddings stored per-model, cosine similarity search |
 | Slicer hand-off | Implemented as network-path + direct-download hand-off (`app/routers/slicer.py`) — a server container cannot launch an app on your desktop, so this exposes the same share path your slicer can watch/import from, rather than faking a "send to slicer" button |
-| Metadata/license/designer tracking | Done — fields on each model, editable in the viewer |
+| Metadata/license/designer tracking | Done — fields on each model, editable on the model's page |
 | Filament inventory | Done — CRUD + automatic consumption tracking (deducted when a print queue item is marked "done", see [Print estimates](#print-time--filament-estimates)) |
 | Print queue | Done — ordered queue with status, filament assignment, and estimated grams/time per job |
 | Projects & parts tracking | Done — group library models into a project and keep its parts list (electronics / parts / supplies) with quantity needed vs. owned, unit cost and a purchase link. The **Projects** tab can filter to projects still needing parts, and a **Shopping List** rolls up every missing part across unfinished projects with an estimated total. Add a model to a project from its viewer. Each model in a project can be given one or more filament spools with grams per spool (the **Estimate** button fills grams from the print estimate); when the project is set to **printed** (or **done**) those grams are subtracted from filament inventory exactly once, and moving the project back to planning/building restores them |
 | Shopping list export | Done — the Projects tab's **Shopping List** can be downloaded as CSV or plain text, or copied to the clipboard (for a notes app or your phone). **Combine identical parts across projects** merges the same part from different projects into one line; each line also shows how many you already have in Supplies |
 | Supplies on hand | Done — a **Supplies** tab for the electronics, parts and supplies you own: quantity, a low-stock threshold (flagged and filterable), location (bin/drawer), unit cost, search, and CSV export. Typing a project part name suggests items from here and pre-fills its type and cost |
-| Match models to Printables / MakerWorld | Done — see [Matching models to site listings](#matching-models-to-site-listings) below |
+| Match models to online listings | Done — Printables, MakerWorld and Sketchfab (no account) plus Thingiverse (access token in Settings); see [Matching models to site listings](#matching-models-to-site-listings) below |
 | Match your whole library | Done — the **Matches** tab runs a background job that searches Printables and MakerWorld for every model that isn't linked yet and keeps the closest listings as a review queue; you link, tick-and-link in bulk, or skip. See [Matching models to site listings](#matching-models-to-site-listings) |
 | Import a listing's parts into a project | Done — paste a MakerWorld link (or use **Import parts** on a model linked to one) to get the listing's store items and parts list as editable rows, then add the ticked ones to the project in one go |
+| Model pages | Done — every model has its own page (`#/model/<id>`): a big 3D view, details (size, dimensions, volume, watertight), editable tags, designer / license / notes, the listing it is linked to, the projects and collections it is in, print estimate and queue, and any copies of the same file |
+| Project pages and PDF export | Done — every project has its own page (`#/project/<id>`) with editable name, description and notes, its models (with pictures and filament), and its parts list. **Export PDF** makes a one-file summary: description, notes, models with pictures, designer / license / listing links, filament and a parts list with what is still to buy |
+| Model files only | Done — the library indexes and imports only model files (.stl .3mf .obj .step .stp .fbx). Zips, notes and other files in the library folder are ignored; importing a .zip extracts just the models inside. Settings has a cleanup for older entries |
 | Browser extension for Printables/MakerWorld import | Done — `browser-extension/` (Manifest V3), see [Browser extension](#browser-extension) below |
 | Login/auth | Done — see [Auth](#auth) below |
 | Print time / filament weight estimate | Done — see [Print estimates](#print-time--filament-estimates) below |
@@ -98,12 +101,17 @@ Models without a rendered thumbnail (STEP, FBX...) show the listing's first pict
 Models imported through the [browser extension](#browser-extension) from a Printables or MakerWorld page
 are matched automatically from the page address, so they arrive with their details filled in.
 
-- **How it works**: Printables is read through its public GraphQL API; MakerWorld through the JSON API behind
-  `api.bambulab.com` (makerworld.com itself blocks server-side page requests). Both are unofficial and can
-  change without notice, so a failure is reported in the UI instead of breaking anything, and one site being
-  down never hides the other's results. Thingiverse is not supported (it needs an API key).
-- **Safe by construction**: only those two sites are contacted, and pictures are only downloaded from their
-  own image hosts, so a pasted link can't make the server fetch anything else on your network.
+- **Sites**: Printables is read through its public GraphQL API; MakerWorld through the JSON API behind
+  `api.bambulab.com` (makerworld.com itself blocks server-side page requests); Sketchfab through its public search
+  API (only downloadable models are searched). **Thingiverse** is searched when you paste a free access token into
+  **Settings → Model Sites** (create an app at thingiverse.com/developers); the token stays on the server, is sent in
+  a request header rather than a URL, and is never shown again. The Printables, MakerWorld and Sketchfab endpoints are
+  unofficial or public-but-undocumented, so a failure is reported in the UI instead of breaking anything, and one
+  site being down never hides the other's results.
+- **Not included**: Thangs (its API is behind a bot challenge), and MyMiniFactory and Cults3D (both need an
+  approved API key and account). They can be added the same way if you get keys.
+- **Safe by construction**: only those sites' API and image hosts are contacted, so a pasted link can't make the
+  server fetch anything else on your network.
 - **Pictures are shrunk** to preview-sized JPEGs (at most 1200 px, up to 6 per model, stored under
   `/config/source_images/`), and oversized images are refused before they are decoded.
 - Matching is by name, so check the match before linking; a wrong link is one click to undo.
@@ -116,6 +124,10 @@ better) as candidates. Nothing is linked by the job itself: you review the queue
 
 - **Link** one candidate, or tick rows (**Tick all 90%+** helps) and **Link ticked** to take each row's best
   match. The pictures / designer-license / tags options above the queue apply to every link you make.
+- **Link clear winners automatically** (off by default) links, without asking, any model whose best match scores
+  at least 90 / 95 / 98% *and* is at least 10 points ahead of the runner-up, so look-alike copies of a popular model
+  are still left for you. Those models are listed under **Linked automatically** for a second look
+  (**Looks right** or **Unlink**), and carry an *auto-linked* badge on their page.
 - **None of these** marks a model as skipped so it stays out of the queue and future runs.
 - The job goes easy on the sites (about one search pair per second), stops by itself if a site rate limits or
   keeps failing, and can be stopped any time. It remembers what it has checked, so running it again only looks
@@ -130,7 +142,14 @@ list: Bambu Lab store items (with link and price) and the designer's own parts l
 Each row comes with a guessed type (electronics / parts / supplies) and can be edited before adding; parts already
 in the project are flagged and unticked. Filament entries are skipped, since filament is tracked separately.
 A store item's quantity is how the listing counts it, not necessarily packs to buy, so check pack sizes in the name.
-Printables listings have no machine-readable parts list.
+Only MakerWorld listings have a machine-readable parts list.
+
+### Filament suggestions
+
+A MakerWorld listing also says which filament it was designed for (e.g. PLA Basic, Gray). On a project page, a model
+linked to such a listing shows **The listing suggests:** with each suggestion matched to one of your own spools (same
+material, same colour name; "grey" and "gray" count as the same). **Use <spool>** adds a filament line for that spool,
+with the grams filled from the print estimate. Suggestions with no matching spool say so.
 
 ## Auth
 
@@ -198,7 +217,7 @@ server over the network.
 **Use:** open a model page on printables.com or makerworld.com. A **📦 Send to Model Hub**
 button appears bottom-right. It reads the page's `schema.org` JSON-LD (title/author/license —
 the same structured data search engines use, which is far less brittle than scraping CSS
-classes) and scans the page for direct `.stl/.3mf/.step/.obj/.fbx/.zip` links, lets you
+classes) and scans the page for direct `.stl/.3mf/.step/.obj/.fbx/.zip` links (a `.zip` is opened on the server and only the model files inside are kept), lets you
 pick which files and edit designer/license, then downloads each file and POSTs it to
 `/api/library/import` on your server, which files it under `imported/` in your library and
 tags it with the source URL/designer/license automatically.
@@ -220,6 +239,8 @@ gated behind JS or auth you'll need to open the direct file URL in a tab first.
 - **Print estimates**: `app/estimate.py` — volumetric heuristic by default, or exact numbers via an optional external slicer CLI (`SLICER_CLI_PATH`)
 - **Notifications**: `app/notify.py` — generic webhook POST, best-effort
 - **Migrations**: `app/db.py` auto-adds new columns to existing SQLite tables on startup (no Alembic; fine for this project's size, but note it if you fork it)
+- **Pages**: hash routes (`#/library`, `#/projects`, `#/model/<id>`, `#/project/<id>` ...), so every model and project has an address that survives a reload and works with the back button. The 3D view's WebGL context and GPU memory are released when you leave a model page.
+- **PDF export**: `app/project_pdf.py` (ReportLab), using the DejaVu fonts that ship with matplotlib so accented and non-Latin text prints correctly.
 - **Cache busting**: `index.html` is served with `no-cache`, and its own scripts/stylesheet get a `?v=<content hash>` token computed at startup, so a new release always loads fresh JS/CSS; everything under `/assets` is sent `no-cache` so browsers revalidate (cheap 304) rather than reuse stale copies
 - **Frontend**: vanilla JS + Three.js, no build step (`app/static/`) — mobile-responsive down to phone widths (scrollable tab bar, stacked toolbars/forms, full-screen viewer modal). The Library view is paginated (`app/static/library-controls.js`), with search/tag filtering applied at the database-query level so it covers the whole indexed library, not just the current page
 

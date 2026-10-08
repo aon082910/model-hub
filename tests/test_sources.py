@@ -55,6 +55,39 @@ MAKERWORLD_SEARCH = {"total": 1, "hits": [{
 }]}
 
 
+SKETCHFAB_UID = "a4d9ebd192ea4fea9c19a8ac45e7818c"
+SKETCHFAB_THUMBS = {"images": [
+    {"url": "https://media.sketchfab.com/models/x/thumbnails/a/1920.jpeg", "width": 1920, "height": 1080},
+    {"url": "https://media.sketchfab.com/models/x/thumbnails/b/512.jpeg", "width": 512, "height": 288},
+    {"url": "https://media.sketchfab.com/models/x/thumbnails/c/256.jpeg", "width": 256, "height": 144},
+]}
+SKETCHFAB_MODEL = {
+    "uid": SKETCHFAB_UID, "name": "3D Benchy", "description": "<p>Torture test</p>",
+    "viewerUrl": f"https://sketchfab.com/3d-models/3d-benchy-{SKETCHFAB_UID}",
+    "license": {"label": "CC Attribution", "fullName": "Creative Commons Attribution"},
+    "user": {"displayName": "Jhon", "username": "jhon"}, "tags": [{"name": "benchy"}, {"name": "boat"}],
+    "categories": [{"name": "Cars & Vehicles"}], "thumbnails": SKETCHFAB_THUMBS, "likeCount": 3, "downloadCount": 9,
+}
+SKETCHFAB_SEARCH = {"results": [SKETCHFAB_MODEL, {"uid": "f" * 32, "name": "Other thing", "thumbnails": SKETCHFAB_THUMBS}]}
+
+THINGIVERSE_TOKEN = "tv-test-token"
+THINGIVERSE_THING = {
+    "id": 763622, "name": "#3DBenchy", "public_url": "https://www.thingiverse.com/thing:763622",
+    "creator": {"name": "CreativeTools"}, "license": "Creative Commons - Attribution - No Derivatives",
+    "description": "plain description", "description_html": "<p>A <b>tough</b> boat</p>", "instructions": "print it",
+    "like_count": 5, "download_count": 50, "thumbnail": "https://cdn.thingiverse.com/thumb.jpg",
+}
+THINGIVERSE_IMAGES = [
+    {"id": 1, "url": "https://cdn.thingiverse.com/img1_raw.jpg", "sizes": [
+        {"type": "thumb", "size": "small", "url": "https://cdn.thingiverse.com/img1_small.jpg"},
+        {"type": "display", "size": "large", "url": "https://cdn.thingiverse.com/img1_large.jpg"}]},
+    {"id": 2, "url": "https://cdn.thingiverse.com/img2.jpg", "sizes": []},
+]
+THINGIVERSE_SEARCH = {"total": 1, "hits": [{
+    "id": 763622, "name": "#3DBenchy", "public_url": "https://www.thingiverse.com/thing:763622",
+    "creator": {"name": "CreativeTools"}, "thumbnail": "https://cdn.thingiverse.com/thumb.jpg"}]}
+
+
 class FakeSites:
     """Records calls and answers like the two sites; flip the flags to break one."""
 
@@ -62,6 +95,9 @@ class FakeSites:
         self.calls = []
         self.printables_down = False
         self.makerworld_status = 200
+        self.sketchfab_status = 200
+        self.thingiverse_status = 200
+        self.thingiverse_requests = []          # (path, authorization header, query string)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -78,6 +114,24 @@ class FakeSites:
             if "/search-service/" in url:
                 return httpx.Response(200, json=MAKERWORLD_SEARCH)
             return httpx.Response(200, json=MAKERWORLD_DESIGN)
+        if host == "api.sketchfab.com":
+            if self.sketchfab_status != 200:
+                return httpx.Response(self.sketchfab_status)
+            return httpx.Response(200, json=SKETCHFAB_SEARCH if request.url.path.endswith("/search") else SKETCHFAB_MODEL)
+        if host == "api.thingiverse.com":
+            self.thingiverse_requests.append((request.url.path, request.headers.get("authorization"), request.url.query.decode()))
+            if self.thingiverse_status != 200:
+                return httpx.Response(self.thingiverse_status)
+            if request.headers.get("authorization") != f"Bearer {THINGIVERSE_TOKEN}":
+                return httpx.Response(401, json={"error": "invalid"})
+            path = request.url.path
+            if path.startswith("/search/"):
+                return httpx.Response(200, json=THINGIVERSE_SEARCH)
+            if path.endswith("/images"):
+                return httpx.Response(200, json=THINGIVERSE_IMAGES)
+            if path.endswith("/tags"):
+                return httpx.Response(200, json=[{"name": "Benchy"}, {"name": "calibration"}])
+            return httpx.Response(200, json=THINGIVERSE_THING)
         if host in sources.IMAGE_HOSTS:
             return httpx.Response(200, content=JPG if url.endswith(".jpg") else PNG)
         raise AssertionError(f"unexpected request to {url}")
@@ -97,8 +151,11 @@ def test_parse_url():
     assert sources.parse_url("https://www.printables.com/de/model/3161-x") == ("printables", "3161")
     assert sources.parse_url("https://makerworld.com/en/models/40146-benchy#profileId-1") == ("makerworld", "40146")
     assert sources.parse_url("https://makerworld.com/models/40146") == ("makerworld", "40146")
+    assert sources.parse_url(f"https://sketchfab.com/3d-models/3d-benchy-{SKETCHFAB_UID}") == ("sketchfab", SKETCHFAB_UID)
+    assert sources.parse_url(f"https://sketchfab.com/models/{SKETCHFAB_UID.upper()}") == ("sketchfab", SKETCHFAB_UID)
+    assert sources.parse_url("https://www.thingiverse.com/thing:763622/files") == ("thingiverse", "763622")
     for bad in ("https://evil.com/?u=https://www.printables.com/model/1", "http://localhost/model/3",
-                "https://www.thingiverse.com/thing:763622", "", "printables.com/model/3"):
+                "https://sketchfab.com/3d-models/not-a-uid", "https://thingiverse.com/thing:abc", "", "printables.com/model/3"):
         assert sources.parse_url(bad) is None, bad
 
 
@@ -152,7 +209,7 @@ def test_fetch_details_rejects_bad_ids(sites):
 def test_search_one_site_down_keeps_the_other(sites):
     sites.printables_down = True
     found = sources.search("benchy")
-    assert [r["provider"] for r in found["results"]] == ["makerworld"]
+    assert {r["provider"] for r in found["results"]} == {"makerworld", "sketchfab"}
     assert "printables" in found["errors"]
 
 
@@ -202,7 +259,7 @@ def _import_model(c, filename):
 
 def test_search_and_lookup_endpoints(authed, sites):
     r = authed.get("/api/sources/search?q=benchy").json()
-    assert {x["provider"] for x in r["results"]} == {"printables", "makerworld"}
+    assert {x["provider"] for x in r["results"]} == {"printables", "makerworld", "sketchfab"}   # Thingiverse needs a token
     assert r["results"][0]["score"] >= r["results"][-1]["score"]
     assert authed.get("/api/sources/search?q=benchy&provider=makerworld").json()["results"][0]["provider"] == "makerworld"
     assert authed.get("/api/sources/search?q=%20").status_code == 400
@@ -418,3 +475,117 @@ def test_printables_search_thumbnails_are_small_versions(sites):
     assert thumb(None) is None
     found = sources.search("benchy", providers=("printables",))
     assert "/thumbs/inside/320x320/" in found["results"][0]["thumbnail"]
+
+
+
+# ---------- Sketchfab ----------
+
+def test_valid_source_ids():
+    assert sources.valid_source_id("printables", "3161") and not sources.valid_source_id("printables", "abc")
+    assert sources.valid_source_id("sketchfab", SKETCHFAB_UID) and not sources.valid_source_id("sketchfab", "3161")
+    assert not sources.valid_source_id("sketchfab", SKETCHFAB_UID + "0")
+    assert not sources.valid_source_id("nope", "1") and not sources.valid_source_id("printables", None)
+
+
+def test_sketchfab_details_and_search(sites):
+    d = sources.fetch_details("sketchfab", SKETCHFAB_UID)
+    assert (d["title"], d["designer"], d["license"]) == ("3D Benchy", "Jhon", "CC Attribution")
+    assert d["description"] == "Torture test" and d["tags"] == ["benchy", "boat"] and d["category"] == "Cars & Vehicles"
+    assert d["images"] == ["https://media.sketchfab.com/models/x/thumbnails/a/1920.jpeg"]      # the large one only
+    assert d["url"].endswith(SKETCHFAB_UID)
+
+    found = sources.search("benchy", providers=("sketchfab",))["results"]
+    assert [r["source_id"] for r in found] == [SKETCHFAB_UID, "f" * 32]
+    assert found[0]["thumbnail"].endswith("/256.jpeg")                                            # closest to 320px wide
+    sites.sketchfab_status = 500
+    assert "sketchfab" in sources.search("benchy", providers=("sketchfab",))["errors"]
+
+
+# ---------- Thingiverse ----------
+
+def test_thingiverse_needs_a_token(sites):
+    assert "thingiverse" not in sources.available_providers({})
+    assert "thingiverse" in sources.available_providers({"thingiverse": THINGIVERSE_TOKEN})
+    with pytest.raises(sources.SourceError, match="access token"):
+        sources.fetch_details("thingiverse", "763622")
+    found = sources.search("benchy", providers=("thingiverse",))
+    assert "access token" in found["errors"]["thingiverse"]
+    assert sites.thingiverse_requests == []                       # nothing was sent without a token
+
+
+def test_thingiverse_details_and_search(sites):
+    creds = {"thingiverse": THINGIVERSE_TOKEN}
+    d = sources.fetch_details("thingiverse", "763622", creds)
+    assert (d["title"], d["designer"]) == ("#3DBenchy", "CreativeTools")
+    assert d["license"] == "Creative Commons - Attribution - No Derivatives"
+    assert d["description"] == "A tough boat\n\nprint it"                          # html version preferred, instructions appended
+    assert d["tags"] == ["Benchy", "calibration"]
+    assert d["images"] == ["https://cdn.thingiverse.com/img1_large.jpg", "https://cdn.thingiverse.com/img2.jpg"]
+    found = sources.search("3d benchy", providers=("thingiverse",), credentials=creds)["results"]
+    assert found[0]["source_id"] == "763622" and found[0]["designer"] == "CreativeTools"
+    # the token travels in a header, never in the URL
+    assert all(auth == f"Bearer {THINGIVERSE_TOKEN}" for _, auth, _ in sites.thingiverse_requests)
+    assert not any(THINGIVERSE_TOKEN in query or THINGIVERSE_TOKEN in path for path, _, query in sites.thingiverse_requests)
+    assert any(path == "/search/3d benchy" for path, _, _ in sites.thingiverse_requests)   # httpx shows the decoded path
+
+
+def test_thingiverse_errors_never_leak_the_token(sites):
+    creds = {"thingiverse": "wrong-token-value"}
+    with pytest.raises(sources.SourceError, match="rejected the access token") as exc:
+        sources.fetch_details("thingiverse", "763622", creds)
+    assert "wrong-token-value" not in str(exc.value)
+    sites.thingiverse_status = 429
+    with pytest.raises(sources.SourceError, match="rate limiting"):
+        sources.fetch_details("thingiverse", "763622", {"thingiverse": THINGIVERSE_TOKEN})
+    sites.thingiverse_status = 404
+    with pytest.raises(sources.SourceError, match="not found"):
+        sources.fetch_details("thingiverse", "763622", {"thingiverse": THINGIVERSE_TOKEN})
+
+
+def test_thingiverse_token_is_a_masked_setting_and_enables_the_provider(authed, sites):
+    providers = {p["id"]: p for p in authed.get("/api/sources/providers").json()}
+    assert providers["thingiverse"] == {"id": "thingiverse", "label": "Thingiverse", "needs_token": True, "enabled": False}
+    assert providers["sketchfab"]["enabled"] is True and providers["sketchfab"]["needs_token"] is False
+
+    assert authed.put("/api/settings", json={"thingiverse_token": THINGIVERSE_TOKEN}).status_code == 200
+    try:
+        assert authed.get("/api/settings").json()["thingiverse_token"] == "********"       # never echoed back
+        assert {p["id"]: p["enabled"] for p in authed.get("/api/sources/providers").json()}["thingiverse"] is True
+        found = authed.get("/api/sources/search", params={"q": "benchy"}).json()
+        assert "thingiverse" in {r["provider"] for r in found["results"]}
+        d = authed.get("/api/sources/lookup", params={"url": "https://www.thingiverse.com/thing:763622"}).json()
+        assert d["title"] == "#3DBenchy"
+        # saving the masked value back must not overwrite the real token
+        authed.put("/api/settings", json={"thingiverse_token": "********"})
+        assert "thingiverse" in {r["provider"] for r in authed.get("/api/sources/search", params={"q": "benchy"}).json()["results"]}
+    finally:
+        authed.put("/api/settings", json={"thingiverse_token": ""})
+    assert {p["id"]: p["enabled"] for p in authed.get("/api/sources/providers").json()}["thingiverse"] is False
+
+
+def test_link_a_sketchfab_listing(authed, sites):
+    model = _import_model(authed, "sketchfab-link.stl")
+    r = authed.post(f"/api/library/models/{model['id']}/source", json={"url": f"https://sketchfab.com/3d-models/x-{SKETCHFAB_UID}"})
+    assert r.status_code == 200, r.text
+    m = r.json()
+    assert (m["source_provider"], m["source_id"], m["designer"], m["license"]) == ("sketchfab", SKETCHFAB_UID, "Jhon", "CC Attribution")
+    assert json.loads(m["source_images"]) == ["1.jpg"]
+    assert m["source_linked_by"] == "manual"
+    bad = authed.post(f"/api/library/models/{model['id']}/source", json={"provider": "sketchfab", "source_id": "12345"})
+    assert bad.status_code == 400
+
+
+# ---------- filament a MakerWorld listing suggests ----------
+
+def test_makerworld_filaments():
+    ext = {"boms_of_filaments": [
+        {"parentTitle": "PLA Basic", "title": "Gray (10103) / Refill / 1kg"},
+        {"displayParentTitle": "PETG HF", "displayTitle": "Black (33102) / With spool / 1kg"},
+        {"parentTitle": "PLA Basic", "title": "Gray (10103) / With spool / 1kg"},       # same colour again: listed once
+        {"parentTitle": "", "title": "ignored"},
+    ]}
+    assert sources.makerworld_filaments(ext) == [
+        {"material": "PLA", "brand": "Bambu Lab", "color": "Gray", "code": "10103", "label": "PLA Basic Gray"},
+        {"material": "PETG", "brand": "Bambu Lab", "color": "Black", "code": "33102", "label": "PETG HF Black"},
+    ]
+    assert sources.makerworld_filaments({}) == []

@@ -1,11 +1,14 @@
 import csv
 import io
+import json
+import re
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel import Session, select
 from app.db import get_session
+from app.filament_match import match_spool, spool_label
 from app.models import Filament, InventoryItem, Model3D, Project, ProjectModelFilament, ProjectModelLink, ProjectPart
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -145,6 +148,8 @@ def _project_json(session: Session, project: Project) -> dict:
         models = [
             {"id": m.id, "filename": m.filename, "thumbnail_path": m.thumbnail_path,
              "extension": m.extension, "source_provider": m.source_provider, "source_id": m.source_id,
+             "source_url": m.source_url, "source_title": m.source_title, "designer": m.designer, "license": m.license,
+             "source_images": json.loads(m.source_images or "[]"),
              "filament": lines_by_model.get(m.id, []),
              "filament_grams": round(sum(l["grams"] for l in lines_by_model.get(m.id, [])), 2)}
             for m in session.exec(select(Model3D).where(Model3D.id.in_(model_ids))).all()
@@ -323,6 +328,16 @@ def get_project(project_id: int, session: Session = Depends(get_session)):
     return _project_json(session, _get_project(session, project_id))
 
 
+@router.get("/{project_id}/export.pdf")
+def export_project_pdf(project_id: int, session: Session = Depends(get_session)):
+    """The whole project as a PDF: description, notes, models, filament and parts list."""
+    from app.project_pdf import build_project_pdf
+    project = _project_json(session, _get_project(session, project_id))
+    slug = re.sub(r"[^a-z0-9]+", "-", project["name"].lower()).strip("-") or "project"
+    return Response(build_project_pdf(project), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="project-{slug[:60]}.pdf"'})
+
+
 @router.patch("/{project_id}")
 def update_project(project_id: int, payload: dict, session: Session = Depends(get_session)):
     project = _get_project(session, project_id)
@@ -491,6 +506,34 @@ def add_model_filament(project_id: int, model_id: int, payload: dict, session: S
     ))
     session.commit()
     return _project_json(session, project)
+
+
+@router.get("/{project_id}/models/{model_id}/filament-suggestions")
+def filament_suggestions(project_id: int, model_id: int, session: Session = Depends(get_session)):
+    """The filament the model's site listing recommends (MakerWorld), each matched
+    to one of your spools where there is one that fits."""
+    _get_project(session, project_id)
+    if not session.get(ProjectModelLink, (project_id, model_id)):
+        raise HTTPException(404, "Model is not in this project")
+    model = session.get(Model3D, model_id)
+    try:
+        suggested = json.loads(model.source_filaments or "[]")
+    except ValueError:
+        suggested = []
+    spools = session.exec(select(Filament)).all()
+    used = {line.filament_id for line in session.exec(select(ProjectModelFilament).where(
+        ProjectModelFilament.project_id == project_id, ProjectModelFilament.model_id == model_id)).all()}
+    out = []
+    for s in suggested:
+        spool = match_spool(s, spools)
+        out.append({
+            **s,
+            "spool_id": spool.id if spool else None,
+            "spool_label": spool_label(spool) if spool else None,
+            "remaining_g": spool.remaining_g if spool else None,
+            "already_added": bool(spool and spool.id in used),
+        })
+    return out
 
 
 @router.patch("/{project_id}/filament/{line_id}")

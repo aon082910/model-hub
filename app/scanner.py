@@ -1,13 +1,19 @@
 import gc
 import hashlib
+import io
 import json
 import logging
+import shutil
+import zipfile
 from pathlib import Path
 from datetime import datetime
 
 from sqlmodel import Session, select
 
-from app.config import CONFIG_PATH, LIBRARY_PATH, SUPPORTED_EXTENSIONS, MESH_EXTENSIONS
+from app.config import (
+    ARCHIVE_EXTENSIONS, CONFIG_PATH, LIBRARY_PATH, MESH_EXTENSIONS, MODEL_EXTENSIONS, SUPPORTED_EXTENSIONS,
+)
+from app.library_cleanup import delete_model_records
 from app.library_maintenance import (
     acquire_library_maintenance,
     current_library_maintenance,
@@ -230,9 +236,7 @@ def _remove_missing_models(session: Session) -> None:
             break
 
         last_id = models[-1].id
-        for model in models:
-            if not (LIBRARY_PATH / model.path).exists():
-                session.delete(model)
+        delete_model_records(session, [m.id for m in models if not (LIBRARY_PATH / m.path).exists()])
 
         # Stale cleanup does no expensive work after records are marked for
         # deletion, so one short commit per bounded cleanup page is sufficient.
@@ -301,36 +305,17 @@ def _scan_library(session: Session) -> dict:
     return counters
 
 
-def import_uploaded_file(
-    session: Session,
-    filename: str,
-    content: bytes,
-    source_url: str = None,
-    designer: str = None,
-    license: str = None,
-) -> Model3D:
-    """Save bytes pushed in by the browser extension (or any client) into the
-    library under an 'imported/' subfolder, then process it like any scanned file.
-    """
-    ext = Path(filename).suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise ValueError(f"Unsupported file type: {ext}")
-
-    import_dir = LIBRARY_PATH / "imported"
-    import_dir.mkdir(parents=True, exist_ok=True)
-
-    dest = import_dir / filename
-    stem, suffix = dest.stem, dest.suffix
-    n = 1
+def _unique_destination(folder: Path, filename: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / filename
+    stem, suffix, n = dest.stem, dest.suffix, 1
     while dest.exists():
-        dest = import_dir / f"{stem} ({n}){suffix}"
+        dest = folder / f"{stem} ({n}){suffix}"
         n += 1
-    dest.write_bytes(content)
+    return dest
 
-    counters = {}
-    rel_path = str(dest.relative_to(LIBRARY_PATH))
-    model = _upsert_path(session, dest, rel_path, counters)
 
+def _describe(session: Session, model: Model3D, source_url, designer, license) -> Model3D:
     if source_url:
         model.source_url = source_url
     if designer:
@@ -341,3 +326,84 @@ def import_uploaded_file(
     session.commit()
     session.refresh(model)
     return model
+
+
+def model_types_text() -> str:
+    return ", ".join(sorted(MODEL_EXTENSIONS))
+
+
+def import_uploaded_file(
+    session: Session,
+    filename: str,
+    content: bytes,
+    source_url: str = None,
+    designer: str = None,
+    license: str = None,
+) -> Model3D:
+    """Save bytes pushed in by the browser extension (or any client) into the
+    library under an 'imported/' subfolder, then process it like any scanned file.
+    Only model files are accepted (see import_uploaded_archive for zips).
+    """
+    filename = Path(filename).name          # never a path: the file always lands in imported/
+    ext = Path(filename).suffix.lower()
+    if ext not in MODEL_EXTENSIONS:
+        raise ValueError(f"Unsupported file type: {ext or '(none)'}. Only model files are imported ({model_types_text()}).")
+
+    dest = _unique_destination(LIBRARY_PATH / "imported", filename)
+    dest.write_bytes(content)
+    model = _upsert_path(session, dest, str(dest.relative_to(LIBRARY_PATH)), {})
+    return _describe(session, model, source_url, designer, license)
+
+
+MAX_ARCHIVE_MODELS = 200
+MAX_ARCHIVE_BYTES = 2 * 1024 ** 3          # total uncompressed size of the models we would extract
+
+
+def import_uploaded_archive(
+    session: Session,
+    filename: str,
+    content: bytes,
+    source_url: str = None,
+    designer: str = None,
+    license: str = None,
+) -> dict:
+    """Import the model files inside a zip (a Printables/Thingiverse 'download
+    all'). Everything else in the archive -- readmes, pictures, slicer
+    projects, nested archives -- is ignored, and nothing outside the model
+    types is ever written. Returns {'models': [...], 'ignored': n}."""
+    stem = Path(Path(filename).name).stem or "archive"
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        raise ValueError("That zip file could not be read")
+
+    with archive:
+        members = []
+        ignored = 0
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            name = Path(info.filename.replace("\\", "/")).name
+            if (Path(name).suffix.lower() not in MODEL_EXTENSIONS or name.startswith("._")
+                    or info.filename.startswith("__MACOSX/")):
+                ignored += 1
+                continue
+            members.append((info, name))
+        if not members:
+            raise ValueError(f"No model files ({model_types_text()}) found in that zip")
+        if len(members) > MAX_ARCHIVE_MODELS:
+            raise ValueError(f"That zip has {len(members)} model files; the limit is {MAX_ARCHIVE_MODELS}")
+        if sum(info.file_size for info, _ in members) > MAX_ARCHIVE_BYTES:
+            raise ValueError("The model files in that zip are too large to import")
+
+        models = []
+        folder = LIBRARY_PATH / "imported" / stem
+        for info, name in members:
+            dest = _unique_destination(folder, name)
+            with archive.open(info) as source, open(dest, "wb") as target:
+                shutil.copyfileobj(source, target)          # streamed: one big model is never fully in memory
+            model = _upsert_path(session, dest, str(dest.relative_to(LIBRARY_PATH)), {})
+            models.append(_describe(session, model, source_url, designer, license))
+    for model in models:
+        session.refresh(model)          # later commits expired the earlier rows
+    return {"models": models, "ignored": ignored}

@@ -70,6 +70,9 @@ class Model3D(SQLModel, table=True):
     source_tags: Optional[str] = None      # JSON list
     source_images: Optional[str] = None    # JSON list of file names in CONFIG_PATH/source_images/<model id>/
     source_synced_at: Optional[datetime] = None
+    source_filaments: Optional[str] = None  # JSON list: filament the listing suggests (MakerWorld)
+    source_linked_by: Optional[str] = None  # manual, auto (matching job), extension
+    notes: Optional[str] = None             # your own notes on this model
 
     is_duplicate_of: Optional[int] = Field(default=None, foreign_key="model3d.id")
 
