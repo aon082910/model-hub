@@ -139,6 +139,30 @@ THINGIVERSE_FILES = [
 ]
 
 
+COMMONS_PAGE = {
+    "pageid": 4242, "title": "File:Benchy boat.stl", "index": 1,
+    "imageinfo": [{"url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Benchy_boat.stl", "size": 2048,
+                   "descriptionurl": "https://commons.wikimedia.org/wiki/File:Benchy_boat.stl",
+                   "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Benchy_boat.stl/1200px-x.png",
+                   "extmetadata": {"Artist": {"value": "<a href='x'>CreativeTools</a>: https://www.thingiverse.com/thing:763622"},
+                                   "LicenseShortName": {"value": "CC BY-SA 4.0"},
+                                   "ImageDescription": {"value": "<p>A tiny tugboat.</p>"},
+                                   "Credit": {"value": "Own work"}}}],
+    "thumbnail": {"source": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Benchy_boat.stl/320px-x.png"},
+    "categories": [{"title": "Category:3D printing"}, {"title": "Category:Boats"}],
+}
+NASA_TREE = {"tree": [
+    {"path": "3D Printing/Apollo 11 Landing Site/landing.stl", "type": "blob", "size": 5000},
+    {"path": "3D Printing/Apollo 11 Landing Site/landing.png", "type": "blob", "size": 4000},
+    {"path": "3D Printing/Apollo 11 Landing Site/big.png", "type": "blob", "size": 9000000},
+    {"path": "3D Printing/Apollo 11 Landing Site/notes.pdf", "type": "blob", "size": 10},
+    {"path": "3D Printing/Dawn/dawn.obj", "type": "blob", "size": 3000},
+    {"path": "3D Printing/Dawn", "type": "tree"},
+    {"path": "Models-only/readme.md", "type": "blob", "size": 5},
+    {"path": "top.stl", "type": "blob", "size": 5},
+]}
+
+
 class FakeSites:
     """Records calls and answers like the two sites; flip the flags to break one."""
 
@@ -164,6 +188,9 @@ class FakeSites:
         self.cults_no_description = False       # the schema has no description field
         self.cults_queries = []                 # (query text, variables)
         self.cults_auth = []
+        self.commons_status = 200
+        self.nasa_status = 200
+        self.file_hosts_seen = []               # hosts that served a model file (commons / nasa)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -249,6 +276,22 @@ class FakeSites:
             if path.endswith("/tags"):
                 return httpx.Response(200, json=[{"name": "Benchy"}, {"name": "calibration"}])
             return httpx.Response(200, json=THINGIVERSE_THING)
+        if host == "commons.wikimedia.org" and request.url.path == "/w/api.php":
+            if self.commons_status != 200:
+                return httpx.Response(self.commons_status)
+            params = request.url.params
+            if params.get("generator") == "search":
+                return httpx.Response(200, json={"query": {"pages": [COMMONS_PAGE, {"pageid": 9, "title": "File:Not a model.jpg", "index": 2, "imageinfo": [{}]}]}})
+            if params.get("pageids") == "4242":
+                return httpx.Response(200, json={"query": {"pages": [COMMONS_PAGE]}})
+            return httpx.Response(200, json={"query": {"pages": [{"pageid": 1, "title": "File:x.stl", "missing": True}]}})
+        if host == "api.github.com" and request.url.path.endswith("/git/trees/master"):
+            if self.nasa_status != 200:
+                return httpx.Response(self.nasa_status)
+            return httpx.Response(200, json=NASA_TREE)
+        if host in ("upload.wikimedia.org", "raw.githubusercontent.com") and not url.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            self.file_hosts_seen.append(host)
+            return httpx.Response(200, content=_model_stl(61))
         if sources.image_host_allowed(host):
             return httpx.Response(200, content=JPG if url.endswith(".jpg") else PNG)
         raise AssertionError(f"unexpected request to {url}")
@@ -326,7 +369,7 @@ def test_fetch_details_rejects_bad_ids(sites):
 def test_search_one_site_down_keeps_the_other(sites):
     sites.printables_down = True
     found = sources.search("benchy")
-    assert {r["provider"] for r in found["results"]} == {"makerworld", "sketchfab"}
+    assert {r["provider"] for r in found["results"]} == {"makerworld", "sketchfab", "commons"}
     assert "printables" in found["errors"]
 
 
@@ -376,7 +419,7 @@ def _import_model(c, filename):
 
 def test_search_and_lookup_endpoints(authed, sites):
     r = authed.get("/api/sources/search?q=benchy").json()
-    assert {x["provider"] for x in r["results"]} == {"printables", "makerworld", "sketchfab"}   # Thingiverse needs a token
+    assert {x["provider"] for x in r["results"]} == {"printables", "makerworld", "sketchfab", "commons"}   # Thingiverse needs a token
     assert r["results"][0]["score"] >= r["results"][-1]["score"]
     assert authed.get("/api/sources/search?q=benchy&provider=makerworld").json()["results"][0]["provider"] == "makerworld"
     assert authed.get("/api/sources/search?q=%20").status_code == 400
@@ -838,3 +881,66 @@ def test_all_site_credentials_are_settings_and_secrets_are_masked(authed, sites)
         authed.put("/api/settings", json={"myminifactory_key": "", "cults3d_username": "", "cults3d_key": ""})
     assert authed.post("/api/sources/test/myminifactory").status_code == 400          # nothing saved any more
     assert authed.post("/api/sources/test/printables").status_code == 404             # no credentials to test
+
+
+# ---------- Wikimedia Commons and NASA 3D Resources ----------
+
+@pytest.fixture(autouse=True)
+def _fresh_nasa_cache():
+    sources.reset_nasa_cache()
+    yield
+    sources.reset_nasa_cache()
+
+
+def test_commons_search_details_and_files(sites):
+    found = sources.search("benchy", ["commons"], limit=5, credentials={})["results"]
+    assert [r["source_id"] for r in found] == ["4242"]                     # the .jpg page is not a model
+    assert found[0]["title"] == "Benchy boat" and found[0]["license"] == "CC BY-SA 4.0"
+    assert found[0]["designer"] == "CreativeTools"                         # the link text is dropped
+    d = sources.fetch_details("commons", "4242", {})
+    assert d["description"] == "A tiny tugboat.\n\nSource: Own work" and d["tags"] == ["3D printing", "Boats"]
+    with sources._client() as client:
+        files = sources.commons_files(client, "4242")
+    assert files == [{"id": "4242", "name": "Benchy boat.stl", "size": 2048,
+                      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Benchy_boat.stl"}]
+
+
+def test_commons_missing_page_and_outage(sites):
+    with pytest.raises(sources.SourceError):
+        sources.fetch_details("commons", "777", {})
+    sites.commons_status = 503
+    with pytest.raises(sources.SourceError):
+        sources.fetch_details("commons", "4242", {})
+
+
+def test_nasa_listings_are_the_folders_holding_models(sites):
+    found = sources.search("apollo", ["nasa3d"], limit=10, credentials={})["results"]
+    assert [r["title"] for r in found] == ["Apollo 11 Landing Site"]
+    assert found[0]["thumbnail"].endswith("landing.png")                   # the 9 MB picture is skipped
+    assert found[0]["designer"] == "NASA" and found[0]["license"] == "NASA public domain"
+    d = sources.fetch_details("nasa3d", found[0]["source_id"], {})
+    assert d["title"] == "Apollo 11 Landing Site" and "landing.stl" in d["description"]
+    with sources._client() as client:
+        files = sources.nasa_files(client, found[0]["source_id"])
+    assert [f["name"] for f in files] == ["landing.stl"] and files[0]["url"].startswith("https://raw.githubusercontent.com/")
+    assert sources.valid_source_id("nasa3d", found[0]["source_id"]) and not sources.valid_source_id("nasa3d", "../x")
+
+
+def test_nasa_url_parsing_and_tree_is_cached(sites):
+    folder = "3D Printing/Dawn"
+    expected = ("nasa3d", sources.nasa_listing_id(folder))
+    assert sources.parse_url("https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Printing/Dawn") == expected
+    assert sources.parse_url("https://github.com/nasa/NASA-3D-Resources/blob/master/3D%20Printing/Dawn/dawn.obj") == expected
+    sources.search("dawn", ["nasa3d"], limit=5, credentials={})
+    sources.search("apollo", ["nasa3d"], limit=5, credentials={})
+    assert sum("git/trees" in c for c in sites.calls) == 1                  # one tree request serves both searches
+
+
+def test_nasa_failures_become_messages(sites):
+    sites.nasa_status = 403
+    with pytest.raises(sources.SourceError, match="rate limiting"):
+        sources.fetch_details("nasa3d", sources.nasa_listing_id("3D Printing/Dawn"), {})
+    sources.reset_nasa_cache()
+    sites.nasa_status = 500
+    with pytest.raises(sources.SourceError):
+        sources.fetch_details("nasa3d", sources.nasa_listing_id("3D Printing/Dawn"), {})

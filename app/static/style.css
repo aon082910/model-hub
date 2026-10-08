@@ -257,3 +257,9 @@ button.danger { color: #e0645a; border-color: #e0645a; }
 @media (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]), select, button { min-height: 40px; }
 }
+.result-save.saved, #listing-save.saved { color: #e6b800; border-color: #e6b800; }
+.wishlist-row { display: flex; gap: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-top: 8px; }
+.wishlist-row .grow { flex: 1; }
+.wishlist-note { width: 100%; max-width: 420px; font-size: 12px; }
+.file-list li { display: flex; justify-content: space-between; gap: 8px; }
+.file-list .file-off { opacity: .55; }

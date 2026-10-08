@@ -133,9 +133,10 @@ def _check_one(model_id: int, auto_link_min: Optional[float] = None) -> str:
             session.commit()
             return "none"
         credentials = sources.load_credentials(session)
-        found = sources.search(query, limit=6, credentials=credentials)
+        providers = sources.matching_providers(credentials)
+        found = sources.search(query, providers, limit=6, credentials=credentials)
         errors = found["errors"]
-        if errors and len(errors) >= len(sources.available_providers(credentials)):
+        if errors and len(errors) >= len(providers):
             return "limited" if any("rate limiting" in m for m in errors.values()) else "error"
 
         ranked = [r for r in sources.rank(found["results"], query) if r["score"] >= MIN_SCORE][:MAX_CANDIDATES]

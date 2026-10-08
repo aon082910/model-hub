@@ -49,8 +49,8 @@ def test_search_covers_the_library_and_every_usable_site(authed, sites):
     library_ids = {m["id"] for m in data["library"]}
     assert {named["id"], tagged["id"], noted["id"]} <= library_ids               # found by name, tag and notes
     assert all("tags" in m for m in data["library"])
-    assert {r["provider"] for r in data["online"]} == {"printables", "makerworld", "sketchfab"}
-    assert set(data["searched"]) == {"printables", "makerworld", "sketchfab"}
+    assert {r["provider"] for r in data["online"]} == {"printables", "makerworld", "sketchfab", "commons"}
+    assert set(data["searched"]) == {"printables", "makerworld", "sketchfab", "commons", "nasa3d"}
     assert data["errors"] == {}
     by_provider = {r["provider"]: r for r in data["online"]}
     assert by_provider["printables"]["can_download"] is True and by_provider["makerworld"]["can_download"] is False
@@ -86,7 +86,7 @@ def test_has_more_when_a_site_filled_its_page(authed, sites):
 def test_one_site_down_is_reported_not_fatal(authed, sites):
     sites.printables_down = True
     data = authed.get("/api/discover/search", params={"q": "benchy"}).json()
-    assert "printables" in data["errors"] and {r["provider"] for r in data["online"]} == {"makerworld", "sketchfab"}
+    assert "printables" in data["errors"] and {r["provider"] for r in data["online"]} == {"makerworld", "sketchfab", "commons"}
 
 
 def test_results_already_linked_to_a_library_model_are_marked(authed, sites):
@@ -106,7 +106,11 @@ def test_listing_for_a_downloadable_site(authed, sites):
     data = authed.get("/api/discover/listing", params={"provider": "printables", "source_id": "3161"}).json()
     assert data["details"]["title"] == "3D BENCHY" and data["details"]["designer"] == "Prusa Research"
     assert data["can_download"] is True and data["download_note"] is None
-    assert [f["name"] for f in data["files"]] == ["model-files-3161.zip"] and data["files"][0]["kind"] == "pack"
+    # every model file is listed; the pack of model files is the default choice, the single STL is optional
+    files = {f["name"]: f for f in data["files"]}
+    assert set(files) == {"model-files-3161.zip", "3dbenchy.stl"}
+    assert files["model-files-3161.zip"]["kind"] == "pack" and files["model-files-3161.zip"]["selected"] is True
+    assert files["3dbenchy.stl"]["selected"] is False and files["3dbenchy.stl"]["selectable"] is True
     assert data["in_library"] == [] and data["download"] is None and data["files_note"] is None
 
 

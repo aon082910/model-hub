@@ -11,7 +11,9 @@ from test_sources import THINGIVERSE_TOKEN, FakeSites, _pack_zip, _model_stl
 
 
 REAL_ENSURE_WORKER = downloads._ensure_worker
-TEST_LISTINGS = ("3161", "763622", "777", "888")
+NASA_DAWN = sources.nasa_listing_id("3D Printing/Dawn")
+NASA_APOLLO = sources.nasa_listing_id("3D Printing/Apollo 11 Landing Site")
+TEST_LISTINGS = ("3161", "763622", "777", "888", "4242", NASA_DAWN, NASA_APOLLO)
 
 
 def _forget_downloaded_models():
@@ -27,7 +29,7 @@ def _forget_downloaded_models():
     # and the files they left behind, or a re-download would be renamed "deck (1).stl"
     import shutil
     from app.config import LIBRARY_PATH
-    for site in ("Printables", "Thingiverse"):
+    for site in ("Printables", "Thingiverse", "Wikimedia Commons", "NASA 3D Resources"):
         shutil.rmtree(LIBRARY_PATH / "imported" / site, ignore_errors=True)
 
 
@@ -39,6 +41,7 @@ def sites(monkeypatch, authed):
     monkeypatch.setattr(downloads, "_ensure_worker", lambda: None)
     downloads._items.clear()
     downloads._cancel_ids.clear()
+    sources.reset_nasa_cache()
     _forget_downloaded_models()
     yield fake
     downloads._items.clear()
@@ -51,9 +54,10 @@ def thingiverse_token(authed):
     authed.put("/api/settings", json={"thingiverse_token": ""})
 
 
-def _run(listing_provider, source_id, images=True, add_tags=False, title="Test listing"):
+def _run(listing_provider, source_id, images=True, add_tags=False, title="Test listing", file_ids=None):
     """Queue one listing and run it to completion in this thread."""
-    downloads.enqueue([{"provider": listing_provider, "source_id": source_id, "title": title}], images=images, add_tags=add_tags)
+    downloads.enqueue([{"provider": listing_provider, "source_id": source_id, "title": title, "file_ids": file_ids}],
+                      images=images, add_tags=add_tags)
     item = next(i for i in downloads._items if i["source_id"] == source_id and i["status"] == "queued")
     item["status"] = "downloading"
     downloads.process_item(item)
@@ -274,3 +278,69 @@ def test_downloads_need_a_login(client):
     assert client.post("/api/discover/downloads", json={"items": []}).status_code == 401
     from conftest import ensure_authenticated
     ensure_authenticated(client)
+
+
+# ---------- choosing which files ----------
+
+def test_the_file_list_marks_the_default_choice(authed, sites):
+    files = {f["name"]: f for f in downloads.list_files("printables", "3161", {})}
+    assert files["model-files-3161.zip"]["selected"] and not files["3dbenchy.stl"]["selected"]
+    assert all(set(f) == {"id", "name", "size", "kind", "selectable", "selected"} for f in files.values())      # no urls leak out
+
+
+def test_thingiverse_file_list_flags_what_can_be_chosen(authed, sites, thingiverse_token):
+    files = {f["name"]: f for f in downloads.list_files("thingiverse", "763622", {"thingiverse": {"token": THINGIVERSE_TOKEN}})}
+    assert files["benchy.stl"]["selectable"] and files["benchy.stl"]["selected"]
+    assert not files["readme.txt"]["selectable"] and not files["photo.jpg"]["selectable"]
+
+
+def test_chosen_files_replace_the_default_choice(authed, sites):
+    item = _run("printables", "3161", file_ids=["49068"])               # just the single STL, not the pack
+    assert item["status"] == "done"
+    assert [m["filename"] for m in _models(authed, item["model_ids"])] == ["3dbenchy.stl"]
+    assert not [r for r in sites.file_requests if r.endswith(".zip")]
+
+
+def test_choosing_nothing_downloadable_is_an_error(authed, sites, thingiverse_token):
+    item = _run("thingiverse", "763622", file_ids=["2"])                # readme.txt is not a model file
+    assert item["status"] == "error" and "None of the chosen files" in item["message"]
+    assert sites.cdn_download_auth == []
+
+
+def test_file_ids_go_through_the_api_and_stay_internal(authed, sites):
+    r = authed.post("/api/discover/downloads", json={"items": [
+        {"provider": "printables", "source_id": "888", "file_ids": ["49068", 5, "x" * 500]}]}).json()
+    assert len(r["added"]) == 1 and "file_ids" not in r["items"][0]
+    queued = next(i for i in downloads._items if i["source_id"] == "888")
+    assert queued["file_ids"] == ["49068", "5", "x" * 200]
+
+
+# ---------- Wikimedia Commons and NASA ----------
+
+def test_commons_file_is_downloaded_and_linked(authed, sites):
+    item = _run("commons", "4242")
+    assert item["status"] == "done", item
+    model = _models(authed, item["model_ids"])[0]
+    assert model["filename"] == "Benchy_boat.stl"
+    assert model["path"].replace("\\", "/").startswith("imported/Wikimedia Commons/Benchy boat [4242]/")
+    assert (model["source_provider"], model["source_id"]) == ("commons", "4242")
+    assert model["designer"] == "CreativeTools" and model["license"] == "CC BY-SA 4.0"
+    assert sites.file_hosts_seen == ["upload.wikimedia.org"]
+
+
+def test_nasa_folder_is_downloaded_with_its_models_only(authed, sites):
+    item = _run("nasa3d", NASA_APOLLO)
+    assert item["status"] == "done", item
+    model = _models(authed, item["model_ids"])[0]
+    assert model["filename"] == "landing.stl" and model["license"] == "NASA public domain"
+    assert sites.file_hosts_seen == ["raw.githubusercontent.com"]
+    again = _run("nasa3d", NASA_APOLLO)
+    assert again["status"] == "skipped"
+
+
+def test_commons_and_nasa_downloads_stay_on_their_own_hosts(authed, sites, monkeypatch):
+    real = sources.commons_files
+    monkeypatch.setattr(sources, "commons_files", lambda client, sid: [{**real(client, sid)[0], "url": "https://evil.example/x.stl"}])
+    item = _run("commons", "4242")
+    assert item["status"] == "error"
+    assert sites.file_hosts_seen == []

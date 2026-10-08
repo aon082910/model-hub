@@ -1,4 +1,5 @@
-"""Download a listing's model files into the library (Printables and Thingiverse).
+"""Download a listing's model files into the library (Printables, Thingiverse,
+Wikimedia Commons and NASA 3D Resources).
 
 Each listing is one item in a small background queue. For an item the worker
 fetches the listing's details, lists its files, downloads the model files to a
@@ -55,7 +56,18 @@ def _printables_host_ok(host: Optional[str]) -> bool:
     return sources.host_in_domains(host, ("printables.com",))
 
 
-HOST_CHECKS = {"printables": _printables_host_ok, "thingiverse": _thingiverse_host_ok}
+def _commons_host_ok(host: Optional[str]) -> bool:
+    return sources.host_in_domains(host, ("wikimedia.org",))
+
+
+def _nasa_host_ok(host: Optional[str]) -> bool:
+    return sources.host_in_domains(host, ("githubusercontent.com",))
+
+
+HOST_CHECKS = {
+    "printables": _printables_host_ok, "thingiverse": _thingiverse_host_ok,
+    "commons": _commons_host_ok, "nasa3d": _nasa_host_ok,
+}
 
 
 def safe_name(text: str, fallback: str = "listing") -> str:
@@ -138,16 +150,52 @@ def plan_printables_files(files: list) -> list:
     return packs[:1] if packs else [f for f in files if f["kind"] == "stl"][:MAX_FILES_PER_LISTING]
 
 
+def provider_files(client: httpx.Client, provider: str, source_id: str, credentials: Optional[dict]) -> list:
+    """Every file this server could download for a listing, each as {id, name,
+    size, kind, selectable, selected, ...}. selectable: it is a model file (or a
+    zip that may contain some); selected: part of the default choice."""
+    if provider == "printables":
+        files = sources.printables_files(client, source_id)
+        chosen = {f["id"] for f in plan_printables_files(files)}
+        return [{**f, "selectable": True, "selected": f["id"] in chosen} for f in files]
+    if provider == "thingiverse":
+        files = sources.thingiverse_files(client, source_id, sources._thingiverse_token(credentials))
+        chosen = {f["id"] or f["name"] for f in plan_thingiverse_files(files)}
+        out = []
+        for f in files:
+            suffix = Path(f["name"]).suffix.lower()
+            out.append({**f, "id": f["id"] or f["name"], "kind": suffix.lstrip("."),
+                        "selectable": suffix in MODEL_EXTENSIONS or suffix in ARCHIVE_EXTENSIONS,
+                        "selected": (f["id"] or f["name"]) in chosen})
+        return out
+    if provider == "commons":
+        files = sources.commons_files(client, source_id)
+    elif provider == "nasa3d":
+        files = sources.nasa_files(client, source_id)
+    else:
+        return []
+    return [{**f, "kind": Path(f["name"]).suffix.lstrip(".").lower(), "selectable": True, "selected": True} for f in files]
+
+
 def list_files(provider: str, source_id: str, credentials: Optional[dict]) -> list:
-    """Files this server can download for a listing: [{name, size, kind}] (for the listing page)."""
+    """The listing's files for its page (no internal fields): [{id, name, size, kind, selectable, selected}]."""
     if provider not in sources.DOWNLOAD_PROVIDERS:
         return []
     with sources._client() as client:
-        if provider == "printables":
-            chosen = plan_printables_files(sources.printables_files(client, source_id))
-        else:
-            chosen = plan_thingiverse_files(sources.thingiverse_files(client, source_id, sources._thingiverse_token(credentials)))
-    return [{"name": f["name"], "size": f.get("size"), "kind": f.get("kind") or Path(f["name"]).suffix.lstrip(".").lower()} for f in chosen]
+        files = provider_files(client, provider, source_id, credentials)
+    return [{k: f.get(k) for k in ("id", "name", "size", "kind", "selectable", "selected")} for f in files]
+
+
+def choose_files(files: list, file_ids: Optional[list]) -> list:
+    """The files to download: the ones asked for (only those that can be), else the default choice."""
+    if file_ids:
+        wanted = {str(i) for i in file_ids}
+        chosen = [f for f in files if str(f["id"]) in wanted and f["selectable"]]
+        if not chosen:
+            raise sources.SourceError("None of the chosen files can be downloaded")
+    else:
+        chosen = [f for f in files if f["selected"]]
+    return chosen[:MAX_FILES_PER_LISTING]
 
 
 # ---------- one listing, start to finish ----------
@@ -168,10 +216,7 @@ def download_listing(session: Session, item: dict, credentials: Optional[dict],
     try:
         with sources._client() as client:
             set_status("downloading", "Finding the model files...")
-            if provider == "printables":
-                files = plan_printables_files(sources.printables_files(client, source_id))
-            else:
-                files = plan_thingiverse_files(sources.thingiverse_files(client, source_id, sources._thingiverse_token(credentials)))
+            files = choose_files(provider_files(client, provider, source_id, credentials), item.get("file_ids"))
             if not files:
                 raise sources.SourceError("This listing has no model files to download (only print files or none at all)")
 
@@ -182,10 +227,12 @@ def download_listing(session: Session, item: dict, credentials: Optional[dict],
                 if provider == "printables":
                     url = sources.printables_download_link(client, source_id, f["id"], f["kind"])
                     path = download_file(client, url, temp, f["name"], host_ok, progress=progress, cancelled=cancelled)
-                else:
+                elif provider == "thingiverse":
                     token = sources._thingiverse_token(credentials)
                     path = download_file(client, f["url"], temp, f["name"], host_ok, auth_header=f"Bearer {token}",
                                          auth_hosts=THINGIVERSE_AUTH_HOSTS, progress=progress, cancelled=cancelled)
+                else:
+                    path = download_file(client, f["url"], temp, f["name"], host_ok, progress=progress, cancelled=cancelled)
                 set_status("importing", f"Adding {path.name} to the library")
                 suffix = path.suffix.lower()
                 try:
@@ -227,7 +274,7 @@ _cancel_ids: set = set()
 
 
 def _public(item: dict) -> dict:
-    return {k: v for k, v in item.items() if k not in ("images", "add_tags")}
+    return {k: v for k, v in item.items() if k not in ("images", "add_tags", "file_ids")}
 
 
 def snapshot() -> dict:
@@ -247,8 +294,15 @@ def find_item(provider: str, source_id: str) -> Optional[dict]:
     return None
 
 
+def _clean_file_ids(value) -> Optional[list]:
+    if not isinstance(value, list) or not value:
+        return None
+    return [str(v)[:200] for v in value[:100]]
+
+
 def enqueue(listings: list, images: bool = True, add_tags: bool = False) -> list:
-    """Add listings [{provider, source_id, title?, thumbnail?}] to the queue.
+    """Add listings [{provider, source_id, title?, thumbnail?, file_ids?}] to the queue.
+    file_ids picks which of the listing's files to fetch (default: its model files).
     A listing that is already waiting or running is not added twice."""
     added = []
     with _lock:
@@ -263,7 +317,7 @@ def enqueue(listings: list, images: bool = True, add_tags: bool = False) -> list
                 "title": (listing.get("title") or "")[:200], "thumbnail": listing.get("thumbnail"),
                 "status": "queued", "message": "Waiting", "bytes_done": 0, "bytes_total": 0,
                 "model_ids": [], "created_at": datetime.utcnow().isoformat(), "finished_at": None,
-                "images": images, "add_tags": add_tags,
+                "images": images, "add_tags": add_tags, "file_ids": _clean_file_ids(listing.get("file_ids")),
             }
             _items.append(item)
             added.append(item["id"])

@@ -189,6 +189,21 @@ class InventoryItem(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class WishlistItem(SQLModel, table=True):
+    """A listing on an online site that you want to keep for later, with a note.
+    Downloading it (when the site allows) adds it to the library."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True)
+    source_id: str = Field(index=True)
+    title: str
+    thumbnail: Optional[str] = None
+    url: Optional[str] = None
+    designer: Optional[str] = None
+    license: Optional[str] = None
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class AppSettings(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str = Field(index=True, unique=True)

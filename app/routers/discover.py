@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from app import downloads, sources
 from app.config import MODEL_EXTENSIONS
 from app.db import get_session
-from app.models import Model3D, ModelTagLink, Tag
+from app.models import Model3D, ModelTagLink, Tag, WishlistItem
 from app.routers.library import _with_tags
 from app.routers.sources import _resolve_listing
 
@@ -46,6 +46,38 @@ def _in_library(session: Session, listings: list) -> dict:
     return found
 
 
+def _wishlisted(session: Session, listings: list) -> dict:
+    """{(provider, source_id): wishlist item id} for listings that are on the wishlist."""
+    if not listings:
+        return {}
+    rows = session.exec(select(WishlistItem.id, WishlistItem.provider, WishlistItem.source_id).where(
+        WishlistItem.provider.in_({l["provider"] for l in listings}),
+        WishlistItem.source_id.in_({str(l["source_id"]) for l in listings}))).all()
+    return {(provider, source_id): item_id for item_id, provider, source_id in rows}
+
+
+def queue_listings(session: Session, entries: list, images: bool = True, add_tags: bool = False) -> dict:
+    """Queue listings [{provider, source_id, title?, thumbnail?, file_ids?}] for download.
+    Ones this server cannot download are returned with the reason instead of failing the batch."""
+    credentials = sources.load_credentials(session)
+    accepted, rejected = [], []
+    for entry in entries:
+        provider = (entry or {}).get("provider")
+        source_id = str((entry or {}).get("source_id") or "")
+        if not sources.valid_source_id(provider, source_id):
+            rejected.append({"provider": provider, "source_id": source_id, "reason": "Not a valid listing"})
+        elif provider not in sources.DOWNLOAD_PROVIDERS:
+            rejected.append({"provider": provider, "source_id": source_id, "reason": sources.DOWNLOAD_NOTES.get(provider, "Downloads are not available for this site")})
+        elif provider not in credentials and provider in sources.CREDENTIAL_FIELDS:
+            rejected.append({"provider": provider, "source_id": source_id,
+                             "reason": f"Add your {sources.PROVIDER_LABELS[provider]} credentials in Settings first"})
+        else:
+            accepted.append({"provider": provider, "source_id": source_id, "title": entry.get("title") or "",
+                             "thumbnail": entry.get("thumbnail"), "file_ids": entry.get("file_ids")})
+    added = downloads.enqueue(accepted, images=images, add_tags=add_tags)
+    return {"added": added, "rejected": rejected, **downloads.snapshot()}
+
+
 @router.get("/search")
 def discover_search(
     q: str,
@@ -70,10 +102,12 @@ def discover_search(
 
     online = sources.rank(found["results"], query)
     linked = _in_library(session, online)
+    saved = _wishlisted(session, online)
     per_site = Counter(r["provider"] for r in online)
     for r in online:
         r["can_download"] = r["provider"] in sources.DOWNLOAD_PROVIDERS
         r["in_library"] = linked.get((r["provider"], r["source_id"]))
+        r["wishlist_id"] = saved.get((r["provider"], r["source_id"]))
     return {
         "query": query, "page": page, "limit": limit, "searched": searched,
         "library": _library_search(session, query) if library and page == 1 else [],
@@ -103,7 +137,7 @@ def discover_listing(
     if can_download:
         try:
             files = downloads.list_files(provider, source_id, credentials)
-            if not files:
+            if not any(f["selectable"] for f in files):
                 files_note = "This listing has no model files this server can download."
         except sources.SourceError as e:
             files_note = str(e)
@@ -114,6 +148,8 @@ def discover_listing(
         "download_note": sources.DOWNLOAD_NOTES.get(provider),
         "files": files, "files_note": files_note,
         "download": downloads.find_item(provider, source_id),
+        "wishlist_id": session.exec(select(WishlistItem.id).where(
+            WishlistItem.provider == provider, WishlistItem.source_id == source_id)).first(),
     }
 
 
@@ -126,23 +162,8 @@ def start_downloads(payload: dict, session: Session = Depends(get_session)):
         raise HTTPException(400, "items must be a non-empty list")
     if len(items) > MAX_QUEUE_BATCH:
         raise HTTPException(400, f"at most {MAX_QUEUE_BATCH} at a time")
-    credentials = sources.load_credentials(session)
-    accepted, rejected = [], []
-    for entry in items:
-        provider = (entry or {}).get("provider")
-        source_id = str((entry or {}).get("source_id") or "")
-        if not sources.valid_source_id(provider, source_id):
-            rejected.append({"provider": provider, "source_id": source_id, "reason": "Not a valid listing"})
-        elif provider not in sources.DOWNLOAD_PROVIDERS:
-            rejected.append({"provider": provider, "source_id": source_id, "reason": sources.DOWNLOAD_NOTES.get(provider, "Downloads are not available for this site")})
-        elif provider not in credentials and provider in sources.CREDENTIAL_FIELDS:
-            rejected.append({"provider": provider, "source_id": source_id,
-                             "reason": f"Add your {sources.PROVIDER_LABELS[provider]} credentials in Settings first"})
-        else:
-            accepted.append({"provider": provider, "source_id": source_id,
-                             "title": entry.get("title") or "", "thumbnail": entry.get("thumbnail")})
-    added = downloads.enqueue(accepted, images=bool(payload.get("images", True)), add_tags=bool(payload.get("add_tags", False)))
-    return {"added": added, "rejected": rejected, **downloads.snapshot()}
+    return queue_listings(session, items, images=bool(payload.get("images", True)),
+                          add_tags=bool(payload.get("add_tags", False)))
 
 
 @router.get("/downloads")

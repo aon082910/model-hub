@@ -10,8 +10,12 @@ key). All are read-only endpoints; the unofficial ones can change without
 notice, so every failure here is turned into a SourceError with a message that
 is fine to show to the user.
 
+Two more keyless sources that also allow downloads: Wikimedia Commons (its 3D
+files, found with the MediaWiki search API) and NASA's public 3D Resources (a
+GitHub repository, indexed from its file tree).
+
 Which sites let a server download the model files themselves: Printables (no
-login) and Thingiverse (with the token). MakerWorld, Sketchfab and MyMiniFactory
+login), Thingiverse (with the token), Wikimedia Commons and NASA 3D Resources. MakerWorld, Sketchfab and MyMiniFactory
 only hand files to a logged-in user, and Cults3D's API never serves files; for
 those the browser extension, which runs in your logged-in browser, is the way in.
 
@@ -20,12 +24,16 @@ from the sites' own CDNs, so a pasted URL can't make the server fetch anything
 else on your network.
 """
 import difflib
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import html
 import io
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import logging
 
@@ -52,10 +60,17 @@ THINGIVERSE_API = "https://api.thingiverse.com"
 MYMINIFACTORY_API = "https://www.myminifactory.com/api/v2"
 CULTS3D_API = "https://cults3d.com/graphql"
 
-PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d")
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+NASA_REPO = "nasa/NASA-3D-Resources"
+NASA_TREE_API = f"https://api.github.com/repos/{NASA_REPO}/git/trees/master?recursive=1"
+NASA_RAW = f"https://raw.githubusercontent.com/{NASA_REPO}/master/"
+NASA_WEB = f"https://github.com/{NASA_REPO}/tree/master/"
+
+PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d")
 PROVIDER_LABELS = {
     "printables": "Printables", "makerworld": "MakerWorld", "sketchfab": "Sketchfab", "thingiverse": "Thingiverse",
     "myminifactory": "MyMiniFactory", "cults3d": "Cults3D",
+    "commons": "Wikimedia Commons", "nasa3d": "NASA 3D Resources",
 }
 # Providers that need credentials: the fields to enter in Settings (each is stored
 # as the setting "<provider>_<field>"), a label, whether it is secret, and where to get one.
@@ -71,7 +86,7 @@ CREDENTIAL_HELP = {
 }
 KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_FIELDS)
 # Where model files can be downloaded by this server (see the module docstring)
-DOWNLOAD_PROVIDERS = ("printables", "thingiverse")
+DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d")
 DOWNLOAD_NOTES = {
     "makerworld": "MakerWorld only gives model files to logged-in users. Open the listing, then use the Model Hub browser extension while logged in.",
     "sketchfab": "Sketchfab only gives downloads to logged-in users, and as glTF rather than printable formats.",
@@ -81,6 +96,7 @@ DOWNLOAD_NOTES = {
 # Pictures are only ever downloaded from these sites' own domains (and their subdomains)
 IMAGE_DOMAINS = (
     "printables.com", "bblmw.com", "sketchfab.com", "thingiverse.com", "myminifactory.com", "cults3d.com",
+    "wikimedia.org", "githubusercontent.com",
 )
 
 
@@ -114,6 +130,7 @@ _SKETCHFAB_URL = re.compile(r"^https?://(?:www\.)?sketchfab\.com/(?:3d-models|mo
 _THINGIVERSE_URL = re.compile(r"^https?://(?:www\.)?thingiverse\.com/thing:(\d+)", re.I)
 _MYMINIFACTORY_URL = re.compile(r"^https?://(?:www\.)?myminifactory\.com/(?:[a-z]{2}/)?object/(?:[^/?#]*-)?(\d+)(?:[/?#]|$)", re.I)
 _CULTS3D_URL = re.compile(r"^https?://(?:www\.)?cults3d\.com/[a-z]{2}/3d-model/[^/?#]+/([A-Za-z0-9_-]{3,200})(?:[/?#]|$)", re.I)
+_NASA_URL = re.compile(r"^https?://github\.com/nasa/NASA-3D-Resources/(?:tree|blob)/master/([^?#]+)", re.I)
 _URL_PATTERNS = (
     ("printables", _PRINTABLES_URL), ("makerworld", _MAKERWORLD_URL),
     ("sketchfab", _SKETCHFAB_URL), ("thingiverse", _THINGIVERSE_URL),
@@ -129,9 +146,19 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT}, follow_redirects=False)
 
 
+def nasa_listing_id(folder: str) -> str:
+    return hashlib.sha1(folder.encode("utf-8")).hexdigest()[:12]
+
+
 def parse_url(url: str) -> Optional[tuple]:
     """(provider, id) for a supported model URL, else None."""
     url = (url or "").strip()
+    nasa = _NASA_URL.match(url)
+    if nasa:
+        path = unquote(nasa.group(1)).strip("/")
+        if "." in path.rsplit("/", 1)[-1]:                 # a file inside a folder: the listing is the folder
+            path = path.rsplit("/", 1)[0] if "/" in path else path
+        return "nasa3d", nasa_listing_id(path) if path else None
     for provider, pattern in _URL_PATTERNS:
         match = pattern.match(url)
         if match:
@@ -146,6 +173,8 @@ def valid_source_id(provider: str, source_id) -> bool:
         return re.fullmatch(r"[0-9a-f]{32}", source_id) is not None
     if provider == "cults3d":
         return re.fullmatch(r"[A-Za-z0-9_-]{3,200}", source_id) is not None
+    if provider == "nasa3d":
+        return re.fullmatch(r"[0-9a-f]{12}", source_id) is not None
     return provider in PROVIDERS and source_id.isdigit()
 
 
@@ -269,6 +298,10 @@ def fetch_details(provider: str, source_id: str, credentials: Optional[dict] = N
             return _myminifactory_details(client, source_id, _myminifactory_key(credentials))
         if provider == "cults3d":
             return _cults3d_details(client, source_id, _cults3d_auth(credentials))
+        if provider == "commons":
+            return _commons_details(client, source_id)
+        if provider == "nasa3d":
+            return _nasa_details(client, source_id)
         return _thingiverse_details(client, source_id, _thingiverse_token(credentials))
 
 
@@ -690,6 +723,198 @@ def test_credentials(provider: str, credentials: Optional[dict]) -> str:
     return f"{PROVIDER_LABELS[provider]} accepted the credentials."
 
 
+# ---------- Wikimedia Commons (no account; its 3D files) ----------
+# Each 3D file on Commons is its own listing: one model, with its license, author and a
+# description page. Files download straight from upload.wikimedia.org.
+
+_COMMONS_FIELDS = {
+    "prop": "imageinfo|pageimages", "iiprop": "url|size|mime|extmetadata|mediatype", "iiurlwidth": 1200,
+    "piprop": "thumbnail", "pithumbsize": 320,
+}
+
+
+def _commons_get(client: httpx.Client, **params) -> dict:
+    data = _get_json(client, COMMONS_API, params={"action": "query", "format": "json", "formatversion": 2, **params})
+    if data.get("error"):
+        raise SourceError(f"Wikimedia Commons rejected the request ({(data['error'].get('code') or '')[:40]})")
+    return data
+
+
+def _commons_meta(info: dict, key: str) -> str:
+    return html_to_text(((info.get("extmetadata") or {}).get(key) or {}).get("value") or "")
+
+
+def _commons_author(text: str) -> str:
+    """'CreativeTools: https://www.thingiverse.com/...' -> 'CreativeTools' (the link text is noise)."""
+    cleaned = re.sub(r"https?://\S+", "", text or "").strip(" :-,;\n")
+    return (cleaned or text or "")[:120]
+
+
+def _commons_name(title: str) -> str:
+    return re.sub(r"^File:", "", title or "").strip()
+
+
+def _commons_entry(page: dict) -> Optional[dict]:
+    info = (page.get("imageinfo") or [None])[0]
+    if not info or Path(page.get("title", "")).suffix.lower() not in (".stl", ".obj", ".3mf", ".step", ".stp", ".fbx"):
+        return None
+    name = _commons_name(page["title"])
+    return {
+        "page": page, "info": info, "name": name,
+        "title": Path(name).stem.replace("_", " "),
+        "designer": _commons_author(_commons_meta(info, "Artist")),
+        "license": _commons_meta(info, "LicenseShortName"),
+    }
+
+
+def _search_commons(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    data = _commons_get(client, generator="search", gsrsearch=f"{query} filetype:3d", gsrnamespace=6,
+                        gsrlimit=limit, gsroffset=(page - 1) * limit, **_COMMONS_FIELDS)
+    pages = sorted((data.get("query") or {}).get("pages") or [], key=lambda p: p.get("index", 0))
+    found = []
+    for entry in filter(None, (_commons_entry(p) for p in pages)):
+        found.append({
+            "provider": "commons", "source_id": str(entry["page"]["pageid"]),
+            "url": entry["info"].get("descriptionurl") or f"https://commons.wikimedia.org/?curid={entry['page']['pageid']}",
+            "title": entry["title"], "designer": entry["designer"], "license": entry["license"],
+            "thumbnail": (entry["page"].get("thumbnail") or {}).get("source"),
+        })
+    return found
+
+
+def _commons_details(client: httpx.Client, source_id: str) -> dict:
+    data = _commons_get(client, pageids=source_id, **{**_COMMONS_FIELDS, "prop": "imageinfo|pageimages|categories"},
+                        cllimit=30, clshow="!hidden")
+    pages = (data.get("query") or {}).get("pages") or []
+    entry = _commons_entry(pages[0]) if pages and not pages[0].get("missing") else None
+    if not entry:
+        raise SourceError("That listing was not found (it may have been removed)")
+    info, page = entry["info"], entry["page"]
+    description = _commons_meta(info, "ImageDescription") or _commons_meta(info, "ObjectName")
+    credit = _commons_meta(info, "Credit")
+    tags = [re.sub(r"^Category:", "", c.get("title", "")).strip() for c in page.get("categories") or []]
+    images = [u for u in (info.get("thumburl"), (page.get("thumbnail") or {}).get("source")) if u]
+    return {
+        "provider": "commons", "source_id": source_id,
+        "url": info.get("descriptionurl") or f"https://commons.wikimedia.org/?curid={source_id}",
+        "title": entry["title"], "designer": entry["designer"], "license": entry["license"],
+        "description": "\n\n".join(x for x in (description, f"Source: {credit}" if credit else "") if x),
+        "tags": [t for t in tags if t][:12], "category": "", "images": images[:1],
+        "likes": None, "downloads": None, "parts": [], "filaments": [],
+    }
+
+
+def commons_files(client: httpx.Client, source_id: str) -> list:
+    data = _commons_get(client, pageids=source_id, prop="imageinfo", iiprop="url|size")
+    pages = (data.get("query") or {}).get("pages") or []
+    info = (pages[0].get("imageinfo") or [None])[0] if pages else None
+    if not info:
+        raise SourceError("That listing was not found (it may have been removed)")
+    return [{"id": str(source_id), "name": _commons_name(pages[0]["title"]), "size": info.get("size"), "url": info.get("url")}]
+
+
+# ---------- NASA 3D Resources (no account; a public GitHub repository) ----------
+# Every folder of the repo that holds a model file is one listing (97 at the time of
+# writing: Apollo landing sites, satellites...). The repo's file tree is fetched once
+# and kept for a few hours, so searching needs no further requests.
+
+_NASA_TTL_SECONDS = 6 * 3600
+_NASA_MODEL_EXTENSIONS = (".stl", ".3mf", ".obj", ".step", ".stp", ".fbx")
+_NASA_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+_NASA_THUMBNAIL_MAX_BYTES = 600 * 1024        # larger pictures are not shown in result lists
+_nasa_lock = threading.Lock()
+_nasa_cache = {"at": 0.0, "folders": {}}
+
+
+def reset_nasa_cache() -> None:
+    with _nasa_lock:
+        _nasa_cache.update(at=0.0, folders={})
+
+
+def _nasa_folders(client: httpx.Client) -> dict:
+    with _nasa_lock:
+        if _nasa_cache["folders"] and time.time() - _nasa_cache["at"] < _NASA_TTL_SECONDS:
+            return _nasa_cache["folders"]
+    try:
+        response = client.get(NASA_TREE_API, headers={"Accept": "application/vnd.github+json"})
+    except httpx.HTTPError as e:
+        raise SourceError(f"Could not reach GitHub ({e.__class__.__name__})")
+    if response.status_code in (403, 429):
+        raise SourceError("GitHub is rate limiting requests; try again in a little while")
+    if response.status_code != 200:
+        raise SourceError(f"GitHub answered with an error ({response.status_code})")
+    try:
+        tree = response.json().get("tree") or []
+    except ValueError:
+        raise SourceError("GitHub returned something unexpected")
+    folders = {}
+    for entry in tree:
+        if entry.get("type") != "blob" or "/" not in entry.get("path", ""):
+            continue
+        folder, filename = entry["path"].rsplit("/", 1)
+        suffix = Path(filename).suffix.lower()
+        kind = "models" if suffix in _NASA_MODEL_EXTENSIONS else "images" if suffix in _NASA_IMAGE_EXTENSIONS else None
+        if kind:
+            slot = folders.setdefault(nasa_listing_id(folder), {"folder": folder, "models": [], "images": []})
+            slot[kind].append({"path": entry["path"], "name": filename, "size": entry.get("size") or 0})
+    folders = {k: v for k, v in folders.items() if v["models"]}
+    if not folders:
+        raise SourceError("NASA's repository listing came back empty (it may have been reorganised)")
+    with _nasa_lock:
+        _nasa_cache.update(at=time.time(), folders=folders)
+    return folders
+
+
+def _nasa_raw(path: str) -> str:
+    return NASA_RAW + quote(path)
+
+
+def _nasa_title(folder: str) -> str:
+    return folder.rsplit("/", 1)[-1]
+
+
+def _search_nasa3d(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    words = [w for w in re.split(r"\W+", query.lower()) if w]
+    matches = [(i, f) for i, f in _nasa_folders(client).items() if all(w in f["folder"].lower() for w in words)]
+    matches.sort(key=lambda m: m[1]["folder"].lower())
+    found = []
+    for source_id, f in matches[(page - 1) * limit: page * limit]:
+        cover = next((i for i in f["images"] if i["size"] <= _NASA_THUMBNAIL_MAX_BYTES), None)
+        found.append({
+            "provider": "nasa3d", "source_id": source_id, "url": NASA_WEB + quote(f["folder"]),
+            "title": _nasa_title(f["folder"]), "designer": "NASA", "license": "NASA public domain",
+            "thumbnail": _nasa_raw(cover["path"]) if cover else None,
+        })
+    return found
+
+
+def _nasa_folder(client: httpx.Client, source_id: str) -> dict:
+    folder = _nasa_folders(client).get(source_id)
+    if not folder:
+        raise SourceError("That listing was not found (it may have been removed)")
+    return folder
+
+
+def _nasa_details(client: httpx.Client, source_id: str) -> dict:
+    f = _nasa_folder(client, source_id)
+    category = f["folder"].split("/")[0]
+    files = ", ".join(m["name"] for m in f["models"])
+    return {
+        "provider": "nasa3d", "source_id": source_id, "url": NASA_WEB + quote(f["folder"]),
+        "title": _nasa_title(f["folder"]), "designer": "NASA", "license": "NASA public domain",
+        "description": f"From NASA's public 3D Resources collection ({category}).\nFiles: {files}",
+        "tags": ["nasa", category.lower()], "category": category,
+        "images": [_nasa_raw(i["path"]) for i in f["images"][:3]],
+        "likes": None, "downloads": None, "parts": [], "filaments": [],
+    }
+
+
+def nasa_files(client: httpx.Client, source_id: str) -> list:
+    f = _nasa_folder(client, source_id)
+    return [{"id": hashlib.sha1(m["path"].encode("utf-8")).hexdigest()[:10], "name": m["name"], "size": m["size"],
+             "url": _nasa_raw(m["path"])} for m in f["models"]]
+
+
 # ---------- model files (Printables, Thingiverse) ----------
 # Only these two sites let a server fetch the files; see the module docstring.
 
@@ -924,6 +1149,16 @@ query($q: String!, $limit: Int!, $offset: Int!) { result: searchPrints2(query: $
 """
 
 
+# Collections of reference models rather than designers' marketplaces: a personal file
+# is unlikely to come from there, and a wrong automatic link is worse than none.
+NOT_FOR_MATCHING = ("commons", "nasa3d")
+
+
+def matching_providers(credentials: Optional[dict] = None) -> tuple:
+    """The sites the 'match my whole library' job searches."""
+    return tuple(p for p in available_providers(credentials) if p not in NOT_FOR_MATCHING)
+
+
 def search(query: str, providers=None, limit: int = 6, credentials: Optional[dict] = None, page: int = 1) -> dict:
     """{'results': [...], 'errors': {provider: message}}. One site being down
     does not hide the other's results. providers defaults to every site that can
@@ -934,27 +1169,35 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
         raise SourceError("Type something to search for")
     page = max(1, int(page or 1))
     providers = available_providers(credentials) if providers is None else providers
+    wanted = [p for p in providers if p in PROVIDERS]
+
+    def one(client, provider):
+        if provider == "printables":
+            return _search_printables(client, query, limit, page)
+        if provider == "makerworld":
+            return _search_makerworld(client, query, limit, page)
+        if provider == "sketchfab":
+            return _search_sketchfab(client, query, limit, page)
+        if provider == "thingiverse":
+            return _search_thingiverse(client, query, limit, _thingiverse_token(credentials), page)
+        if provider == "myminifactory":
+            return _search_myminifactory(client, query, limit, _myminifactory_key(credentials), page)
+        if provider == "commons":
+            return _search_commons(client, query, limit, page)
+        if provider == "nasa3d":
+            return _search_nasa3d(client, query, limit, page)
+        return _search_cults3d(client, query, limit, _cults3d_auth(credentials), page)
+
+    # every site at once: one slow site delays the answer, it does not add up
     results, errors = [], {}
-    with _client() as client:
-        for provider in providers:
-            if provider not in PROVIDERS:
-                continue
-            try:
-                if provider == "printables":
-                    found = _search_printables(client, query, limit, page)
-                elif provider == "makerworld":
-                    found = _search_makerworld(client, query, limit, page)
-                elif provider == "sketchfab":
-                    found = _search_sketchfab(client, query, limit, page)
-                elif provider == "thingiverse":
-                    found = _search_thingiverse(client, query, limit, _thingiverse_token(credentials), page)
-                elif provider == "myminifactory":
-                    found = _search_myminifactory(client, query, limit, _myminifactory_key(credentials), page)
-                else:
-                    found = _search_cults3d(client, query, limit, _cults3d_auth(credentials), page)
-                results.extend(found)
-            except SourceError as e:
-                errors[provider] = str(e)
+    if wanted:
+        with _client() as client, ThreadPoolExecutor(max_workers=len(wanted)) as pool:
+            futures = {provider: pool.submit(one, client, provider) for provider in wanted}
+            for provider in wanted:                 # in the sites' own order, so results stay stable
+                try:
+                    results.extend(futures[provider].result())
+                except SourceError as e:
+                    errors[provider] = str(e)
     return {"results": results, "errors": errors}
 
 

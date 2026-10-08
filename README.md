@@ -80,6 +80,9 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Supplies on hand | Done — a **Supplies** tab for the electronics, parts and supplies you own: quantity, a low-stock threshold (flagged and filterable), location (bin/drawer), unit cost, search, and CSV export. Typing a project part name suggests items from here and pre-fills its type and cost |
 | Match models to online listings | Done — Printables, MakerWorld and Sketchfab (no account) plus Thingiverse, MyMiniFactory and Cults3D (keys entered in Settings); see [Matching models to site listings](#matching-models-to-site-listings) below |
 | Search and add to library | Done — a **Search** page searches your library and every connected site at once; open a result for a full preview page, add one with a button, or tick several and add them together. See [Search and add to library](#search-and-add-to-library) |
+| Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
+| Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
+| Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
 | Bulk unlinking | Done — **Matches → Linked models** lists every linked model (filter by site and how it was linked) and unlinks the ticked ones, or everything matching the filters, in one go |
 | Match your whole library | Done — the **Matches** tab runs a background job that searches Printables and MakerWorld for every model that isn't linked yet and keeps the closest listings as a review queue; you link, tick-and-link in bulk, or skip. See [Matching models to site listings](#matching-models-to-site-listings) |
 | Import a listing's parts into a project | Done — paste a MakerWorld link (or use **Import parts** on a model linked to one) to get the listing's store items and parts list as editable rows, then add the ticked ones to the project in one go |
@@ -168,12 +171,31 @@ site you have enabled, at once. Tick the sites to search (sites that still need 
   designer, license and (optionally) tags. A listing already in your library is never downloaded twice. Downloads run one at
   a time in the background with a progress list you can cancel from.
 - **Bulk add**: tick any number of results (or **Tick all that can be added**) and **Add ticked to library**.
+- **Choose files**: on a listing's page the *Files* box lists every file the server could download, with the default choice
+  already ticked (Printables' model pack, or all of a Thingiverse listing's model files). Tick or untick files, or use
+  **Tick all / Untick all**, before pressing **Add to library**. Files that are not model files are shown greyed out.
+- **Save**: the **Save** button on a result or listing page puts it on the [Wishlist](#wishlist).
 
-**Which sites let a server download files:** Printables (no login needed) and Thingiverse (with your token). MakerWorld,
+**Which sites let a server download files:** Printables (no login needed), Thingiverse (with your token), Wikimedia Commons and
+NASA 3D Resources (both open, no account). MakerWorld,
 Sketchfab and MyMiniFactory only give files to a logged-in user (MyMiniFactory's API key alone can't download), and Cults3D's
 API never serves files at all. For those, the page says so and points to the **browser extension**, which downloads in
 your own logged-in browser. Downloads are restricted to each site's own domains (every redirect is checked), the token is only
-sent to Thingiverse's own hosts, and a single file is capped at 1.5 GB.
+sent to Thingiverse's own hosts, and a single file is capped at 1.5 GB. Sites are searched in parallel, so one slow site
+delays the results by its own time rather than adding up.
+
+**Other sites looked at:** *Wikimedia Commons* and *NASA 3D Resources* were added because they have open interfaces that I
+tested against the live sites. I could not find a public API for *NIH 3D*, *Thangs*, *Creality Cloud* or *Smithsonian 3D*
+(their listings are only on their websites), so they were not added rather than guessing at scraping; if one of them
+publishes an API later it is a small addition. For any site that needs a login to download, use the browser extension.
+
+## Wishlist
+
+The **Wishlist** tab keeps listings you want to come back to. Use **Save** on a search result or a listing page; each item can
+carry a note. The tab shows which items are already in your library, lets you add one with a button, and **Add all to library**
+queues every item the server can download (those already in your library are skipped; sites that need the browser extension
+are reported with the reason). **Remove the ones already in my library** tidies the list afterwards. Downloads from the
+wishlist use the same background queue as the Search page.
 
 ## Auth
 
@@ -248,8 +270,14 @@ linked to its listing with its pictures and details.
 
 Caveats: some sites only reveal their file links after you press their own Download button, and some require you to be logged in;
 open the page that lists the files, then use the button there. The extension avoids hardcoded CSS selectors to stay resilient to
-markup changes, but a site redesign can still change what it finds. The Firefox build has not been tested here (Chrome is the
-reference); it uses the same code with an add-on id and an event-page background.
+markup changes, but a site redesign can still change what it finds.
+
+**Firefox:** the same folder works in Firefox 128 or newer (it has an add-on id and an event-page background next to Chrome's
+service worker; Firefox warns about the unused `service_worker` key, which is harmless). It was tested in real Firefox 157
+(headless, driven by Selenium): the add-on installs, the popup's **Test Connection** and **Save** (including the permission
+for your server) work, the button and panel appear on a model page, the JSON-LD title/designer/license are read, and a file link
+is downloaded and imported into Model Hub with the right name, designer, license and source link. Not covered: logging in to
+the real sites and downloading real files from them (that depends on your own account), and Firefox for Android.
 
 ## Architecture
 

@@ -24,7 +24,7 @@ weight estimates, projects that track the electronics/parts/supplies each
 build needs (with an exportable shopping list and a Supplies page for what you
 already own) and subtract the filament used when a project is marked printed,
 matching of your models (one by one or your whole library) to their Printables/MakerWorld
-listings (pictures, designer, license, tags, parts lists), a page for every model and project with
+listings (pictures, designer, license, tags, parts lists), a Search page across sites with a wishlist, a page for every model and project with
 PDF export, a browser extension for one-click import, and optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
@@ -40,6 +40,18 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.2.0
+New Wishlist tab: save listings from the Search tab or a listing page (with a
+note), see which are already in your library, and add the whole list in one go.
+A listing's page now lists every file it has, so you can tick just the ones you
+want before adding it (Printables' single STLs as well as its model pack).
+Two more sites that need no account can be searched and downloaded: Wikimedia
+Commons (3D files) and NASA 3D Resources (Apollo landing sites, satellites and
+more). Search now asks all sites at once, so one slow site no longer holds up
+the rest. The browser extension manifest is updated for Firefox 128 or newer
+(tested in Firefox 157). No new settings are required; a new table is added
+automatically on first start.
+
 ### 2.1.0
 New Search tab: search your library and every connected site at once, open
 any result for a full preview page, and add models to your library with one

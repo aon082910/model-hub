@@ -19,6 +19,7 @@
     <nav id="tabs">
       <button data-tab="library" class="active">Library</button>
       <button data-tab="search">Search</button>
+      <button data-tab="wishlist">Wishlist</button>
       <button data-tab="collections">Collections</button>
       <button data-tab="projects">Projects</button>
       <button data-tab="supplies">Supplies</button>
@@ -65,6 +66,19 @@
     <div id="discover-online" class="result-grid"></div>
     <div id="discover-more" class="pagination hidden"><button id="discover-more-btn" type="button">Load more results</button></div>
     <div id="downloads-panel" class="panel hidden"></div>
+  </section>
+
+  <section id="tab-wishlist" class="tab">
+    <h2>Wishlist</h2>
+    <p class="muted">Listings you want to keep for later. Save them from the Search page or a listing page, then add the whole list to your library in one go (where the site allows downloads).</p>
+    <div class="bulk-bar">
+      <button id="wishlist-download-all" class="primary">Add all to library</button>
+      <label><input type="checkbox" id="wishlist-opt-images" checked> Save pictures</label>
+      <label><input type="checkbox" id="wishlist-opt-tags"> Add the site's tags</label>
+      <button id="wishlist-remove-added">Remove the ones already in my library</button>
+      <span id="wishlist-status" class="muted"></span>
+    </div>
+    <div id="wishlist-list"></div>
   </section>
 
   <section id="page-listing" class="tab page">

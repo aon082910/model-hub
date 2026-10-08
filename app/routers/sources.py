@@ -11,7 +11,7 @@ from app.source_linking import best_effort_link, link_model_to_listing, unlink_m
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
-SITE_NAMES = "Printables, MakerWorld, Sketchfab, Thingiverse, MyMiniFactory or Cults3D"
+SITE_NAMES = "Printables, MakerWorld, Sketchfab, Thingiverse, MyMiniFactory, Cults3D, Wikimedia Commons or NASA 3D Resources"
 
 
 def _model_json(session: Session, model: Model3D) -> dict:

@@ -65,7 +65,8 @@ function ensureViewerColorControl() {
 // Hash routing, so every page has an address that survives a reload and works with
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
-  library: () => loadModels(), search: () => openSearchPage(''), collections: () => loadCollections(), projects: () => loadProjects(),
+  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(),
+  collections: () => loadCollections(), projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
 };
@@ -613,7 +614,7 @@ function frameCameraOn(object3d) {
 // ---------- Match a model to its Printables / MakerWorld listing ----------
 const PROVIDER_LABELS = {
   printables: 'Printables', makerworld: 'MakerWorld', sketchfab: 'Sketchfab', thingiverse: 'Thingiverse',
-  myminifactory: 'MyMiniFactory', cults3d: 'Cults3D',
+  myminifactory: 'MyMiniFactory', cults3d: 'Cults3D', commons: 'Wikimedia Commons', nasa3d: 'NASA 3D Resources',
 };
 
 function parseJsonList(value) {
@@ -1677,6 +1678,106 @@ async function queueDownloads(items, options) {
   return data;
 }
 
+// ---------- Wishlist ----------
+// Saves a listing, or removes it when wishlistId is given. Returns the new wishlist id (null when removed), or false on failure.
+async function toggleWishlist(wishlistId, listing) {
+  if (wishlistId) {
+    const res = await fetch(`/api/wishlist/${wishlistId}`, { method: 'DELETE' });
+    return res.ok ? null : false;
+  }
+  const res = await jsonRequest('POST', '/api/wishlist', {
+    provider: listing.provider, source_id: listing.source_id, title: listing.title,
+    thumbnail: listing.thumbnail, url: listing.url, designer: listing.designer, license: listing.license,
+  });
+  return res.ok ? (await res.json()).id : false;
+}
+
+let wishlistPoll = null;
+
+function wishlistRow(i) {
+  const dl = i.download;
+  const busy = dl && ACTIVE_STATES.includes(dl.status);
+  const open = `#/listing/${i.provider}/${encodeURIComponent(i.source_id)}`;
+  return `
+    <div class="wishlist-row" data-id="${i.id}">
+      ${i.thumbnail && safeHttpUrl(i.thumbnail)
+        ? `<a href="${open}"><img class="result-thumb" src="${esc(i.thumbnail)}" loading="lazy" referrerpolicy="no-referrer" alt=""></a>`
+        : '<div class="result-thumb"></div>'}
+      <div class="result-info grow">
+        <a href="${open}"><b>${esc(i.title)}</b></a>
+        <div class="muted">${esc(i.label)}${i.designer ? ' · ' + esc(i.designer) : ''}${i.license ? ' · ' + esc(i.license) : ''}</div>
+        <input class="wishlist-note" value="${esc(i.note || '')}" placeholder="Add a note..." maxlength="2000" aria-label="Note for ${esc(i.title)}">
+        <div class="result-actions">
+          ${i.in_library ? `<a class="button-link" href="#/model/${i.in_library}">In your library</a>`
+            : busy ? `<span class="status-badge status-building">${esc(dl.status)}</span> <span class="muted">${esc(dl.message || '')}</span>`
+            : dl && dl.status === 'error' ? `<span class="error-text">${esc(dl.message || 'Failed')}</span> <button class="wishlist-add">Try again</button>`
+            : i.can_download ? '<button class="wishlist-add">Add to library</button>'
+            : `<span class="muted" title="${esc(i.download_note || '')}">view only</span>`}
+          <a class="button-link" href="${open}">Preview</a>
+          <button class="wishlist-remove">Remove</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadWishlist() {
+  const res = await fetch('/api/wishlist');
+  if (!res.ok) return;
+  const items = await res.json();
+  $('#wishlist-list').innerHTML = items.length
+    ? items.map(wishlistRow).join('')
+    : '<p class="muted">Nothing saved yet. Use <b>Save</b> on a search result or listing page.</p>';
+  const waiting = items.some(i => i.download && ACTIVE_STATES.includes(i.download.status));
+  if (waiting && !wishlistPoll) wishlistPoll = setInterval(() => { if (location.hash === '#/wishlist') loadWishlist(); else stopWishlistPoll(); }, 2000);
+  if (!waiting) stopWishlistPoll();
+}
+
+function stopWishlistPoll() { if (wishlistPoll) { clearInterval(wishlistPoll); wishlistPoll = null; } }
+
+async function wishlistDownload(body) {
+  const status = $('#wishlist-status');
+  status.textContent = 'Queueing...';
+  const res = await jsonRequest('POST', '/api/wishlist/download',
+    { ...body, images: $('#wishlist-opt-images').checked, add_tags: $('#wishlist-opt-tags').checked });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { status.textContent = data.detail || 'Could not start the downloads.'; return; }
+  const bits = [`Added ${data.added.length} to the download queue.`];
+  if (data.already_in_library) bits.push(`${data.already_in_library} already in your library.`);
+  if (data.rejected.length) {
+    const sites = [...new Set(data.rejected.map(x => PROVIDER_LABELS[x.provider] || x.provider))];
+    bits.push(`${data.rejected.length} can't be added from here (${sites.join(', ')}): ${data.rejected[0].reason}`);
+  }
+  status.textContent = bits.join(' ');
+  await loadWishlist();
+  if (data.added.length) refreshDownloads();
+}
+
+$('#wishlist-download-all').addEventListener('click', () => wishlistDownload({ all: true }));
+$('#wishlist-remove-added').addEventListener('click', async () => {
+  const res = await fetch('/api/wishlist/remove-added', { method: 'POST' });
+  const data = res.ok ? await res.json() : null;
+  $('#wishlist-status').textContent = data ? `Removed ${data.removed} that are already in your library.` : 'Could not clean up the wishlist.';
+  loadWishlist();
+});
+$('#wishlist-list').addEventListener('click', async (e) => {
+  const row = e.target.closest('.wishlist-row');
+  if (!row) return;
+  const id = parseInt(row.dataset.id);
+  if (e.target.classList.contains('wishlist-remove')) {
+    await fetch(`/api/wishlist/${id}`, { method: 'DELETE' });
+    loadWishlist();
+  } else if (e.target.classList.contains('wishlist-add')) {
+    e.target.disabled = true;
+    wishlistDownload({ ids: [id] });
+  }
+});
+$('#wishlist-list').addEventListener('change', async (e) => {
+  if (!e.target.classList.contains('wishlist-note')) return;
+  const id = parseInt(e.target.closest('.wishlist-row').dataset.id);
+  const res = await jsonRequest('PATCH', `/api/wishlist/${id}`, { note: e.target.value });
+  $('#wishlist-status').textContent = res.ok ? 'Note saved.' : 'Could not save the note.';
+});
+
 // ---------- Search: the library and every site at once ----------
 let lastSearchHash = '#/search';
 const searchState = {
@@ -1766,6 +1867,7 @@ function renderSearchResults() {
               : (r.can_download ? '<button class="result-add">Add to library</button>'
                 : '<span class="muted" title="Open the listing for how to add this one">view only</span>')}
             <a class="button-link" href="#/listing/${r.provider}/${encodeURIComponent(r.source_id)}">Preview</a>
+            <button class="result-save ${r.wishlist_id ? 'saved' : ''}" title="${r.wishlist_id ? 'On your wishlist (click to remove)' : 'Save to your wishlist'}">${r.wishlist_id ? '&#9733; Saved' : '&#9734; Save'}</button>
           </div>
         </div>
       </div>`;
@@ -1793,6 +1895,12 @@ $('#discover-online').addEventListener('click', async (e) => {
   if (e.target.classList.contains('result-check')) {
     if (e.target.checked) searchState.selected.set(card.dataset.key, r); else searchState.selected.delete(card.dataset.key);
     card.classList.toggle('picked', e.target.checked);
+  } else if (e.target.classList.contains('result-save')) {
+    e.target.disabled = true;
+    const id = await toggleWishlist(r.wishlist_id, r);
+    if (id === false) { $('#discover-status').textContent = 'Could not update the wishlist.'; e.target.disabled = false; return; }
+    r.wishlist_id = id;
+    renderSearchResults();
   } else if (e.target.classList.contains('result-add')) {
     e.target.disabled = true;
     e.target.textContent = 'Queued...';
@@ -1852,6 +1960,7 @@ function renderListing(data) {
   const d = data.details;
   const site = PROVIDER_LABELS[d.provider] || d.provider;
   const inLibrary = data.in_library;
+  const downloading = lastDownloads.items.some(i => i.provider === d.provider && i.source_id === d.source_id && ACTIVE_STATES.includes(i.status));
   const parts = d.parts || [];
   const filaments = d.filaments || [];
   $('#listing-body').innerHTML = `
@@ -1866,8 +1975,9 @@ function renderListing(data) {
     </div>
 
     <div class="listing-actions">
-      ${data.can_download && !inLibrary.length && data.files && data.files.length
+      ${data.can_download && !inLibrary.length && !downloading && data.files && data.files.some(f => f.selectable)
         ? '<button id="listing-add" class="primary">Add to library</button>' : ''}
+      <button id="listing-save" class="${data.wishlist_id ? 'saved' : ''}">${data.wishlist_id ? '&#9733; On your wishlist' : '&#9734; Save to wishlist'}</button>
       ${safeHttpUrl(d.url) ? `<a class="button-link" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(site)}</a>` : ''}
       <label class="muted"><input type="checkbox" id="listing-opt-tags"> Also add the site's tags</label>
     </div>
@@ -1891,20 +2001,45 @@ function renderListing(data) {
       </div>
       <aside class="page-side">
         ${(d.tags || []).length ? `<div class="panel"><h3>Tags</h3><div class="source-tags">${d.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div></div>` : ''}
-        ${data.files && data.files.length ? `<div class="panel"><h3>Files this server would download</h3>
-          <ul class="link-list">${data.files.map(f => `<li>${esc(f.name)} <span class="muted">${f.size ? formatBytes(f.size) : ''}</span></li>`).join('')}</ul></div>` : ''}
+        ${data.files && data.files.length ? `<div class="panel"><h3>Files</h3>
+          <p class="muted">${inLibrary.length ? 'Files on the site.' : 'Tick the files to add to your library.'}</p>
+          ${!inLibrary.length && data.files.filter(f => f.selectable).length > 2
+            ? '<div class="row"><button id="files-all" type="button">Tick all</button><button id="files-none" type="button">Untick all</button></div>' : ''}
+          <ul class="link-list file-list">${data.files.map(f => `<li class="${f.selectable ? '' : 'file-off'}">
+            <label><input type="checkbox" class="file-pick" value="${esc(String(f.id))}" ${f.selected ? 'checked' : ''}
+              ${f.selectable && !inLibrary.length ? '' : 'disabled'}> ${esc(f.name)}</label>
+            <span class="muted">${f.size ? formatBytes(f.size) : ''}${f.selectable ? '' : ' · not a model file'}</span></li>`).join('')}</ul></div>` : ''}
         ${filaments.length ? `<div class="panel"><h3>Suggested filament</h3><ul class="link-list">${filaments.map(f =>
           `<li>${esc(f.label)}</li>`).join('')}</ul></div>` : ''}
       </aside>
     </div>`;
   renderDownloads(lastDownloads);
+  $$('#files-all, #files-none').forEach(b => b.onclick = () => {
+    $$('.file-pick:not(:disabled)').forEach(c => { c.checked = b.id === 'files-all'; });
+  });
+  const save = $('#listing-save');
+  save.onclick = async () => {
+    save.disabled = true;
+    const id = await toggleWishlist(data.wishlist_id, {
+      provider: d.provider, source_id: d.source_id, title: d.title, thumbnail: (d.images || [])[0],
+      url: d.url, designer: d.designer, license: d.license,
+    });
+    if (id === false) { save.disabled = false; return; }
+    data.wishlist_id = id;
+    renderListing(data);
+  };
   const add = $('#listing-add');
   if (add) {
     add.onclick = async () => {
+      const fileIds = [...$$('.file-pick:checked')].map(c => c.value);
+      if (!fileIds.length) {
+        $('#listing-download').innerHTML = '<div class="notice error-text">Tick at least one file to add.</div>';
+        return;
+      }
       add.disabled = true;
       add.textContent = 'Queued...';
       const res = await queueDownloads(
-        [{ provider: d.provider, source_id: d.source_id, title: d.title, thumbnail: (d.images || [])[0] }],
+        [{ provider: d.provider, source_id: d.source_id, title: d.title, thumbnail: (d.images || [])[0], file_ids: fileIds }],
         { images: true, add_tags: $('#listing-opt-tags').checked });
       if (res.error || (res.rejected && res.rejected.length)) {
         add.disabled = false;
