@@ -1,3 +1,19 @@
+// Downloads the chosen files in the browser (so they are fetched with your own
+// logged-in session, which MakerWorld, MyMiniFactory and others require) and
+// posts them to your Model Hub. Model Hub keeps only model files; a .zip is opened
+// there and just the models inside are kept.
+const ALLOWED_EXTENSIONS = /\.(stl|3mf|step|stp|obj|fbx|zip)$/i;
+
+function fileNameFrom(response, wantedName, url) {
+  if (wantedName && ALLOWED_EXTENSIONS.test(wantedName)) return wantedName;
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(disposition) || /filename="?([^";]+)"?/i.exec(disposition);
+  if (match) {
+    try { return decodeURIComponent(match[1].trim().replace(/^"|"$/g, '')); } catch (e) { return match[1].trim(); }
+  }
+  try { return decodeURIComponent(new URL(response.url || url).pathname.split('/').pop() || ''); } catch (e) { return ''; }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type !== 'modelhub-import') return false;
 
@@ -12,15 +28,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    // older versions of the content script sent plain URLs
+    const files = msg.files || (msg.fileUrls || []).map((url) => ({ url, name: '' }));
     let imported = 0;
     const errors = [];
 
-    for (const fileUrl of msg.fileUrls) {
+    for (const file of files) {
+      const label = file.name || file.url.split('/').pop().split('?')[0] || file.url;
       try {
-        const fileResp = await fetch(fileUrl);
+        const fileResp = await fetch(file.url, { credentials: 'include' });
         if (!fileResp.ok) throw new Error(`download HTTP ${fileResp.status}`);
+        if ((fileResp.headers.get('content-type') || '').includes('text/html')) {
+          throw new Error('that link opened a web page, not a file (you may need to log in)');
+        }
+        const filename = fileNameFrom(fileResp, file.name, file.url) || 'model.stl';
+        if (!ALLOWED_EXTENSIONS.test(filename)) throw new Error(`${filename} is not a model file or zip`);
         const blob = await fileResp.blob();
-        const filename = decodeURIComponent(fileUrl.split('/').pop().split('?')[0]) || 'model.stl';
 
         const form = new FormData();
         form.append('file', blob, filename);
@@ -39,7 +62,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         imported++;
       } catch (e) {
-        errors.push(`${fileUrl.split('/').pop()}: ${e.message}`);
+        errors.push(`${label}: ${e.message}`);
       }
     }
 

@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
@@ -65,3 +67,40 @@ def confirm(model_id: int, session: Session = Depends(get_session)):
     if not jobs.confirm_auto_link(session, model_id):
         raise HTTPException(404, "That model was not auto-linked")
     return {"status": "confirmed"}
+
+
+MAX_UNLINK_IDS = 5000
+LINKED_BY_VALUES = ("manual", "auto", "extension", "download")
+
+
+@router.get("/linked")
+def linked(
+    provider: Optional[str] = None,
+    linked_by: Optional[str] = None,
+    q: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_session),
+):
+    if linked_by and linked_by not in LINKED_BY_VALUES:
+        raise HTTPException(400, f"linked_by must be one of: {', '.join(LINKED_BY_VALUES)}")
+    return jobs.linked_models(session, provider or None, linked_by or None, q, offset, limit)
+
+
+@router.post("/unlink")
+def unlink(payload: dict, session: Session = Depends(get_session)):
+    """Unlink many models. Give model_ids, or provider / linked_by / q to unlink
+    everything that matches; to unlink every linked model say {"all": true}."""
+    ids = payload.get("model_ids")
+    if ids is not None:
+        if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+            raise HTTPException(400, "model_ids must be a list of numbers")
+        if len(ids) > MAX_UNLINK_IDS:
+            raise HTTPException(400, f"at most {MAX_UNLINK_IDS} models at a time")
+        return {"unlinked": jobs.unlink_many(session, model_ids=ids)}
+    provider, linked_by, query = payload.get("provider"), payload.get("linked_by"), payload.get("q")
+    if linked_by and linked_by not in LINKED_BY_VALUES:
+        raise HTTPException(400, f"linked_by must be one of: {', '.join(LINKED_BY_VALUES)}")
+    if not (provider or linked_by or (query or "").strip() or payload.get("all") is True):
+        raise HTTPException(400, 'Give model_ids, a filter (provider, linked_by, q) or {"all": true}')
+    return {"unlinked": jobs.unlink_many(session, provider=provider or None, linked_by=linked_by or None, query=query)}

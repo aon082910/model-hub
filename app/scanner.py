@@ -372,8 +372,47 @@ def import_uploaded_archive(
     projects, nested archives -- is ignored, and nothing outside the model
     types is ever written. Returns {'models': [...], 'ignored': n}."""
     stem = Path(Path(filename).name).stem or "archive"
+    return _import_archive(session, io.BytesIO(content), LIBRARY_PATH / "imported" / stem,
+                           source_url, designer, license)
+
+
+def import_archive_from_path(
+    session: Session,
+    archive_path: Path,
+    folder: Path,
+    source_url: str = None,
+    designer: str = None,
+    license: str = None,
+) -> dict:
+    """Same as import_uploaded_archive for a zip already on disk (a download),
+    extracting the models into `folder` (inside the library)."""
+    return _import_archive(session, archive_path, folder, source_url, designer, license)
+
+
+def import_model_from_path(
+    session: Session,
+    source_path: Path,
+    folder: Path,
+    filename: str,
+    source_url: str = None,
+    designer: str = None,
+    license: str = None,
+) -> Model3D:
+    """Move a model file that is already on disk (a download) into `folder`
+    inside the library and index it."""
+    filename = Path(filename).name
+    if Path(filename).suffix.lower() not in MODEL_EXTENSIONS:
+        raise ValueError(f"Unsupported file type: {Path(filename).suffix or '(none)'}")
+    dest = _unique_destination(folder, filename)
+    shutil.move(str(source_path), str(dest))
+    model = _upsert_path(session, dest, str(dest.relative_to(LIBRARY_PATH)), {})
+    return _describe(session, model, source_url, designer, license)
+
+
+def _import_archive(session: Session, source, folder: Path, source_url, designer, license) -> dict:
+    """`source` is a path or a file object; models go into `folder`."""
     try:
-        archive = zipfile.ZipFile(io.BytesIO(content))
+        archive = zipfile.ZipFile(source)
     except zipfile.BadZipFile:
         raise ValueError("That zip file could not be read")
 
@@ -397,11 +436,10 @@ def import_uploaded_archive(
             raise ValueError("The model files in that zip are too large to import")
 
         models = []
-        folder = LIBRARY_PATH / "imported" / stem
         for info, name in members:
             dest = _unique_destination(folder, name)
-            with archive.open(info) as source, open(dest, "wb") as target:
-                shutil.copyfileobj(source, target)          # streamed: one big model is never fully in memory
+            with archive.open(info) as member, open(dest, "wb") as target:
+                shutil.copyfileobj(member, target)          # streamed: one big model is never fully in memory
             model = _upsert_path(session, dest, str(dest.relative_to(LIBRARY_PATH)), {})
             models.append(_describe(session, model, source_url, designer, license))
     for model in models:

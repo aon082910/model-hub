@@ -1,23 +1,46 @@
 {
   "manifest_version": 3,
   "name": "Model Hub Importer",
-  "version": "1.0.0",
-  "description": "Send model files from Printables or MakerWorld straight into your self-hosted Model Hub library.",
+  "version": "1.1.0",
+  "description": "Send model files from Printables, MakerWorld, Thingiverse, MyMiniFactory, Cults3D or Sketchfab straight into your self-hosted Model Hub library.",
   "action": {
     "default_popup": "popup.html"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
   "content_scripts": [
     {
-      "matches": ["*://*.printables.com/*", "*://*.makerworld.com/*"],
+      "matches": [
+        "*://*.printables.com/*",
+        "*://*.makerworld.com/*",
+        "*://*.thingiverse.com/*",
+        "*://*.myminifactory.com/*",
+        "*://*.cults3d.com/*",
+        "*://*.sketchfab.com/*"
+      ],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }
   ],
   "permissions": ["storage", "activeTab", "scripting"],
-  "host_permissions": ["*://*.printables.com/*", "*://*.makerworld.com/*"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"]
+  "host_permissions": [
+    "*://*.printables.com/*",
+    "*://*.makerworld.com/*",
+    "*://*.bambulab.com/*",
+    "*://*.bblmw.com/*",
+    "*://*.thingiverse.com/*",
+    "*://*.myminifactory.com/*",
+    "*://*.cults3d.com/*",
+    "*://*.sketchfab.com/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "modelhub-importer@aon082910.github.io",
+      "strict_min_version": "121.0"
+    }
+  }
 }

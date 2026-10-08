@@ -88,6 +88,57 @@ THINGIVERSE_SEARCH = {"total": 1, "hits": [{
     "creator": {"name": "CreativeTools"}, "thumbnail": "https://cdn.thingiverse.com/thumb.jpg"}]}
 
 
+MMF_KEY = "mmf-test-key"
+MMF_OBJECT = {
+    "id": 11323, "url": "https://www.myminifactory.com/object/3d-print-hammered-patrick-11323", "name": "Hammered Patrick",
+    "description": "<p>A <b>fun</b> figure</p>", "likes": 12, "views": 345,
+    "designer": {"username": "pat", "name": "Patrick Maker"},
+    "images": [
+        {"id": 2, "is_primary": False, "thumbnail": {"url": "https://cdn.myminifactory.com/t2.jpg"},
+         "standard": {"url": "https://cdn.myminifactory.com/s2.jpg"}, "original": {"url": "https://cdn.myminifactory.com/o2.jpg"}},
+        {"id": 1, "is_primary": True, "thumbnail": {"url": "https://cdn.myminifactory.com/t1.jpg"},
+         "standard": {"url": "https://cdn.myminifactory.com/s1.jpg"}, "original": {"url": "https://cdn.myminifactory.com/o1.jpg"}}],
+    "categories": [{"name": "Miniatures"}], "tags": ["patrick", "figure"],
+    "licenses": [{"type": "mention", "value": True}, {"type": "remix", "value": True}, {"type": "commercial-use", "value": False}],
+}
+MMF_SEARCH = {"total_count": 1, "items": [MMF_OBJECT, {"id": 99, "name": "Other", "images": []}]}
+
+CULTS_USER, CULTS_KEY = "cults-nick", "cults-secret"
+CULTS_URL = "https://cults3d.com/en/3d-model/art/frame-wall-hanger-f745834a-4835"
+CULTS_CREATION = {
+    "name": "Frame wall hanger", "url": CULTS_URL, "illustrationImageUrl": "https://images.cults3d.com/cover.jpg",
+    "description": "<p>Hang <i>frames</i></p>", "license": {"name": "Creative Commons - Attribution"},
+    "category": {"name": "Art"}, "tags": ["frame", "wall"], "creator": {"nick": "3DPrinterFiles"},
+    "viewsCount": 10, "likesCount": 4, "downloadsCount": 7,
+}
+
+
+def _model_stl(n):
+    return (f"solid t\nfacet normal 0 0 1\n outer loop\n  vertex 0 0 0\n  vertex {n} 0 0\n  vertex 0 {n} 0\n"
+            " endloop\nendfacet\nendsolid t\n").encode()
+
+
+def _pack_zip():
+    import zipfile
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        z.writestr("Benchy/hull.stl", _model_stl(31))
+        z.writestr("Benchy/deck.stl", _model_stl(32))
+        z.writestr("Benchy/README.txt", "print me")
+        z.writestr("Benchy/preview.jpg", b"jpg")
+    return out.getvalue()
+
+
+PRINTABLES_FILES = {"data": {"print": {"id": "3161", "stls": [{"id": "49068", "name": "3dbenchy.stl", "fileSize": 1000}],
+                                       "downloadPacks": [{"id": "7763318", "fileSize": 4000, "fileType": "MODEL_FILES"},
+                                                         {"id": "7768534", "fileSize": 9, "fileType": "PRINT_FILES"}]}}}
+THINGIVERSE_FILES = [
+    {"id": 1, "name": "benchy.stl", "size": 100, "download_url": "https://www.thingiverse.com/download:1"},
+    {"id": 2, "name": "readme.txt", "size": 5, "download_url": "https://www.thingiverse.com/download:2"},
+    {"id": 3, "name": "photo.jpg", "size": 5, "download_url": "https://www.thingiverse.com/download:3"},
+]
+
+
 class FakeSites:
     """Records calls and answers like the two sites; flip the flags to break one."""
 
@@ -98,6 +149,21 @@ class FakeSites:
         self.sketchfab_status = 200
         self.thingiverse_status = 200
         self.thingiverse_requests = []          # (path, authorization header, query string)
+        self.mmf_status = 200
+        self.mmf_requests = []                  # full request URLs (the key is in the query string there)
+        self.cults_status = 200
+        self.printables_files = PRINTABLES_FILES          # what the file-listing query returns
+        self.printables_link = None                       # override the download link (for the safety tests)
+        self.printables_file_status = 200
+        self.printables_zip = None                        # override the pack contents
+        self.thingiverse_files = THINGIVERSE_FILES
+        self.thingiverse_redirect_to = None               # send the download somewhere else
+        self.thingiverse_download_auth = []               # Authorization header seen by www.thingiverse.com
+        self.cdn_download_auth = []                       # ...and by the CDN (must stay empty)
+        self.file_requests = []
+        self.cults_no_description = False       # the schema has no description field
+        self.cults_queries = []                 # (query text, variables)
+        self.cults_auth = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -107,6 +173,15 @@ class FakeSites:
             if self.printables_down:
                 return httpx.Response(503)
             body = json.loads(request.content)
+            query_text = body["query"]
+            if "downloadPacks" in query_text:
+                return httpx.Response(200, json=self.printables_files)
+            if "getDownloadLink" in query_text:
+                kind = "pack" if "fileType: pack" in query_text else "stl"
+                link = self.printables_link or (
+                    "https://files.printables.com/media/prints/3161/packs/7763318_x/3d-benchy-model_files.zip" if kind == "pack"
+                    else "https://files.printables.com/media/prints/3161/stls/49068_x/3dbenchy.stl")
+                return httpx.Response(200, json={"data": {"getDownloadLink": {"ok": True, "errors": None, "output": {"link": link, "ttl": 86400}}}})
             return httpx.Response(200, json=PRINTABLES_SEARCH if "searchPrints2" in body["query"] else PRINTABLES_PRINT)
         if host == "api.bambulab.com":
             if self.makerworld_status != 200:
@@ -118,6 +193,46 @@ class FakeSites:
             if self.sketchfab_status != 200:
                 return httpx.Response(self.sketchfab_status)
             return httpx.Response(200, json=SKETCHFAB_SEARCH if request.url.path.endswith("/search") else SKETCHFAB_MODEL)
+        if host == "www.myminifactory.com" and request.url.path.startswith("/api/v2/"):
+            self.mmf_requests.append(url)
+            if self.mmf_status != 200:
+                return httpx.Response(self.mmf_status)
+            if request.url.params.get("key") != MMF_KEY:
+                return httpx.Response(401, json={"error": "access_denied", "error_description": "Invalid API key."})
+            if request.url.path == "/api/v2/search":
+                return httpx.Response(200, json=MMF_SEARCH)
+            return httpx.Response(200, json=MMF_OBJECT)
+        if host == "cults3d.com" and request.url.path == "/graphql":
+            body = json.loads(request.content)
+            self.cults_queries.append((body["query"], body.get("variables")))
+            self.cults_auth.append(request.headers.get("authorization"))
+            if self.cults_status != 200:
+                return httpx.Response(self.cults_status)
+            import base64
+            if request.headers.get("authorization") != "Basic " + base64.b64encode(f"{CULTS_USER}:{CULTS_KEY}".encode()).decode():
+                return httpx.Response(401, text="HTTP Basic: Access denied.")
+            if "creationsSearchBatch" in body["query"]:
+                return httpx.Response(200, json={"data": {"creationsSearchBatch": {"total": 1, "results": [
+                    {"name": CULTS_CREATION["name"], "url": CULTS_URL, "illustrationImageUrl": CULTS_CREATION["illustrationImageUrl"],
+                     "creator": {"nick": "3DPrinterFiles"}, "license": {"name": "CC-BY"}}]}}})
+            if self.cults_no_description and "description" in body["query"]:
+                return httpx.Response(200, json={"errors": [{"message": "Field 'description' doesn't exist on type 'Creation'"}]})
+            creation = {k: v for k, v in CULTS_CREATION.items() if not (self.cults_no_description and k == "description")}
+            return httpx.Response(200, json={"data": {"creation": creation}})
+        if host == "files.printables.com":
+            self.file_requests.append(url)
+            if self.printables_file_status != 200:
+                return httpx.Response(self.printables_file_status)
+            if url.endswith(".zip"):
+                return httpx.Response(200, content=self.printables_zip or _pack_zip())
+            return httpx.Response(200, content=_model_stl(41))
+        if host == "www.thingiverse.com" and request.url.path.startswith("/download:"):
+            self.thingiverse_download_auth.append(request.headers.get("authorization"))
+            target = self.thingiverse_redirect_to or f"https://cdn.thingiverse.com/files/{request.url.path.split(':')[1]}/benchy.stl"
+            return httpx.Response(302, headers={"location": target})
+        if host == "cdn.thingiverse.com" and request.url.path.startswith("/files/"):
+            self.cdn_download_auth.append(request.headers.get("authorization"))
+            return httpx.Response(200, content=_model_stl(51))
         if host == "api.thingiverse.com":
             self.thingiverse_requests.append((request.url.path, request.headers.get("authorization"), request.url.query.decode()))
             if self.thingiverse_status != 200:
@@ -127,12 +242,14 @@ class FakeSites:
             path = request.url.path
             if path.startswith("/search/"):
                 return httpx.Response(200, json=THINGIVERSE_SEARCH)
+            if path.endswith("/files"):
+                return httpx.Response(200, json=self.thingiverse_files)
             if path.endswith("/images"):
                 return httpx.Response(200, json=THINGIVERSE_IMAGES)
             if path.endswith("/tags"):
                 return httpx.Response(200, json=[{"name": "Benchy"}, {"name": "calibration"}])
             return httpx.Response(200, json=THINGIVERSE_THING)
-        if host in sources.IMAGE_HOSTS:
+        if sources.image_host_allowed(host):
             return httpx.Response(200, content=JPG if url.endswith(".jpg") else PNG)
         raise AssertionError(f"unexpected request to {url}")
 
@@ -505,7 +622,7 @@ def test_sketchfab_details_and_search(sites):
 
 def test_thingiverse_needs_a_token(sites):
     assert "thingiverse" not in sources.available_providers({})
-    assert "thingiverse" in sources.available_providers({"thingiverse": THINGIVERSE_TOKEN})
+    assert "thingiverse" in sources.available_providers({"thingiverse": {"token": THINGIVERSE_TOKEN}})
     with pytest.raises(sources.SourceError, match="access token"):
         sources.fetch_details("thingiverse", "763622")
     found = sources.search("benchy", providers=("thingiverse",))
@@ -514,7 +631,7 @@ def test_thingiverse_needs_a_token(sites):
 
 
 def test_thingiverse_details_and_search(sites):
-    creds = {"thingiverse": THINGIVERSE_TOKEN}
+    creds = {"thingiverse": {"token": THINGIVERSE_TOKEN}}
     d = sources.fetch_details("thingiverse", "763622", creds)
     assert (d["title"], d["designer"]) == ("#3DBenchy", "CreativeTools")
     assert d["license"] == "Creative Commons - Attribution - No Derivatives"
@@ -530,27 +647,29 @@ def test_thingiverse_details_and_search(sites):
 
 
 def test_thingiverse_errors_never_leak_the_token(sites):
-    creds = {"thingiverse": "wrong-token-value"}
+    creds = {"thingiverse": {"token": "wrong-token-value"}}
     with pytest.raises(sources.SourceError, match="rejected the access token") as exc:
         sources.fetch_details("thingiverse", "763622", creds)
     assert "wrong-token-value" not in str(exc.value)
     sites.thingiverse_status = 429
     with pytest.raises(sources.SourceError, match="rate limiting"):
-        sources.fetch_details("thingiverse", "763622", {"thingiverse": THINGIVERSE_TOKEN})
+        sources.fetch_details("thingiverse", "763622", {"thingiverse": {"token": THINGIVERSE_TOKEN}})
     sites.thingiverse_status = 404
     with pytest.raises(sources.SourceError, match="not found"):
-        sources.fetch_details("thingiverse", "763622", {"thingiverse": THINGIVERSE_TOKEN})
+        sources.fetch_details("thingiverse", "763622", {"thingiverse": {"token": THINGIVERSE_TOKEN}})
 
 
 def test_thingiverse_token_is_a_masked_setting_and_enables_the_provider(authed, sites):
     providers = {p["id"]: p for p in authed.get("/api/sources/providers").json()}
-    assert providers["thingiverse"] == {"id": "thingiverse", "label": "Thingiverse", "needs_token": True, "enabled": False}
-    assert providers["sketchfab"]["enabled"] is True and providers["sketchfab"]["needs_token"] is False
+    assert providers["thingiverse"]["enabled"] is False and providers["thingiverse"]["needs_credentials"] is True
+    assert providers["thingiverse"]["fields"] == [{"name": "token", "label": "Access token", "secret": True, "set": False}]
+    assert providers["sketchfab"]["enabled"] is True and providers["sketchfab"]["needs_credentials"] is False
 
     assert authed.put("/api/settings", json={"thingiverse_token": THINGIVERSE_TOKEN}).status_code == 200
     try:
         assert authed.get("/api/settings").json()["thingiverse_token"] == "********"       # never echoed back
-        assert {p["id"]: p["enabled"] for p in authed.get("/api/sources/providers").json()}["thingiverse"] is True
+        now = {p["id"]: p for p in authed.get("/api/sources/providers").json()}
+        assert now["thingiverse"]["enabled"] is True and now["thingiverse"]["fields"][0]["set"] is True
         found = authed.get("/api/sources/search", params={"q": "benchy"}).json()
         assert "thingiverse" in {r["provider"] for r in found["results"]}
         d = authed.get("/api/sources/lookup", params={"url": "https://www.thingiverse.com/thing:763622"}).json()
@@ -589,3 +708,133 @@ def test_makerworld_filaments():
         {"material": "PETG", "brand": "Bambu Lab", "color": "Black", "code": "33102", "label": "PETG HF Black"},
     ]
     assert sources.makerworld_filaments({}) == []
+
+
+
+# ---------- MyMiniFactory ----------
+
+def test_parse_urls_for_myminifactory_and_cults3d():
+    assert sources.parse_url("https://www.myminifactory.com/object/3d-print-hammered-patrick-11323") == ("myminifactory", "11323")
+    assert sources.parse_url("https://www.myminifactory.com/fr/object/hammered-patrick-11323?x=1") == ("myminifactory", "11323")
+    assert sources.parse_url(CULTS_URL) == ("cults3d", "frame-wall-hanger-f745834a-4835")
+    assert sources.parse_url(CULTS_URL + "/?utm=1") == ("cults3d", "frame-wall-hanger-f745834a-4835")
+    for bad in ("https://www.myminifactory.com/users/pat", "https://cults3d.com/en/users/someone", "https://cults3d.com/en/3d-model/art/"):
+        assert sources.parse_url(bad) is None, bad
+    assert sources.valid_source_id("cults3d", "frame-wall-hanger-f745834a") and not sources.valid_source_id("cults3d", "../etc")
+    assert sources.valid_source_id("myminifactory", "11323") and not sources.valid_source_id("myminifactory", "abc")
+
+
+def test_myminifactory_needs_a_key_and_sends_it(sites):
+    assert "myminifactory" not in sources.available_providers({})
+    with pytest.raises(sources.SourceError, match="API key"):
+        sources.fetch_details("myminifactory", "11323")
+    assert sites.mmf_requests == []
+    creds = {"myminifactory": {"key": MMF_KEY}}
+    d = sources.fetch_details("myminifactory", "11323", creds)
+    assert (d["title"], d["designer"], d["category"]) == ("Hammered Patrick", "Patrick Maker", "Miniatures")
+    assert d["description"] == "A fun figure" and d["tags"] == ["patrick", "figure"]
+    assert d["license"] == "credit the designer, remixing allowed"                  # only the allowed ones
+    assert d["images"][0] == "https://cdn.myminifactory.com/s1.jpg"                 # the primary picture first
+    assert d["likes"] == 12 and d["downloads"] == 345 and d["parts"] == [] and d["filaments"] == []
+    found = sources.search("patrick", providers=("myminifactory",), credentials=creds, limit=5, page=3)["results"]
+    assert found[0]["source_id"] == "11323" and found[0]["thumbnail"] == "https://cdn.myminifactory.com/t1.jpg"
+    assert found[1]["thumbnail"] is None
+    last = sites.mmf_requests[-1]
+    assert "page=3" in last and "per_page=5" in last and f"key={MMF_KEY}" in last
+
+
+def test_myminifactory_errors_and_the_key_stays_out_of_the_log():
+    import logging
+    assert logging.getLogger("httpx").level >= logging.WARNING      # httpx would log the key-bearing URL at INFO
+
+
+@pytest.mark.parametrize("status,fragment", [(404, "not found"), (429, "rate limiting"), (500, r"error \(500\)")])
+def test_myminifactory_status_codes(sites, status, fragment):
+    sites.mmf_status = status
+    with pytest.raises(sources.SourceError, match=fragment):
+        sources.fetch_details("myminifactory", "1", {"myminifactory": {"key": MMF_KEY}})
+
+
+def test_myminifactory_wrong_key_message_never_contains_the_key(sites):
+    with pytest.raises(sources.SourceError, match="rejected the API key") as exc:
+        sources.fetch_details("myminifactory", "1", {"myminifactory": {"key": "the-wrong-key"}})
+    assert "the-wrong-key" not in str(exc.value)
+
+
+# ---------- Cults3D ----------
+
+def test_cults3d_needs_both_credentials(sites):
+    for partial in ({}, {"cults3d": {"username": CULTS_USER, "key": ""}}, {"cults3d": {"username": "", "key": CULTS_KEY}}):
+        assert "cults3d" not in sources.available_providers(partial)
+        with pytest.raises(sources.SourceError, match="nickname and API key"):
+            sources.fetch_details("cults3d", "frame-wall", partial)
+    assert sites.cults_queries == []
+
+
+def test_cults3d_search_and_details(sites):
+    creds = {"cults3d": {"username": CULTS_USER, "key": CULTS_KEY}}
+    found = sources.search("frame", providers=("cults3d",), credentials=creds)["results"]
+    assert found == [{
+        "provider": "cults3d", "source_id": "frame-wall-hanger-f745834a-4835", "url": CULTS_URL, "title": "Frame wall hanger",
+        "designer": "3DPrinterFiles", "license": "CC-BY", "thumbnail": "https://images.cults3d.com/cover.jpg"}]
+    first_query, first_vars = sites.cults_queries[-1]
+    assert "offset" not in first_query and first_vars == {"q": "frame", "limit": 6}
+    sources.search("frame", providers=("cults3d",), credentials=creds, page=3, limit=4)
+    paged_query, paged_vars = sites.cults_queries[-1]
+    assert "$offset: Int" in paged_query and paged_vars == {"q": "frame", "limit": 4, "offset": 8}
+
+    d = sources.fetch_details("cults3d", "frame-wall-hanger-f745834a-4835", creds)
+    assert (d["title"], d["designer"], d["license"], d["category"]) == ("Frame wall hanger", "3DPrinterFiles", "Creative Commons - Attribution", "Art")
+    assert d["description"] == "Hang frames" and d["tags"] == ["frame", "wall"] and d["images"] == ["https://images.cults3d.com/cover.jpg"]
+    assert (d["likes"], d["downloads"]) == (4, 7)
+    assert sites.cults_auth[-1].startswith("Basic ")                                      # HTTP Basic: nickname + key
+    assert CULTS_KEY not in sites.cults_auth[-1]                                         # (base64, not the plain key)
+
+
+def test_cults3d_details_fall_back_when_the_schema_has_no_description(sites):
+    sites.cults_no_description = True
+    d = sources.fetch_details("cults3d", "frame-wall-hanger-f745834a-4835", {"cults3d": {"username": CULTS_USER, "key": CULTS_KEY}})
+    assert d["title"] == "Frame wall hanger" and d["description"] == ""
+    assert len(sites.cults_queries) == 2 and "description" not in sites.cults_queries[-1][0]
+
+
+@pytest.mark.parametrize("status,fragment", [(429, "rate limiting"), (500, r"error \(500\)")])
+def test_cults3d_status_codes(sites, status, fragment):
+    sites.cults_status = status
+    with pytest.raises(sources.SourceError, match=fragment):
+        sources.fetch_details("cults3d", "frame-wall", {"cults3d": {"username": CULTS_USER, "key": CULTS_KEY}})
+
+
+def test_cults3d_wrong_credentials(sites):
+    found = sources.search("frame", providers=("cults3d",), credentials={"cults3d": {"username": CULTS_USER, "key": "wrong"}})
+    assert "rejected the nickname / API key" in found["errors"]["cults3d"]
+
+
+# ---------- credentials in Settings, tested from the GUI ----------
+
+def test_all_site_credentials_are_settings_and_secrets_are_masked(authed, sites):
+    authed.put("/api/settings", json={
+        "myminifactory_key": MMF_KEY, "cults3d_username": CULTS_USER, "cults3d_key": CULTS_KEY})
+    try:
+        masked = authed.get("/api/settings").json()
+        assert masked["myminifactory_key"] == "********" and masked["cults3d_key"] == "********"
+        assert masked["cults3d_username"] == CULTS_USER                   # a nickname is not a secret
+        info = {p["id"]: p for p in authed.get("/api/sources/providers").json()}
+        assert info["myminifactory"]["enabled"] is True and info["cults3d"]["enabled"] is True
+        assert [f["set"] for f in info["cults3d"]["fields"]] == [True, True]
+        assert info["printables"]["can_download"] and info["thingiverse"]["can_download"]
+        for blocked in ("makerworld", "sketchfab", "myminifactory", "cults3d"):
+            assert info[blocked]["can_download"] is False and info[blocked]["download_note"], blocked
+
+        ok = authed.post("/api/sources/test/myminifactory").json()
+        assert ok == {"ok": True, "message": "MyMiniFactory accepted the credentials."}
+        ok = authed.post("/api/sources/test/cults3d").json()
+        assert ok["ok"] is True
+
+        authed.put("/api/settings", json={"myminifactory_key": "not-the-key"})
+        bad = authed.post("/api/sources/test/myminifactory").json()
+        assert bad["ok"] is False and "rejected the API key" in bad["message"] and "not-the-key" not in bad["message"]
+    finally:
+        authed.put("/api/settings", json={"myminifactory_key": "", "cults3d_username": "", "cults3d_key": ""})
+    assert authed.post("/api/sources/test/myminifactory").status_code == 400          # nothing saved any more
+    assert authed.post("/api/sources/test/printables").status_code == 404             # no credentials to test

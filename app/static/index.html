@@ -18,6 +18,7 @@
     <h1>Model Hub <span class="badge">self-hosted</span></h1>
     <nav id="tabs">
       <button data-tab="library" class="active">Library</button>
+      <button data-tab="search">Search</button>
       <button data-tab="collections">Collections</button>
       <button data-tab="projects">Projects</button>
       <button data-tab="supplies">Supplies</button>
@@ -38,6 +39,39 @@
       <span id="tag-progress"></span>
     </div>
     <div id="grid" class="grid"></div>
+  </section>
+
+  <section id="tab-search" class="tab">
+    <h2>Search</h2>
+    <p class="muted">Search your library and every connected site at once. Open a result to preview it, or tick several and add them to your library together.</p>
+    <form id="discover-form" class="row">
+      <input id="discover-q" placeholder="What are you looking for?" autocomplete="off">
+      <button type="submit" id="discover-go">Search</button>
+    </form>
+    <div id="discover-sites" class="site-chips"></div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="discover-library" checked> Include my library</label>
+      <span id="discover-status" class="muted"></span>
+    </div>
+    <div id="discover-library-results"></div>
+    <div id="discover-bulk" class="bulk-bar hidden">
+      <button id="discover-select-all">Tick all that can be added</button>
+      <button id="discover-select-none">Untick all</button>
+      <label><input type="checkbox" id="discover-opt-images" checked> Save pictures</label>
+      <label><input type="checkbox" id="discover-opt-tags"> Add the site's tags</label>
+      <button id="discover-add-selected" class="primary">Add ticked to library</button>
+      <span id="discover-bulk-status" class="muted"></span>
+    </div>
+    <div id="discover-online" class="result-grid"></div>
+    <div id="discover-more" class="pagination hidden"><button id="discover-more-btn" type="button">Load more results</button></div>
+    <div id="downloads-panel" class="panel hidden"></div>
+  </section>
+
+  <section id="page-listing" class="tab page">
+    <div class="page-bar">
+      <a href="#/search" id="listing-back" class="back-link">&larr; Search</a>
+    </div>
+    <div id="listing-body"></div>
   </section>
 
   <section id="tab-collections" class="tab">
@@ -159,6 +193,33 @@
       <span id="match-link-status" class="muted"></span>
     </div>
     <div id="match-auto-list" class="hidden"></div>
+    <details id="match-linked-box" class="panel">
+      <summary>Linked models &mdash; review or unlink in bulk</summary>
+      <div class="toolbar">
+        <select id="linked-provider"><option value="">any site</option></select>
+        <select id="linked-by">
+          <option value="">linked any way</option>
+          <option value="manual">by me</option>
+          <option value="auto">automatically</option>
+          <option value="download">by a download</option>
+          <option value="extension">by the extension</option>
+        </select>
+        <input id="linked-q" placeholder="Filter by file name or listing title">
+      </div>
+      <div class="toolbar">
+        <button id="linked-select-page">Tick this page</button>
+        <button id="linked-select-none">Untick all</button>
+        <button id="linked-unlink-selected">Unlink ticked</button>
+        <button id="linked-unlink-all" class="danger">Unlink everything matching the filters</button>
+        <span id="linked-status" class="muted"></span>
+      </div>
+      <div id="linked-list"></div>
+      <div class="pagination hidden" id="linked-pager">
+        <button id="linked-prev" type="button">Previous</button>
+        <span id="linked-page-info"></span>
+        <button id="linked-next" type="button">Next</button>
+      </div>
+    </details>
     <div id="match-queue"></div>
     <div class="pagination hidden" id="match-pager">
       <button id="match-prev" type="button">Previous</button>
@@ -241,11 +302,10 @@
     </div>
 
     <h2>Model Sites</h2>
-    <div class="settings-form">
-      <p class="muted">Printables, MakerWorld and Sketchfab can be searched with no account. Thingiverse needs a free access token:
-        create an app at thingiverse.com/developers and paste its token here. It is kept on this server and never shown again.</p>
-      <label>Thingiverse access token <input id="thingiverse-token" type="password" autocomplete="off" placeholder="(not set)"></label>
-      <div><button id="save-thingiverse-btn">Save</button> <span id="thingiverse-status"></span></div>
+    <div class="settings-form wide">
+      <p class="muted">Printables, MakerWorld and Sketchfab need no account. The others need a key or token that you create on
+        their site and paste here; it is kept on this server and never shown again. Use <b>Test</b> to check a key right away.</p>
+      <div id="sites-settings"></div>
     </div>
 
     <h2>Library Cleanup</h2>
@@ -267,6 +327,12 @@
 
     <h2>Browser Extension</h2>
     <div class="settings-form">
+      <p class="muted">Sends model files from Printables, MakerWorld, Thingiverse, MyMiniFactory, Cults3D and Sketchfab pages to this library,
+        using your own logged-in browser, which is how you add files from sites that do not allow downloads elsewhere.</p>
+      <div><a class="button-link" href="/api/settings/extension.zip" download>Download the extension (.zip)</a></div>
+      <p class="muted"><b>Chrome / Edge:</b> unzip it, open <code>chrome://extensions</code>, turn on Developer mode, choose <b>Load unpacked</b> and pick the folder.
+        <b>Firefox:</b> open <code>about:debugging</code>, <b>This Firefox</b>, <b>Load Temporary Add-on</b> and pick <code>manifest.json</code>.
+        Then click the extension's icon and enter this server's address and the key below.</p>
       <label>Extension API key <small>(paste into the Model Hub browser extension's popup alongside this server's URL)</small>
         <input id="ext-api-key" readonly>
       </label>

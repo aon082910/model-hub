@@ -11,7 +11,7 @@ from app.source_linking import best_effort_link, link_model_to_listing, unlink_m
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
-SITE_NAMES = "Printables, MakerWorld, Sketchfab or Thingiverse"
+SITE_NAMES = "Printables, MakerWorld, Sketchfab, Thingiverse, MyMiniFactory or Cults3D"
 
 
 def _model_json(session: Session, model: Model3D) -> dict:
@@ -39,16 +39,45 @@ def _resolve_listing(payload: dict) -> tuple:
     return provider, source_id.lower() if provider == "sketchfab" else source_id
 
 
+def provider_info(session: Session) -> list:
+    """Every site Model Hub can search: whether it is usable right now, which
+    credentials it needs (and which of those are already saved, never their
+    values), and whether this server can download its model files."""
+    from app.settings_store import get_setting
+    credentials = sources.load_credentials(session)
+    usable = sources.available_providers(credentials)
+    info = []
+    for p in sources.PROVIDERS:
+        fields = [{
+            "name": name, "label": label, "secret": secret,
+            "set": bool((get_setting(session, sources.credential_setting(p, name)) or "").strip()),
+        } for name, label, secret in sources.CREDENTIAL_FIELDS.get(p, [])]
+        info.append({
+            "id": p, "label": sources.PROVIDER_LABELS[p], "enabled": p in usable,
+            "needs_credentials": bool(fields), "fields": fields, "help": sources.CREDENTIAL_HELP.get(p),
+            "can_download": p in sources.DOWNLOAD_PROVIDERS, "download_note": sources.DOWNLOAD_NOTES.get(p),
+        })
+    return info
+
+
 @router.get("/sources/providers")
 def list_providers(session: Session = Depends(get_session)):
-    """The sites Model Hub can search, and whether each is usable right now
-    (Thingiverse needs an access token in Settings)."""
+    return provider_info(session)
+
+
+@router.post("/sources/test/{provider}")
+def test_provider(provider: str, session: Session = Depends(get_session)):
+    """Try a tiny search with the saved credentials, so a key entered in Settings
+    can be checked right away."""
+    if provider not in sources.CREDENTIAL_FIELDS:
+        raise HTTPException(404, "That site does not use credentials")
     credentials = sources.load_credentials(session)
-    return [{
-        "id": p, "label": sources.PROVIDER_LABELS[p],
-        "needs_token": p in sources.CREDENTIAL_SETTINGS,
-        "enabled": p in sources.available_providers(credentials),
-    } for p in sources.PROVIDERS]
+    if provider not in credentials:
+        raise HTTPException(400, "Save the credentials first")
+    try:
+        return {"ok": True, "message": sources.test_credentials(provider, credentials)}
+    except sources.SourceError as e:
+        return {"ok": False, "message": str(e)}
 
 
 @router.get("/sources/search")

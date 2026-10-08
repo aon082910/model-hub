@@ -65,7 +65,7 @@ function ensureViewerColorControl() {
 // Hash routing, so every page has an address that survives a reload and works with
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
-  library: () => loadModels(), collections: () => loadCollections(), projects: () => loadProjects(),
+  library: () => loadModels(), search: () => openSearchPage(''), collections: () => loadCollections(), projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
 };
@@ -81,6 +81,16 @@ function route() {
   const token = ++routeToken;
   disposeViewer();
   window.scrollTo(0, 0);
+  const search = hash.match(/^#\/search(?:\/(.*))?$/);
+  if (search) {
+    showSection('tab-search', 'search');
+    return openSearchPage(search[1] ? decodeURIComponent(search[1]) : '');
+  }
+  const listing = hash.match(/^#\/listing\/([a-z0-9]+)\/([A-Za-z0-9_-]+)$/);
+  if (listing) {
+    showSection('page-listing', 'search');
+    return openListingPage(listing[1], listing[2], token);
+  }
   const detail = hash.match(/^#\/(model|project)\/(\d+)$/);
   if (detail && detail[1] === 'model') {
     showSection('page-model', 'library');
@@ -114,25 +124,28 @@ async function loadModels() {
   renderGrid(models);
 }
 
+// one library card (used by the Library grid and the Search page)
+function libraryCard(m) {
+  const card = document.createElement('a');
+  card.className = 'card' + (m.is_duplicate_of ? ' duplicate' : '');
+  card.href = `#/model/${m.id}`;
+  // models the renderer couldn't thumbnail (STEP, FBX...) borrow the first picture from their site listing
+  const siteImages = parseJsonList(m.source_images);
+  const thumb = m.thumbnail_path ? `/api/library/thumbnails/${m.thumbnail_path}`
+    : (siteImages.length ? `/api/library/models/${m.id}/source/images/${siteImages[0]}` : '');
+  card.innerHTML = `
+    ${thumb ? `<img src="${thumb}" loading="lazy" alt="">` : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:#666">${esc(m.extension)}</div>`}
+    <div class="meta">
+      <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
+      <div class="tags">${esc((m.tags || []).map(t => t.name).join(', '))}</div>
+    </div>`;
+  return card;
+}
+
 function renderGrid(models) {
   const grid = $('#grid');
   grid.innerHTML = '';
-  for (const m of models) {
-    const card = document.createElement('a');
-    card.className = 'card' + (m.is_duplicate_of ? ' duplicate' : '');
-    card.href = `#/model/${m.id}`;
-    // models the renderer couldn't thumbnail (STEP, FBX...) borrow the first picture from their site listing
-    const siteImages = parseJsonList(m.source_images);
-    const thumb = m.thumbnail_path ? `/api/library/thumbnails/${m.thumbnail_path}`
-      : (siteImages.length ? `/api/library/models/${m.id}/source/images/${siteImages[0]}` : '');
-    card.innerHTML = `
-      ${thumb ? `<img src="${thumb}" loading="lazy" alt="">` : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:#666">${esc(m.extension)}</div>`}
-      <div class="meta">
-        <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
-        <div class="tags">${esc((m.tags || []).map(t => t.name).join(', '))}</div>
-      </div>`;
-    grid.appendChild(card);
-  }
+  for (const m of models) grid.appendChild(libraryCard(m));
 }
 
 $('#search-box').addEventListener('input', debounce(loadModels, 300));
@@ -598,7 +611,10 @@ function frameCameraOn(object3d) {
 }
 
 // ---------- Match a model to its Printables / MakerWorld listing ----------
-const PROVIDER_LABELS = { printables: 'Printables', makerworld: 'MakerWorld', sketchfab: 'Sketchfab', thingiverse: 'Thingiverse' };
+const PROVIDER_LABELS = {
+  printables: 'Printables', makerworld: 'MakerWorld', sketchfab: 'Sketchfab', thingiverse: 'Thingiverse',
+  myminifactory: 'MyMiniFactory', cults3d: 'Cults3D',
+};
 
 function parseJsonList(value) {
   try { const list = JSON.parse(value || '[]'); return Array.isArray(list) ? list : []; }
@@ -1527,6 +1543,458 @@ $('#match-link-selected').addEventListener('click', async () => {
   await loadMatchQueue();
 });
 
+// ---------- Sites: what each can do, and their keys (Settings) ----------
+let providerInfo = [];
+
+async function loadProviderInfo() {
+  const res = await fetch('/api/sources/providers');
+  providerInfo = res.ok ? await res.json() : [];
+  return providerInfo;
+}
+
+function downloadSummary(p) {
+  return p.can_download ? 'files can be downloaded into your library from here'
+    : 'search and preview here; add files with the browser extension';
+}
+
+async function renderSiteSettings(settings) {
+  await loadProviderInfo();
+  const free = providerInfo.filter(p => !p.needs_credentials);
+  const keyed = providerInfo.filter(p => p.needs_credentials);
+  $('#sites-settings').innerHTML = `
+    <div class="site-setting"><h4>No account needed</h4>
+      ${free.map(p => `<div>${esc(p.label)} <span class="muted">&mdash; ${downloadSummary(p)}</span></div>`).join('')}</div>
+    ${keyed.map(p => `
+      <div class="site-setting" data-provider="${p.id}">
+        <h4>${esc(p.label)} ${p.enabled ? '<span class="status-badge status-done">connected</span>' : ''}</h4>
+        <div class="muted">${esc(p.help || '')} (${downloadSummary(p)}.)</div>
+        <div class="row">${p.fields.map(f => `
+          <label>${esc(f.label)}
+            <input class="site-field" data-field="${f.name}" type="${f.secret ? 'password' : 'text'}" autocomplete="off"
+              value="${f.secret ? (f.set ? '********' : '') : esc((settings || {})[`${p.id}_${f.name}`] || '')}" placeholder="${f.set ? '' : '(not set)'}">
+          </label>`).join('')}</div>
+        <div><button class="site-save">Save</button> <button class="site-test">Test</button> <span class="site-status muted"></span></div>
+      </div>`).join('')}`;
+}
+
+$('#sites-settings').addEventListener('click', async (e) => {
+  const box = e.target.closest('.site-setting[data-provider]');
+  if (!box) return;
+  const provider = box.dataset.provider;
+  const status = box.querySelector('.site-status');
+  if (e.target.classList.contains('site-save')) {
+    const body = {};
+    box.querySelectorAll('.site-field').forEach(i => { body[`${provider}_${i.dataset.field}`] = i.value.trim(); });
+    const res = await jsonRequest('PUT', '/api/settings', body);
+    status.textContent = res.ok ? 'Saved.' : 'Could not save.';
+    if (res.ok) setTimeout(async () => renderSiteSettings(await (await fetch('/api/settings')).json()), 800);
+  } else if (e.target.classList.contains('site-test')) {
+    status.textContent = 'Testing...';
+    const res = await fetch(`/api/sources/test/${provider}`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    status.textContent = res.ok ? data.message : (data.detail || 'Could not test.');
+    status.className = `site-status ${res.ok && data.ok ? 'in-stock' : 'error-text'}`;
+  }
+});
+
+// ---------- Downloads: the queue shared by the Search and listing pages ----------
+let downloadsPoll = null;
+let lastDownloads = { items: [] };
+const ACTIVE_STATES = ['queued', 'downloading', 'importing'];
+
+function downloadRow(item) {
+  const pct = item.bytes_total ? Math.min(100, Math.round(item.bytes_done / item.bytes_total * 100)) : 0;
+  const models = (item.model_ids || []).map(id => `<a href="#/model/${id}">model ${id}</a>`).join(', ');
+  return `
+    <div class="downloads-row" data-id="${item.id}">
+      <span class="badge">${esc(PROVIDER_LABELS[item.provider] || item.provider)}</span>
+      <a class="grow" href="#/listing/${item.provider}/${encodeURIComponent(item.source_id)}"><b>${esc(item.title || item.source_id)}</b></a>
+      <span class="status-badge status-${item.status === 'done' ? 'done' : item.status === 'error' ? 'failed' : 'building'}">${esc(item.status)}</span>
+      <span class="muted">${esc(item.message || '')}</span>
+      ${models ? `<span>${models}</span>` : ''}
+      ${ACTIVE_STATES.includes(item.status) ? '<button class="download-cancel">Cancel</button>' : ''}
+      ${item.status === 'downloading' && item.bytes_total ? `<div class="progress"><span style="width:${pct}%"></span></div>` : ''}
+    </div>`;
+}
+
+function renderDownloads(data) {
+  lastDownloads = data;
+  const panel = $('#downloads-panel');
+  const items = [...data.items].reverse();
+  panel.classList.toggle('hidden', items.length === 0);
+  panel.innerHTML = items.length ? `
+    <h3>Downloads</h3>
+    ${items.map(downloadRow).join('')}
+    ${items.some(i => !ACTIVE_STATES.includes(i.status)) ? '<div class="row"><button id="downloads-clear">Clear finished</button></div>' : ''}` : '';
+  const box = $('#listing-download');
+  if (box && currentListing) {
+    const mine = data.items.filter(i => i.provider === currentListing.details.provider && i.source_id === currentListing.details.source_id).pop();
+    box.innerHTML = mine ? downloadRow(mine) : '';
+  }
+}
+
+async function refreshDownloads() {
+  const res = await fetch('/api/discover/downloads');
+  if (!res.ok) return;
+  const data = await res.json();
+  const wasActive = lastDownloads.items.some(i => ACTIVE_STATES.includes(i.status));
+  renderDownloads(data);
+  const active = data.items.some(i => ACTIVE_STATES.includes(i.status));
+  if (active && !downloadsPoll) downloadsPoll = setInterval(refreshDownloads, 1500);
+  if (!active && downloadsPoll) { clearInterval(downloadsPoll); downloadsPoll = null; }
+  if (wasActive && !active) onDownloadsSettled(data);
+}
+
+// what finished: mark results as "in library" and refresh an open listing
+function onDownloadsSettled(data) {
+  for (const item of data.items) {
+    if (!item.model_ids || !item.model_ids.length) continue;
+    const hit = searchState.online.find(r => r.provider === item.provider && r.source_id === item.source_id);
+    if (hit) hit.in_library = item.model_ids[0];
+  }
+  if (!$('#tab-search').classList.contains('hidden') && $('#tab-search').classList.contains('active')) renderSearchResults();
+  if (currentListing && $('#page-listing').classList.contains('active')) {
+    openListingPage(currentListing.details.provider, currentListing.details.source_id, routeToken);
+  }
+}
+
+$('#downloads-panel').addEventListener('click', async (e) => {
+  if (e.target.id === 'downloads-clear') {
+    await fetch('/api/discover/downloads/clear', { method: 'POST' });
+    refreshDownloads();
+  } else if (e.target.classList.contains('download-cancel')) {
+    await fetch(`/api/discover/downloads/${e.target.closest('.downloads-row').dataset.id}`, { method: 'DELETE' });
+    refreshDownloads();
+  }
+});
+
+async function queueDownloads(items, options) {
+  const res = await jsonRequest('POST', '/api/discover/downloads', { items, ...options });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: data.detail || 'Could not start the download.' };
+  renderDownloads(data);
+  if (data.added.length && !downloadsPoll) downloadsPoll = setInterval(refreshDownloads, 1500);
+  return data;
+}
+
+// ---------- Search: the library and every site at once ----------
+let lastSearchHash = '#/search';
+const searchState = {
+  q: '', providers: new Set(), page: 1, online: [], library: [], errors: {}, hasMore: false, loaded: false,
+  selected: new Map(),
+};
+
+function resultKey(r) { return `${r.provider}:${r.source_id}`; }
+
+function renderSiteChips() {
+  $('#discover-sites').innerHTML = providerInfo.map(p => `
+    <label class="site-chip ${p.enabled ? '' : 'disabled'}" title="${p.enabled ? '' : 'Add its key in Settings to search it'}">
+      <input type="checkbox" value="${p.id}" ${searchState.providers.has(p.id) ? 'checked' : ''} ${p.enabled ? '' : 'disabled'}>
+      ${esc(p.label)}${p.enabled ? '' : ' <small>(needs a key)</small>'}${p.can_download ? ' <span class="dl-badge" title="Files can be added to your library from here">&#8681;</span>' : ''}
+    </label>`).join('') + '<a href="#/settings" class="muted">Set up more sites</a>';
+  $$('#discover-sites input').forEach(box => box.onchange = () => {
+    if (box.checked) searchState.providers.add(box.value); else searchState.providers.delete(box.value);
+  });
+}
+
+async function openSearchPage(q) {
+  lastSearchHash = location.hash || '#/search';
+  if (!providerInfo.length) await loadProviderInfo();
+  if (!searchState.providers.size) providerInfo.filter(p => p.enabled).forEach(p => searchState.providers.add(p.id));
+  for (const id of [...searchState.providers]) {
+    if (!providerInfo.some(p => p.id === id && p.enabled)) searchState.providers.delete(id);
+  }
+  renderSiteChips();
+  $('#discover-q').value = q || searchState.q;
+  refreshDownloads();
+  if (q && (q !== searchState.q || !searchState.loaded)) return runSearch(q, 1);
+  if (searchState.loaded) renderSearchResults();
+}
+
+async function runSearch(q, page) {
+  const status = $('#discover-status');
+  if (page === 1) {
+    Object.assign(searchState, { q, page: 1, online: [], library: [], errors: {}, hasMore: false, loaded: false });
+    searchState.selected.clear();
+  }
+  status.textContent = 'Searching...';
+  const params = new URLSearchParams({
+    q, page, limit: 12, providers: [...searchState.providers].join(','),
+    library: $('#discover-library').checked && page === 1,
+  });
+  const res = await fetch(`/api/discover/search?${params}`);
+  if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
+  const data = await res.json();
+  if (q !== searchState.q) return;                               // a newer search replaced this one
+  searchState.page = page;
+  if (page === 1) searchState.library = data.library;
+  searchState.online.push(...data.online);
+  searchState.errors = { ...searchState.errors, ...data.errors };
+  searchState.hasMore = data.has_more;
+  searchState.loaded = true;
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const state = searchState;
+  const problems = Object.entries(state.errors).map(([p, msg]) => `${PROVIDER_LABELS[p] || p}: ${msg}`);
+  $('#discover-status').textContent = state.loaded
+    ? `${state.online.length} result${state.online.length === 1 ? '' : 's'} online for "${state.q}"${problems.length ? ` — ${problems.join('; ')}` : ''}`
+    : '';
+
+  const lib = $('#discover-library-results');
+  lib.innerHTML = state.library.length ? `<h3>In your library (${state.library.length})</h3><div class="grid" id="discover-library-grid"></div>` : '';
+  if (state.library.length) {
+    const grid = $('#discover-library-grid');
+    state.library.forEach(m => grid.appendChild(libraryCard(m)));
+  }
+
+  $('#discover-online').innerHTML = state.online.map(r => {
+    const key = resultKey(r);
+    const canPick = r.can_download && !r.in_library;
+    const siteLabel = PROVIDER_LABELS[r.provider] || r.provider;
+    return `
+      <div class="result-card ${state.selected.has(key) ? 'picked' : ''}" data-key="${esc(key)}">
+        ${canPick ? `<label class="result-pick"><input type="checkbox" class="result-check" ${state.selected.has(key) ? 'checked' : ''} aria-label="Select ${esc(r.title)}"></label>` : ''}
+        <a href="#/listing/${r.provider}/${encodeURIComponent(r.source_id)}">${r.thumbnail
+          ? `<img class="result-thumb" src="${esc(r.thumbnail)}" loading="lazy" referrerpolicy="no-referrer" alt="">` : '<div class="result-thumb"></div>'}</a>
+        <div class="result-info">
+          <a href="#/listing/${r.provider}/${encodeURIComponent(r.source_id)}"><b>${esc(r.title)}</b></a>
+          <div class="muted">${esc(siteLabel)}${r.designer ? ' · ' + esc(r.designer) : ''}${r.license ? ' · ' + esc(r.license) : ''} · ${Math.round(r.score * 100)}%</div>
+          <div class="result-actions">
+            ${r.in_library ? `<a class="button-link" href="#/model/${r.in_library}">In your library</a>`
+              : (r.can_download ? '<button class="result-add">Add to library</button>'
+                : '<span class="muted" title="Open the listing for how to add this one">view only</span>')}
+            <a class="button-link" href="#/listing/${r.provider}/${encodeURIComponent(r.source_id)}">Preview</a>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const downloadable = state.online.some(r => r.can_download && !r.in_library);
+  $('#discover-bulk').classList.toggle('hidden', !downloadable);
+  $('#discover-more').classList.toggle('hidden', !(state.loaded && state.hasMore));
+}
+
+$('#discover-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const q = $('#discover-q').value.trim();
+  if (!q) return;
+  const target = `#/search/${encodeURIComponent(q)}`;
+  if (location.hash === target) runSearch(q, 1); else location.hash = target;
+});
+$('#discover-more-btn').addEventListener('click', () => runSearch(searchState.q, searchState.page + 1));
+
+$('#discover-online').addEventListener('click', async (e) => {
+  const card = e.target.closest('.result-card');
+  if (!card) return;
+  const r = searchState.online.find(x => resultKey(x) === card.dataset.key);
+  if (!r) return;
+  if (e.target.classList.contains('result-check')) {
+    if (e.target.checked) searchState.selected.set(card.dataset.key, r); else searchState.selected.delete(card.dataset.key);
+    card.classList.toggle('picked', e.target.checked);
+  } else if (e.target.classList.contains('result-add')) {
+    e.target.disabled = true;
+    e.target.textContent = 'Queued...';
+    const data = await queueDownloads([{ provider: r.provider, source_id: r.source_id, title: r.title, thumbnail: r.thumbnail }],
+      { images: $('#discover-opt-images').checked, add_tags: $('#discover-opt-tags').checked });
+    if (data.error || (data.rejected && data.rejected.length)) {
+      e.target.disabled = false;
+      e.target.textContent = 'Add to library';
+      $('#discover-status').textContent = data.error || data.rejected[0].reason;
+    }
+  }
+});
+
+$('#discover-select-all').addEventListener('click', () => {
+  searchState.online.filter(r => r.can_download && !r.in_library).forEach(r => searchState.selected.set(resultKey(r), r));
+  renderSearchResults();
+});
+$('#discover-select-none').addEventListener('click', () => { searchState.selected.clear(); renderSearchResults(); });
+$('#discover-add-selected').addEventListener('click', async () => {
+  const picks = [...searchState.selected.values()];
+  const status = $('#discover-bulk-status');
+  if (!picks.length) { status.textContent = 'Tick at least one result first.'; return; }
+  status.textContent = `Queueing ${picks.length}...`;
+  const data = await queueDownloads(
+    picks.map(r => ({ provider: r.provider, source_id: r.source_id, title: r.title, thumbnail: r.thumbnail })),
+    { images: $('#discover-opt-images').checked, add_tags: $('#discover-opt-tags').checked });
+  if (data.error) { status.textContent = data.error; return; }
+  status.textContent = `Added ${data.added.length} to the download queue.`
+    + (data.rejected.length ? ` Skipped ${data.rejected.length}: ${data.rejected[0].reason}` : '');
+  searchState.selected.clear();
+  renderSearchResults();
+});
+
+// ---------- A listing's own page (#/listing/<site>/<id>) ----------
+let currentListing = null;
+
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+
+async function openListingPage(provider, id, token) {
+  const body = $('#listing-body');
+  $('#listing-back').href = lastSearchHash.startsWith('#/search') ? lastSearchHash : '#/search';
+  if (!currentListing || currentListing.details.provider !== provider || currentListing.details.source_id !== id) {
+    body.innerHTML = '<p class="muted">Loading...</p>';
+  }
+  const res = await fetch(`/api/discover/listing?provider=${encodeURIComponent(provider)}&source_id=${encodeURIComponent(id)}`);
+  if (token !== routeToken) return;
+  if (!res.ok) { currentListing = null; body.innerHTML = `<p class="error-text">${esc(await sourceErrorText(res))}</p>`; return; }
+  const data = await res.json();
+  if (token !== routeToken) return;
+  currentListing = data;
+  document.title = `${data.details.title} - Model Hub`;
+  renderListing(data);
+  refreshDownloads();
+}
+
+function renderListing(data) {
+  const d = data.details;
+  const site = PROVIDER_LABELS[d.provider] || d.provider;
+  const inLibrary = data.in_library;
+  const parts = d.parts || [];
+  const filaments = d.filaments || [];
+  $('#listing-body').innerHTML = `
+    <h2 class="page-title">${esc(d.title)}</h2>
+    <div class="listing-meta">
+      <span class="badge">${esc(site)}</span>
+      ${d.designer ? `<span>by <b>${esc(d.designer)}</b></span>` : ''}
+      ${d.license ? `<span>${esc(d.license)}</span>` : ''}
+      ${d.category ? `<span>${esc(d.category)}</span>` : ''}
+      ${d.likes != null ? `<span>${plural(d.likes, 'like')}</span>` : ''}
+      ${d.downloads != null ? `<span>${d.downloads.toLocaleString()} downloads/views</span>` : ''}
+    </div>
+
+    <div class="listing-actions">
+      ${data.can_download && !inLibrary.length && data.files && data.files.length
+        ? '<button id="listing-add" class="primary">Add to library</button>' : ''}
+      ${safeHttpUrl(d.url) ? `<a class="button-link" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(site)}</a>` : ''}
+      <label class="muted"><input type="checkbox" id="listing-opt-tags"> Also add the site's tags</label>
+    </div>
+    ${inLibrary.length ? `<div class="notice ok">Already in your library: ${inLibrary.map(m =>
+      `<a href="#/model/${m.id}">${esc(m.filename)}</a>`).join(', ')}</div>` : ''}
+    ${!data.can_download ? `<div class="notice">${esc(data.download_note || 'Files cannot be added from here.')}</div>` : ''}
+    ${data.can_download && data.files_note ? `<div class="notice">${esc(data.files_note)}</div>` : ''}
+    <div id="listing-download"></div>
+
+    ${(d.images || []).length ? `<div class="listing-gallery">${d.images.map(u => safeHttpUrl(u)
+      ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer"><img src="${esc(u)}" loading="lazy" referrerpolicy="no-referrer" alt=""></a>` : '').join('')}</div>` : ''}
+
+    <div class="page-grid">
+      <div class="page-main">
+        <div class="panel"><h3>Description</h3>
+          ${d.description ? `<div class="listing-desc">${esc(d.description)}</div>` : '<p class="muted">No description.</p>'}</div>
+        ${parts.length ? `<div class="panel"><h3>Parts the listing says you need</h3>
+          <table class="parts-table"><tbody>${parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.category)}</td><td>x${p.quantity}</td>
+            <td>${p.unit_cost != null ? `$${Number(p.unit_cost).toFixed(2)}` : ''}</td></tr>`).join('')}</tbody></table>
+          <p class="muted">Add these to a project from its page with <b>Import parts</b>.</p></div>` : ''}
+      </div>
+      <aside class="page-side">
+        ${(d.tags || []).length ? `<div class="panel"><h3>Tags</h3><div class="source-tags">${d.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div></div>` : ''}
+        ${data.files && data.files.length ? `<div class="panel"><h3>Files this server would download</h3>
+          <ul class="link-list">${data.files.map(f => `<li>${esc(f.name)} <span class="muted">${f.size ? formatBytes(f.size) : ''}</span></li>`).join('')}</ul></div>` : ''}
+        ${filaments.length ? `<div class="panel"><h3>Suggested filament</h3><ul class="link-list">${filaments.map(f =>
+          `<li>${esc(f.label)}</li>`).join('')}</ul></div>` : ''}
+      </aside>
+    </div>`;
+  renderDownloads(lastDownloads);
+  const add = $('#listing-add');
+  if (add) {
+    add.onclick = async () => {
+      add.disabled = true;
+      add.textContent = 'Queued...';
+      const res = await queueDownloads(
+        [{ provider: d.provider, source_id: d.source_id, title: d.title, thumbnail: (d.images || [])[0] }],
+        { images: true, add_tags: $('#listing-opt-tags').checked });
+      if (res.error || (res.rejected && res.rejected.length)) {
+        add.disabled = false;
+        add.textContent = 'Add to library';
+        $('#listing-download').innerHTML = `<div class="notice error-text">${esc(res.error || res.rejected[0].reason)}</div>`;
+      } else {
+        refreshDownloads();
+      }
+    };
+  }
+}
+
+// ---------- Linked models: review and unlink in bulk (Matches tab) ----------
+const LINKED_PAGE = 20;
+const linkedState = { offset: 0, total: 0, items: [], picked: new Set() };
+
+function linkedParams() {
+  return { provider: $('#linked-provider').value, linked_by: $('#linked-by').value, q: $('#linked-q').value.trim() };
+}
+
+async function loadLinked() {
+  if (!providerInfo.length) await loadProviderInfo();
+  const select = $('#linked-provider');
+  if (select.options.length <= 1) {
+    providerInfo.forEach(p => select.insertAdjacentHTML('beforeend', `<option value="${p.id}">${esc(p.label)}</option>`));
+  }
+  const params = new URLSearchParams({ ...linkedParams(), offset: linkedState.offset, limit: LINKED_PAGE });
+  const res = await fetch(`/api/source-match/linked?${params}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  if (!data.items.length && linkedState.offset > 0) { linkedState.offset = Math.max(0, linkedState.offset - LINKED_PAGE); return loadLinked(); }
+  Object.assign(linkedState, { total: data.total, items: data.items });
+  $('#linked-list').innerHTML = data.items.length ? data.items.map(i => `
+    <div class="linked-row" data-id="${i.id}">
+      <input type="checkbox" class="linked-pick" ${linkedState.picked.has(i.id) ? 'checked' : ''} aria-label="Select ${esc(i.filename)}">
+      <a href="#/model/${i.id}"><b>${esc(i.filename)}</b></a>
+      <span class="muted">&rarr; ${esc(PROVIDER_LABELS[i.source_provider] || i.source_provider)}: ${esc(i.source_title || '')}</span>
+      <span class="status-badge">${esc(i.source_linked_by)}</span>
+    </div>`).join('') : '<p class="muted">No linked models match.</p>';
+  const pages = Math.max(1, Math.ceil(data.total / LINKED_PAGE));
+  $('#linked-pager').classList.toggle('hidden', data.total <= LINKED_PAGE);
+  $('#linked-page-info').textContent = `Page ${Math.floor(linkedState.offset / LINKED_PAGE) + 1} of ${pages} (${data.total} linked)`;
+  $('#linked-prev').disabled = linkedState.offset === 0;
+  $('#linked-next').disabled = linkedState.offset + LINKED_PAGE >= data.total;
+}
+
+$('#match-linked-box').addEventListener('toggle', () => { if ($('#match-linked-box').open) loadLinked(); });
+['#linked-provider', '#linked-by'].forEach(sel => $(sel).addEventListener('change', () => { linkedState.offset = 0; linkedState.picked.clear(); loadLinked(); }));
+$('#linked-q').addEventListener('input', debounce(() => { linkedState.offset = 0; linkedState.picked.clear(); loadLinked(); }, 300));
+$('#linked-prev').addEventListener('click', () => { linkedState.offset = Math.max(0, linkedState.offset - LINKED_PAGE); loadLinked(); });
+$('#linked-next').addEventListener('click', () => { linkedState.offset += LINKED_PAGE; loadLinked(); });
+$('#linked-list').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('linked-pick')) return;
+  const id = parseInt(e.target.closest('.linked-row').dataset.id);
+  if (e.target.checked) linkedState.picked.add(id); else linkedState.picked.delete(id);
+});
+$('#linked-select-page').addEventListener('click', () => {
+  linkedState.items.forEach(i => linkedState.picked.add(i.id));
+  $$('.linked-pick').forEach(c => { c.checked = true; });
+});
+$('#linked-select-none').addEventListener('click', () => {
+  linkedState.picked.clear();
+  $$('.linked-pick').forEach(c => { c.checked = false; });
+});
+
+async function unlinkAndReload(body, count) {
+  if (!confirm(`Unlink ${count} model${count === 1 ? '' : 's'} from their online listings? Their saved pictures are deleted; the models and files stay.`)) return;
+  const res = await jsonRequest('POST', '/api/source-match/unlink', body);
+  const data = res.ok ? await res.json() : null;
+  $('#linked-status').textContent = data ? `Unlinked ${data.unlinked}.` : await sourceErrorText(res);
+  linkedState.picked.clear();
+  await loadLinked();
+  refreshMatchStatus();
+  loadAutoLinked();
+}
+$('#linked-unlink-selected').addEventListener('click', () => {
+  const ids = [...linkedState.picked];
+  if (!ids.length) { $('#linked-status').textContent = 'Tick at least one model first.'; return; }
+  unlinkAndReload({ model_ids: ids }, ids.length);
+});
+$('#linked-unlink-all').addEventListener('click', () => {
+  const f = linkedParams();
+  const body = {};
+  if (f.provider) body.provider = f.provider;
+  if (f.linked_by) body.linked_by = f.linked_by;
+  if (f.q) body.q = f.q;
+  if (!Object.keys(body).length) body.all = true;
+  unlinkAndReload(body, linkedState.total);
+});
+
 // ---------- Collections ----------
 async function loadCollections() {
   const cols = await (await fetch('/api/collections')).json();
@@ -1631,7 +2099,7 @@ async function loadSettings() {
   $('#est-density').value = s.est_density || '';
   $('#est-infill').value = s.est_infill || '15';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
-  $('#thingiverse-token').value = s.thingiverse_token || '';
+  await renderSiteSettings(s);
   const keyRes = await fetch('/api/settings/extension-key');
   $('#ext-api-key').value = keyRes.ok ? (await keyRes.json()).extension_api_key : '';
 }
@@ -1685,12 +2153,6 @@ $('#save-notify-btn').addEventListener('click', async () => {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ notify_webhook_url: $('#notify-webhook-url').value }),
   });
-});
-
-$('#save-thingiverse-btn').addEventListener('click', async () => {
-  const res = await jsonRequest('PUT', '/api/settings', { thingiverse_token: $('#thingiverse-token').value.trim() });
-  $('#thingiverse-status').textContent = res.ok ? 'Saved.' : 'Could not save.';
-  setTimeout(() => { $('#thingiverse-status').textContent = ''; }, 2500);
 });
 
 $('#nonmodel-check-btn').addEventListener('click', async () => {

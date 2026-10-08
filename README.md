@@ -78,7 +78,9 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Projects & parts tracking | Done — group library models into a project and keep its parts list (electronics / parts / supplies) with quantity needed vs. owned, unit cost and a purchase link. The **Projects** tab can filter to projects still needing parts, and a **Shopping List** rolls up every missing part across unfinished projects with an estimated total. Add a model to a project from its viewer. Each model in a project can be given one or more filament spools with grams per spool (the **Estimate** button fills grams from the print estimate); when the project is set to **printed** (or **done**) those grams are subtracted from filament inventory exactly once, and moving the project back to planning/building restores them |
 | Shopping list export | Done — the Projects tab's **Shopping List** can be downloaded as CSV or plain text, or copied to the clipboard (for a notes app or your phone). **Combine identical parts across projects** merges the same part from different projects into one line; each line also shows how many you already have in Supplies |
 | Supplies on hand | Done — a **Supplies** tab for the electronics, parts and supplies you own: quantity, a low-stock threshold (flagged and filterable), location (bin/drawer), unit cost, search, and CSV export. Typing a project part name suggests items from here and pre-fills its type and cost |
-| Match models to online listings | Done — Printables, MakerWorld and Sketchfab (no account) plus Thingiverse (access token in Settings); see [Matching models to site listings](#matching-models-to-site-listings) below |
+| Match models to online listings | Done — Printables, MakerWorld and Sketchfab (no account) plus Thingiverse, MyMiniFactory and Cults3D (keys entered in Settings); see [Matching models to site listings](#matching-models-to-site-listings) below |
+| Search and add to library | Done — a **Search** page searches your library and every connected site at once; open a result for a full preview page, add one with a button, or tick several and add them together. See [Search and add to library](#search-and-add-to-library) |
+| Bulk unlinking | Done — **Matches → Linked models** lists every linked model (filter by site and how it was linked) and unlinks the ticked ones, or everything matching the filters, in one go |
 | Match your whole library | Done — the **Matches** tab runs a background job that searches Printables and MakerWorld for every model that isn't linked yet and keeps the closest listings as a review queue; you link, tick-and-link in bulk, or skip. See [Matching models to site listings](#matching-models-to-site-listings) |
 | Import a listing's parts into a project | Done — paste a MakerWorld link (or use **Import parts** on a model linked to one) to get the listing's store items and parts list as editable rows, then add the ticked ones to the project in one go |
 | Model pages | Done — every model has its own page (`#/model/<id>`): a big 3D view, details (size, dimensions, volume, watertight), editable tags, designer / license / notes, the listing it is linked to, the projects and collections it is in, print estimate and queue, and any copies of the same file |
@@ -103,13 +105,15 @@ are matched automatically from the page address, so they arrive with their detai
 
 - **Sites**: Printables is read through its public GraphQL API; MakerWorld through the JSON API behind
   `api.bambulab.com` (makerworld.com itself blocks server-side page requests); Sketchfab through its public search
-  API (only downloadable models are searched). **Thingiverse** is searched when you paste a free access token into
-  **Settings → Model Sites** (create an app at thingiverse.com/developers); the token stays on the server, is sent in
-  a request header rather than a URL, and is never shown again. The Printables, MakerWorld and Sketchfab endpoints are
-  unofficial or public-but-undocumented, so a failure is reported in the UI instead of breaking anything, and one
-  site being down never hides the other's results.
-- **Not included**: Thangs (its API is behind a bot challenge), and MyMiniFactory and Cults3D (both need an
-  approved API key and account). They can be added the same way if you get keys.
+  API (only downloadable models are searched). These three need no account. **Thingiverse** (access token),
+  **MyMiniFactory** (API key) and **Cults3D** (your nickname plus an API key) are searched once you paste their
+  credentials into **Settings → Model Sites** (each has a **Test** button, so you can configure them whenever you
+  have the keys). Credentials stay on the server and are never shown again; Thingiverse's token travels in a request
+  header, and MyMiniFactory's key (which that site only accepts in the URL) is kept out of the log. The first three
+  APIs are unofficial or public-but-undocumented, so a failure is reported in the UI instead of breaking anything, and
+  one site being down never hides the other's results.
+- **Not included**: Thangs (its API is behind a bot challenge) and the NIH 3D Print Exchange and Creality Cloud
+  (no usable public API).
 - **Safe by construction**: only those sites' API and image hosts are contacted, so a pasted link can't make the
   server fetch anything else on your network.
 - **Pictures are shrunk** to preview-sized JPEGs (at most 1200 px, up to 6 per model, stored under
@@ -150,6 +154,26 @@ A MakerWorld listing also says which filament it was designed for (e.g. PLA Basi
 linked to such a listing shows **The listing suggests:** with each suggestion matched to one of your own spools (same
 material, same colour name; "grey" and "gray" count as the same). **Use <spool>** adds a filament line for that spool,
 with the grams filled from the print estimate. Suggestions with no matching spool say so.
+
+## Search and add to library
+
+The **Search** tab searches your library (file names, tags, descriptions, designer, listing titles and your notes) and every
+site you have enabled, at once. Tick the sites to search (sites that still need a key are greyed out), and use
+**Load more results** to page through all of them together.
+
+- **Preview**: click a result for its own page (`#/listing/<site>/<id>`): pictures, designer, license, the full description,
+  tags, likes, the files that would be downloaded, MakerWorld's parts list and suggested filament, and **Open on <site>**.
+- **Add to library**: downloads the listing's model files into `imported/<Site>/<title> [<id>]/`, keeps only model file types
+  (a pack zip is opened and just the models are kept), and links every model to the listing, so it arrives with its pictures,
+  designer, license and (optionally) tags. A listing already in your library is never downloaded twice. Downloads run one at
+  a time in the background with a progress list you can cancel from.
+- **Bulk add**: tick any number of results (or **Tick all that can be added**) and **Add ticked to library**.
+
+**Which sites let a server download files:** Printables (no login needed) and Thingiverse (with your token). MakerWorld,
+Sketchfab and MyMiniFactory only give files to a logged-in user (MyMiniFactory's API key alone can't download), and Cults3D's
+API never serves files at all. For those, the page says so and points to the **browser extension**, which downloads in
+your own logged-in browser. Downloads are restricted to each site's own domains (every redirect is checked), the token is only
+sent to Thingiverse's own hosts, and a single file is capped at 1.5 GB.
 
 ## Auth
 
@@ -202,30 +226,30 @@ notify script, so this is a generic JSON POST instead — point it at:
 
 ## Browser extension
 
-`browser-extension/` is a separate, small Chrome/Edge (Manifest V3) extension. It is not
-part of the Docker image — it installs in your browser and talks to your running Model Hub
-server over the network.
+`browser-extension/` is a small Manifest V3 extension for **Chrome / Edge** and **Firefox**. It installs in your browser and
+talks to your running Model Hub server over the network. It works on **Printables, MakerWorld, Thingiverse, MyMiniFactory,
+Cults3D and Sketchfab** model pages, and because it downloads with your own logged-in session it is how you add files from the
+sites that don't let a server download them.
 
-**Install (unpacked, until it's published to a store):**
-1. Open `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select the `browser-extension/` folder.
-3. In Model Hub, go to **Settings → Browser Extension** and copy the API key.
-4. Click the extension icon → enter your Model Hub server URL (e.g. `http://192.168.1.50:8420` —
-   your Unraid host's IP and the WebUI port) and paste the API key → **Save** (grants the
-   extension permission to reach that one origin) → **Test Connection**.
+**Get it:** Settings → Browser Extension → **Download the extension (.zip)** (it is bundled in the Docker image), then unzip it.
+1. **Chrome / Edge:** open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, pick the unzipped folder.
+   **Firefox:** open `about:debugging` → **This Firefox** → **Load Temporary Add-on** → pick `manifest.json` (Firefox removes
+   temporary add-ons when it restarts, and may ask you to allow the site permissions).
+2. In Model Hub, go to **Settings → Browser Extension** and copy the API key.
+3. Click the extension icon → enter your Model Hub server URL (e.g. `http://192.168.1.50:8420`) and paste the API key →
+   **Save** (grants permission to reach that one origin) → **Test Connection**.
 
-**Use:** open a model page on printables.com or makerworld.com. A **📦 Send to Model Hub**
-button appears bottom-right. It reads the page's `schema.org` JSON-LD (title/author/license —
-the same structured data search engines use, which is far less brittle than scraping CSS
-classes) and scans the page for direct `.stl/.3mf/.step/.obj/.fbx/.zip` links (a `.zip` is opened on the server and only the model files inside are kept), lets you
-pick which files and edit designer/license, then downloads each file and POSTs it to
-`/api/library/import` on your server, which files it under `imported/` in your library and
-tags it with the source URL/designer/license automatically.
+**Use:** open a model page on one of those sites. A **📦 Send to Model Hub** button appears bottom-right. It reads the page's
+`schema.org` JSON-LD (title/author/license) and lists the direct model-file links on the page (`.stl .3mf .step .obj .fbx .zip`,
+plus each site's own download links such as Thingiverse's `/download:` links), lets you pick files and edit designer/license, then
+downloads each one **with your login** and POSTs it to `/api/library/import`. Only model files (or a `.zip` containing some) are
+accepted; the server opens a zip and keeps just the models. When the page is on a supported site, the model arrives already
+linked to its listing with its pictures and details.
 
-Caveat: Printables sits behind a Cloudflare bot-check on some requests/regions, and both
-sites can change their markup. The extension deliberately avoids hardcoded CSS selectors
-(hence the JSON-LD approach) to stay resilient, but if a site's download links are themselves
-gated behind JS or auth you'll need to open the direct file URL in a tab first.
+Caveats: some sites only reveal their file links after you press their own Download button, and some require you to be logged in;
+open the page that lists the files, then use the button there. The extension avoids hardcoded CSS selectors to stay resilient to
+markup changes, but a site redesign can still change what it finds. The Firefox build has not been tested here (Chrome is the
+reference); it uses the same code with an add-on id and an event-page background.
 
 ## Architecture
 

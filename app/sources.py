@@ -4,10 +4,16 @@ title, designer, license, description, tags and pictures.
 Supported, no account needed: Printables (public GraphQL API), MakerWorld (the
 JSON API behind api.bambulab.com; makerworld.com itself sits behind a bot
 challenge that blocks server-side page fetches, the API host does not) and
-Sketchfab (public search API). With an access token entered in Settings:
-Thingiverse. All are read-only endpoints; the unofficial ones can change without
+Sketchfab (public search API). With a credential entered in Settings:
+Thingiverse (access token), MyMiniFactory (API key) and Cults3D (nickname + API
+key). All are read-only endpoints; the unofficial ones can change without
 notice, so every failure here is turned into a SourceError with a message that
 is fine to show to the user.
+
+Which sites let a server download the model files themselves: Printables (no
+login) and Thingiverse (with the token). MakerWorld, Sketchfab and MyMiniFactory
+only hand files to a logged-in user, and Cults3D's API never serves files; for
+those the browser extension, which runs in your logged-in browser, is the way in.
 
 Only these fixed hosts are ever contacted, and pictures are only downloaded
 from the sites' own CDNs, so a pasted URL can't make the server fetch anything
@@ -21,12 +27,19 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, urlparse
 
+import logging
+
 import httpx
 from PIL import Image, ImageOps
 
 from app.config import CONFIG_PATH
 
-USER_AGENT = "ModelHub/2.0 (self-hosted model library; +https://github.com/aon082910/model-hub)"
+# httpx logs every request URL at INFO, and MyMiniFactory takes its API key in the
+# query string, so keep that logger quiet rather than write keys into the log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+USER_AGENT = "ModelHub/2.1 (self-hosted model library; +https://github.com/aon082910/model-hub)"
 TIMEOUT = httpx.Timeout(12.0, connect=5.0)
 
 PRINTABLES_API = "https://api.printables.com/graphql/"
@@ -36,17 +49,57 @@ MAKERWORLD_API = "https://api.bambulab.com/v1"
 SKETCHFAB_API = "https://api.sketchfab.com/v3"
 THINGIVERSE_API = "https://api.thingiverse.com"
 
-PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse")
+MYMINIFACTORY_API = "https://www.myminifactory.com/api/v2"
+CULTS3D_API = "https://cults3d.com/graphql"
+
+PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d")
 PROVIDER_LABELS = {
     "printables": "Printables", "makerworld": "MakerWorld", "sketchfab": "Sketchfab", "thingiverse": "Thingiverse",
+    "myminifactory": "MyMiniFactory", "cults3d": "Cults3D",
 }
-# providers that need a credential, and the Settings key it is stored under
-CREDENTIAL_SETTINGS = {"thingiverse": "thingiverse_token"}
-KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_SETTINGS)
-IMAGE_HOSTS = {
-    "media.printables.com", "makerworld.bblmw.com", "public-cdn.bblmw.com",
-    "media.sketchfab.com", "cdn.thingiverse.com",
+# Providers that need credentials: the fields to enter in Settings (each is stored
+# as the setting "<provider>_<field>"), a label, whether it is secret, and where to get one.
+CREDENTIAL_FIELDS = {
+    "thingiverse": [("token", "Access token", True)],
+    "myminifactory": [("key", "API key", True)],
+    "cults3d": [("username", "Cults nickname", False), ("key", "API key", True)],
 }
+CREDENTIAL_HELP = {
+    "thingiverse": "Create a free app at thingiverse.com/developers and paste its token.",
+    "myminifactory": "Request an API key in your MyMiniFactory account's developer settings.",
+    "cults3d": "Your Cults nickname, plus an API key created at cults3d.com/en/api/keys.",
+}
+KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_FIELDS)
+# Where model files can be downloaded by this server (see the module docstring)
+DOWNLOAD_PROVIDERS = ("printables", "thingiverse")
+DOWNLOAD_NOTES = {
+    "makerworld": "MakerWorld only gives model files to logged-in users. Open the listing, then use the Model Hub browser extension while logged in.",
+    "sketchfab": "Sketchfab only gives downloads to logged-in users, and as glTF rather than printable formats.",
+    "myminifactory": "MyMiniFactory only gives file downloads to logged-in users (the API key alone cannot). Open the listing and use the Model Hub browser extension while logged in.",
+    "cults3d": "Cults3D never serves model files through its API. Open the listing and use the Model Hub browser extension while logged in.",
+}
+# Pictures are only ever downloaded from these sites' own domains (and their subdomains)
+IMAGE_DOMAINS = (
+    "printables.com", "bblmw.com", "sketchfab.com", "thingiverse.com", "myminifactory.com", "cults3d.com",
+)
+
+
+def host_in_domains(host: Optional[str], domains) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def image_host_allowed(host: Optional[str]) -> bool:
+    return host_in_domains(host, IMAGE_DOMAINS)
+
+
+def credential_setting(provider: str, field: str) -> str:
+    return f"{provider}_{field}"
+
+
+def secret_setting_keys() -> set:
+    return {credential_setting(p, f) for p, fields in CREDENTIAL_FIELDS.items() for f, _, secret in fields if secret}
+
 
 MAX_IMAGES = 6
 MAX_IMAGE_BYTES = 16 * 1024 * 1024   # largest download we will read
@@ -59,9 +112,12 @@ _PRINTABLES_URL = re.compile(r"^https?://(?:www\.)?printables\.com/(?:[a-z]{2}(?
 _MAKERWORLD_URL = re.compile(r"^https?://(?:www\.)?makerworld\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?models/(\d+)", re.I)
 _SKETCHFAB_URL = re.compile(r"^https?://(?:www\.)?sketchfab\.com/(?:3d-models|models)/(?:[^/?#]*-)?([0-9a-f]{32})(?:[/?#]|$)", re.I)
 _THINGIVERSE_URL = re.compile(r"^https?://(?:www\.)?thingiverse\.com/thing:(\d+)", re.I)
+_MYMINIFACTORY_URL = re.compile(r"^https?://(?:www\.)?myminifactory\.com/(?:[a-z]{2}/)?object/(?:[^/?#]*-)?(\d+)(?:[/?#]|$)", re.I)
+_CULTS3D_URL = re.compile(r"^https?://(?:www\.)?cults3d\.com/[a-z]{2}/3d-model/[^/?#]+/([A-Za-z0-9_-]{3,200})(?:[/?#]|$)", re.I)
 _URL_PATTERNS = (
     ("printables", _PRINTABLES_URL), ("makerworld", _MAKERWORLD_URL),
     ("sketchfab", _SKETCHFAB_URL), ("thingiverse", _THINGIVERSE_URL),
+    ("myminifactory", _MYMINIFACTORY_URL), ("cults3d", _CULTS3D_URL),
 )
 
 
@@ -79,7 +135,8 @@ def parse_url(url: str) -> Optional[tuple]:
     for provider, pattern in _URL_PATTERNS:
         match = pattern.match(url)
         if match:
-            return provider, match.group(1).lower()
+            found = match.group(1)
+            return provider, found.lower() if provider == "sketchfab" else found
     return None
 
 
@@ -87,24 +144,32 @@ def valid_source_id(provider: str, source_id) -> bool:
     source_id = str(source_id or "")
     if provider == "sketchfab":
         return re.fullmatch(r"[0-9a-f]{32}", source_id) is not None
+    if provider == "cults3d":
+        return re.fullmatch(r"[A-Za-z0-9_-]{3,200}", source_id) is not None
     return provider in PROVIDERS and source_id.isdigit()
 
 
 def load_credentials(session) -> dict:
-    """{provider: secret} for the providers whose credential is set in Settings."""
+    """{provider: {field: value}} for the providers whose credentials are all
+    set in Settings (a provider with a field missing is left out)."""
     from app.settings_store import get_setting
     found = {}
-    for provider, key in CREDENTIAL_SETTINGS.items():
-        value = (get_setting(session, key) or "").strip()
-        if value:
-            found[provider] = value
+    for provider, fields in CREDENTIAL_FIELDS.items():
+        values = {f: (get_setting(session, credential_setting(provider, f)) or "").strip() for f, _, _ in fields}
+        if all(values.values()):
+            found[provider] = values
     return found
+
+
+def _credential(credentials: Optional[dict], provider: str, field: str) -> str:
+    return (((credentials or {}).get(provider) or {}).get(field) or "").strip()
 
 
 def available_providers(credentials: Optional[dict] = None) -> tuple:
     """Providers to search by default: the keyless ones plus any with a credential."""
-    credentials = credentials or {}
-    return tuple(p for p in PROVIDERS if p in KEYLESS_PROVIDERS or credentials.get(p))
+    def complete(provider):
+        return all(_credential(credentials, provider, field) for field, _, _ in CREDENTIAL_FIELDS[provider])
+    return tuple(p for p in PROVIDERS if p in KEYLESS_PROVIDERS or complete(p))
 
 
 def html_to_text(value: Optional[str]) -> str:
@@ -200,6 +265,10 @@ def fetch_details(provider: str, source_id: str, credentials: Optional[dict] = N
             return _makerworld_details(client, source_id)
         if provider == "sketchfab":
             return _sketchfab_details(client, source_id)
+        if provider == "myminifactory":
+            return _myminifactory_details(client, source_id, _myminifactory_key(credentials))
+        if provider == "cults3d":
+            return _cults3d_details(client, source_id, _cults3d_auth(credentials))
         return _thingiverse_details(client, source_id, _thingiverse_token(credentials))
 
 
@@ -303,8 +372,11 @@ def _sketchfab_details(client: httpx.Client, source_id: str) -> dict:
     }
 
 
-def _search_sketchfab(client: httpx.Client, query: str, limit: int) -> list:
-    data = _sketchfab_get(client, "/search", type="models", q=query, count=limit, downloadable="true")
+def _search_sketchfab(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    params = {"type": "models", "q": query, "count": limit, "downloadable": "true"}
+    if page > 1:
+        params["cursor"] = (page - 1) * limit         # their cursor is the offset into the results
+    data = _sketchfab_get(client, "/search", **params)
     found = []
     for r in data.get("results") or []:
         if not r.get("uid"):
@@ -326,7 +398,7 @@ def _search_sketchfab(client: httpx.Client, query: str, limit: int) -> list:
 # ---------- Thingiverse (needs an access token from Settings) ----------
 
 def _thingiverse_token(credentials: Optional[dict]) -> str:
-    token = ((credentials or {}).get("thingiverse") or "").strip()
+    token = _credential(credentials, "thingiverse", "token")
     if not token:
         raise SourceError("Add a Thingiverse access token in Settings to search Thingiverse")
     return token
@@ -393,8 +465,8 @@ def _thingiverse_details(client: httpx.Client, source_id: str, token: str) -> di
     }
 
 
-def _search_thingiverse(client: httpx.Client, query: str, limit: int, token: str) -> list:
-    data = _thingiverse_get(client, f"/search/{quote(query, safe='')}", token, type="things", per_page=limit)
+def _search_thingiverse(client: httpx.Client, query: str, limit: int, token: str, page: int = 1) -> list:
+    data = _thingiverse_get(client, f"/search/{quote(query, safe='')}", token, type="things", per_page=limit, page=page)
     hits = data.get("hits") if isinstance(data, dict) else None
     return [{
         "provider": "thingiverse",
@@ -405,6 +477,293 @@ def _search_thingiverse(client: httpx.Client, query: str, limit: int, token: str
         "license": "",
         "thumbnail": h.get("thumbnail") or h.get("preview_image"),
     } for h in (hits or []) if h.get("id")]
+
+
+# ---------- MyMiniFactory (API key; metadata only) ----------
+# Their file download links need an OAuth-connected user, so the key alone only gets
+# search, details and pictures.
+
+def _myminifactory_key(credentials: Optional[dict]) -> str:
+    key = _credential(credentials, "myminifactory", "key")
+    if not key:
+        raise SourceError("Add a MyMiniFactory API key in Settings to search MyMiniFactory")
+    return key
+
+
+def _myminifactory_get(client: httpx.Client, path: str, key: str, **params) -> dict:
+    try:
+        response = client.get(f"{MYMINIFACTORY_API}{path}", params={**params, "key": key})
+    except httpx.HTTPError as e:
+        raise SourceError(f"Could not reach MyMiniFactory ({e.__class__.__name__})")
+    if response.status_code in (401, 403):
+        raise SourceError("MyMiniFactory rejected the API key; check it in Settings")
+    if response.status_code == 404:
+        raise SourceError("That listing was not found (it may have been removed)")
+    if response.status_code == 429:
+        raise SourceError("MyMiniFactory is rate limiting requests; try again in a few minutes")
+    if response.status_code != 200:
+        raise SourceError(f"MyMiniFactory answered with an error ({response.status_code})")
+    try:
+        data = response.json()
+    except ValueError:
+        raise SourceError("MyMiniFactory returned something unexpected (it may have changed its API)")
+    return data if isinstance(data, dict) else {}
+
+
+def _mmf_image_url(image: dict, prefer: str) -> Optional[str]:
+    for size in (prefer, "standard", "original", "thumbnail"):
+        url = ((image or {}).get(size) or {}).get("url")
+        if url:
+            return url
+    return None
+
+
+def _mmf_license_text(licenses: list) -> str:
+    labels = {"mention": "credit the designer", "remix": "remixing allowed",
+              "commercial-use": "commercial use allowed", "exclusivity": "exclusive to MyMiniFactory"}
+    allowed = [labels.get(l.get("type"), l.get("type")) for l in (licenses or []) if l.get("value") and l.get("type")]
+    return ", ".join(allowed)
+
+
+def _myminifactory_details(client: httpx.Client, source_id: str, key: str) -> dict:
+    data = _myminifactory_get(client, f"/objects/{source_id}", key)
+    if not data.get("id"):
+        raise SourceError("That listing was not found (it may have been removed)")
+    images = sorted(data.get("images") or [], key=lambda i: not i.get("is_primary"))
+    urls = []
+    for image in images:
+        url = _mmf_image_url(image, "standard")
+        if url and url not in urls:
+            urls.append(url)
+    designer = data.get("designer") or {}
+    categories = data.get("categories") or []
+    return {
+        "provider": "myminifactory",
+        "source_id": source_id,
+        "url": data.get("url") or f"https://www.myminifactory.com/object/3d-print-{source_id}",
+        "title": data.get("name") or "",
+        "designer": designer.get("name") or designer.get("username") or "",
+        "license": _mmf_license_text(data.get("licenses")),
+        "description": html_to_text(data.get("description")),
+        "tags": [t for t in (data.get("tags") or []) if isinstance(t, str) and t],
+        "category": (categories[0].get("name") or "") if categories else "",
+        "images": urls,
+        "likes": data.get("likes"),
+        "downloads": data.get("views"),
+        "parts": [],
+        "filaments": [],
+    }
+
+
+def _search_myminifactory(client: httpx.Client, query: str, limit: int, key: str, page: int = 1) -> list:
+    data = _myminifactory_get(client, "/search", key, q=query, per_page=limit, page=page)
+    found = []
+    for item in data.get("items") or []:
+        if not item.get("id"):
+            continue
+        images = sorted(item.get("images") or [], key=lambda i: not i.get("is_primary"))
+        designer = item.get("designer") or {}
+        found.append({
+            "provider": "myminifactory",
+            "source_id": str(item["id"]),
+            "url": item.get("url") or f"https://www.myminifactory.com/object/3d-print-{item['id']}",
+            "title": item.get("name") or "",
+            "designer": designer.get("name") or designer.get("username") or "",
+            "license": _mmf_license_text(item.get("licenses")),
+            "thumbnail": _mmf_image_url(images[0], "thumbnail") if images else None,
+        })
+    return found
+
+
+# ---------- Cults3D (nickname + API key; metadata only) ----------
+# Their API deliberately never serves the 3D files. A listing's id here is its slug,
+# the last part of its address.
+
+def _cults3d_auth(credentials: Optional[dict]) -> tuple:
+    username, key = _credential(credentials, "cults3d", "username"), _credential(credentials, "cults3d", "key")
+    if not username or not key:
+        raise SourceError("Add your Cults3D nickname and API key in Settings to search Cults3D")
+    return username, key
+
+
+def _cults3d_query(client: httpx.Client, query: str, variables: dict, auth: tuple) -> dict:
+    try:
+        response = client.post(CULTS3D_API, json={"query": query, "variables": variables}, auth=auth)
+    except httpx.HTTPError as e:
+        raise SourceError(f"Could not reach Cults3D ({e.__class__.__name__})")
+    if response.status_code in (401, 403):
+        raise SourceError("Cults3D rejected the nickname / API key; check them in Settings")
+    if response.status_code == 429:
+        raise SourceError("Cults3D is rate limiting requests; try again in a few minutes")
+    if response.status_code != 200:
+        raise SourceError(f"Cults3D answered with an error ({response.status_code})")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise SourceError("Cults3D returned something unexpected (it may have changed its API)")
+    if payload.get("errors"):
+        message = (payload["errors"][0] or {}).get("message", "")
+        raise SourceError(f"Cults3D rejected the request ({message[:80]})" if message else "Cults3D rejected the request")
+    return payload.get("data") or {}
+
+
+def _cults_slug(url: Optional[str]) -> str:
+    return (urlparse(url or "").path.rstrip("/").rsplit("/", 1)[-1]) if url else ""
+
+
+_CULTS_SEARCH = """
+query($q: String!, $limit: Int!%s) { creationsSearchBatch(query: $q, limit: $limit%s) {
+  total results { name(locale: EN) url(locale: EN) illustrationImageUrl creator { nick } license { name(locale: EN) } }
+} }
+"""
+_CULTS_DETAIL = """
+query($slug: String!) { creation(slug: $slug) {
+  name(locale: EN) url(locale: EN) illustrationImageUrl %s
+  license { name(locale: EN) } category { name(locale: EN) } tags(locale: EN)
+  creator { nick } viewsCount likesCount downloadsCount
+} }
+"""
+
+
+def _search_cults3d(client: httpx.Client, query: str, limit: int, auth: tuple, page: int = 1) -> list:
+    variables = {"q": query, "limit": limit}
+    if page > 1:
+        variables["offset"] = (page - 1) * limit
+        text = _CULTS_SEARCH % (", $offset: Int", ", offset: $offset")
+    else:
+        text = _CULTS_SEARCH % ("", "")
+    data = _cults3d_query(client, text, variables, auth)
+    found = []
+    for item in ((data.get("creationsSearchBatch") or {}).get("results")) or []:
+        slug = _cults_slug(item.get("url"))
+        if not slug:
+            continue
+        found.append({
+            "provider": "cults3d",
+            "source_id": slug,
+            "url": item.get("url"),
+            "title": item.get("name") or "",
+            "designer": (item.get("creator") or {}).get("nick") or "",
+            "license": (item.get("license") or {}).get("name") or "",
+            "thumbnail": item.get("illustrationImageUrl"),
+        })
+    return found
+
+
+def _cults3d_details(client: httpx.Client, slug: str, auth: tuple) -> dict:
+    try:
+        data = _cults3d_query(client, _CULTS_DETAIL % "description(locale: EN)", {"slug": slug}, auth)
+    except SourceError as e:
+        if "description" not in str(e).lower():
+            raise
+        data = _cults3d_query(client, _CULTS_DETAIL % "", {"slug": slug}, auth)   # schema without a description field
+    item = data.get("creation")
+    if not item:
+        raise SourceError("That listing was not found (it may have been removed)")
+    cover = item.get("illustrationImageUrl")
+    return {
+        "provider": "cults3d",
+        "source_id": slug,
+        "url": item.get("url") or f"https://cults3d.com/en/3d-model/{slug}",
+        "title": item.get("name") or "",
+        "designer": (item.get("creator") or {}).get("nick") or "",
+        "license": (item.get("license") or {}).get("name") or "",
+        "description": html_to_text(item.get("description")),
+        "tags": [t for t in (item.get("tags") or []) if isinstance(t, str) and t],
+        "category": (item.get("category") or {}).get("name") or "",
+        "images": [cover] if cover else [],
+        "likes": item.get("likesCount"),
+        "downloads": item.get("downloadsCount"),
+        "parts": [],
+        "filaments": [],
+    }
+
+
+def test_credentials(provider: str, credentials: Optional[dict]) -> str:
+    """Make one small request with the stored credentials. Returns a message for
+    the user on success; raises SourceError describing the problem otherwise."""
+    if provider not in CREDENTIAL_FIELDS:
+        raise SourceError(f"{PROVIDER_LABELS.get(provider, provider)} does not need credentials")
+    found = search("benchy", providers=(provider,), limit=1, credentials=credentials)
+    if found["errors"]:
+        raise SourceError(found["errors"][provider])
+    return f"{PROVIDER_LABELS[provider]} accepted the credentials."
+
+
+# ---------- model files (Printables, Thingiverse) ----------
+# Only these two sites let a server fetch the files; see the module docstring.
+
+_PRINTABLES_FILES = """
+query($id: ID!) { print(id: $id) { id stls { id name fileSize } downloadPacks { id fileSize fileType } } }
+"""
+_PRINTABLES_LINK = """
+mutation($id: ID!, $printId: ID!) {
+  getDownloadLink(id: $id, printId: $printId, fileType: %s, source: model_detail) {
+    ok errors { field messages } output { link }
+  }
+}
+"""
+_PRINTABLES_FILE_KINDS = {"stl", "pack"}      # the only values ever put into the query text
+
+
+def printables_files(client: httpx.Client, source_id: str) -> list:
+    """[{id, name, size, kind}] where kind is 'pack' (a zip of all the model
+    files) or 'stl' (one file)."""
+    item = _printables_query(client, _PRINTABLES_FILES, {"id": source_id}).get("print")
+    if not item:
+        raise SourceError("That listing was not found (it may have been removed)")
+    files = []
+    for pack in item.get("downloadPacks") or []:
+        if pack.get("fileType") == "MODEL_FILES":
+            files.append({"id": str(pack["id"]), "name": f"model-files-{source_id}.zip",
+                          "size": pack.get("fileSize"), "kind": "pack"})
+    for stl in item.get("stls") or []:
+        files.append({"id": str(stl["id"]), "name": stl.get("name") or f"{stl['id']}.stl",
+                      "size": stl.get("fileSize"), "kind": "stl"})
+    return files
+
+
+def printables_download_link(client: httpx.Client, source_id: str, file_id: str, kind: str) -> str:
+    """A short-lived https link to one Printables file (no login needed)."""
+    if kind not in _PRINTABLES_FILE_KINDS or not str(file_id).isdigit():
+        raise SourceError("Unsupported file")
+    data = _printables_query(client, _PRINTABLES_LINK % kind, {"id": str(file_id), "printId": str(source_id)})
+    result = data.get("getDownloadLink") or {}
+    link = (result.get("output") or {}).get("link")
+    if not result.get("ok") or not link:
+        raise SourceError("Printables did not give a download link for this file")
+    parsed = urlparse(link)
+    if parsed.scheme != "https" or not host_in_domains(parsed.hostname, ("printables.com",)):
+        raise SourceError("Printables returned a download link on an unexpected site")
+    return link
+
+
+def thingiverse_files(client: httpx.Client, source_id: str, token: str) -> list:
+    """[{id, name, size, url}] for a thing's files (url is the Thingiverse download address)."""
+    data = _thingiverse_get(client, f"/things/{source_id}/files", token)
+    if not isinstance(data, list):
+        raise SourceError("Thingiverse returned something unexpected (it may have changed its API)")
+    files = []
+    for f in data:
+        url = f.get("download_url") or f.get("url") or f.get("public_url")
+        if f.get("name") and url:
+            files.append({"id": str(f.get("id") or ""), "name": f["name"], "size": f.get("size"), "url": url})
+    return files
+
+
+def copy_images(from_model_id: int, to_model_id: int) -> list:
+    """Give another model the same saved pictures (files in a multi-model pack share one listing)."""
+    source = IMAGE_ROOT / str(from_model_id)
+    if not source.is_dir():
+        return []
+    target = IMAGE_ROOT / str(to_model_id)
+    target.mkdir(parents=True, exist_ok=True)
+    names = []
+    for picture in sorted(source.iterdir()):
+        if picture.is_file() and re.fullmatch(r"\d{1,2}\.jpg", picture.name):
+            (target / picture.name).write_bytes(picture.read_bytes())
+            names.append(picture.name)
+    return names
 
 
 # ---------- parts lists (MakerWorld "what you need to buy") ----------
@@ -559,19 +918,21 @@ def makerworld_filaments(extension: dict) -> list:
 # ---------- search ----------
 
 _PRINTABLES_SEARCH = """
-query($q: String!, $limit: Int!) { result: searchPrints2(query: $q, printType: print, limit: $limit) {
+query($q: String!, $limit: Int!, $offset: Int!) { result: searchPrints2(query: $q, printType: print, limit: $limit, offset: $offset) {
   items { id name slug user { publicUsername } license { abbreviation name } image { filePath } }
 } }
 """
 
 
-def search(query: str, providers=None, limit: int = 6, credentials: Optional[dict] = None) -> dict:
+def search(query: str, providers=None, limit: int = 6, credentials: Optional[dict] = None, page: int = 1) -> dict:
     """{'results': [...], 'errors': {provider: message}}. One site being down
     does not hide the other's results. providers defaults to every site that can
-    be searched right now (the keyless ones, plus any with a credential)."""
+    be searched right now (the keyless ones, plus any with credentials). page is
+    1-based and applies to every site."""
     query = (query or "").strip()
     if not query:
         raise SourceError("Type something to search for")
+    page = max(1, int(page or 1))
     providers = available_providers(credentials) if providers is None else providers
     results, errors = [], {}
     with _client() as client:
@@ -580,21 +941,25 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
                 continue
             try:
                 if provider == "printables":
-                    found = _search_printables(client, query, limit)
+                    found = _search_printables(client, query, limit, page)
                 elif provider == "makerworld":
-                    found = _search_makerworld(client, query, limit)
+                    found = _search_makerworld(client, query, limit, page)
                 elif provider == "sketchfab":
-                    found = _search_sketchfab(client, query, limit)
+                    found = _search_sketchfab(client, query, limit, page)
+                elif provider == "thingiverse":
+                    found = _search_thingiverse(client, query, limit, _thingiverse_token(credentials), page)
+                elif provider == "myminifactory":
+                    found = _search_myminifactory(client, query, limit, _myminifactory_key(credentials), page)
                 else:
-                    found = _search_thingiverse(client, query, limit, _thingiverse_token(credentials))
+                    found = _search_cults3d(client, query, limit, _cults3d_auth(credentials), page)
                 results.extend(found)
             except SourceError as e:
                 errors[provider] = str(e)
     return {"results": results, "errors": errors}
 
 
-def _search_printables(client: httpx.Client, query: str, limit: int) -> list:
-    data = _printables_query(client, _PRINTABLES_SEARCH, {"q": query, "limit": limit})
+def _search_printables(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    data = _printables_query(client, _PRINTABLES_SEARCH, {"q": query, "limit": limit, "offset": (page - 1) * limit})
     items = ((data.get("result") or {}).get("items")) or []
     return [{
         "provider": "printables",
@@ -607,9 +972,9 @@ def _search_printables(client: httpx.Client, query: str, limit: int) -> list:
     } for i in items]
 
 
-def _search_makerworld(client: httpx.Client, query: str, limit: int) -> list:
+def _search_makerworld(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
     data = _get_json(client, f"{MAKERWORLD_API}/search-service/select/design2",
-                     params={"keyword": query, "limit": limit, "offset": 0})
+                     params={"keyword": query, "limit": limit, "offset": (page - 1) * limit})
     return [{
         "provider": "makerworld",
         "source_id": str(h["id"]),
@@ -672,7 +1037,7 @@ def _image_extension(data: bytes) -> Optional[str]:
 def download_image(client: httpx.Client, url: str) -> tuple:
     """(bytes, extension). The type comes from the file's own header, not the URL."""
     parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname not in IMAGE_HOSTS:
+    if parsed.scheme != "https" or not image_host_allowed(parsed.hostname):
         raise SourceError("Picture is not on a supported site")
     chunks, size = [], 0
     try:

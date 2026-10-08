@@ -289,3 +289,43 @@ def confirm_auto_link(session: Session, model_id: int) -> bool:
     session.add(model)
     session.commit()
     return True
+
+
+def _linked_filter(provider: Optional[str], linked_by: Optional[str], query: Optional[str]) -> list:
+    conditions = [Model3D.extension.in_(MODEL_EXTENSIONS), Model3D.source_provider.is_not(None)]
+    if provider:
+        conditions.append(Model3D.source_provider == provider)
+    if linked_by:
+        conditions.append(Model3D.source_linked_by == linked_by)
+    if query and query.strip():
+        pattern = f"%{query.strip()}%"
+        conditions.append(Model3D.filename.ilike(pattern) | Model3D.source_title.ilike(pattern))
+    return conditions
+
+
+def linked_models(session: Session, provider: Optional[str] = None, linked_by: Optional[str] = None,
+                  query: Optional[str] = None, offset: int = 0, limit: int = 20) -> dict:
+    """Models that are linked to an online listing, for reviewing / bulk unlinking."""
+    conditions = _linked_filter(provider, linked_by, query)
+    total = session.exec(select(func.count()).select_from(Model3D).where(*conditions)).one()
+    rows = session.exec(select(Model3D).where(*conditions).order_by(Model3D.updated_at.desc(), Model3D.id.desc())
+                        .offset(offset).limit(limit)).all()
+    return {"total": total, "items": [{
+        "id": m.id, "filename": m.filename, "extension": m.extension, "thumbnail_path": m.thumbnail_path,
+        "source_provider": m.source_provider, "source_title": m.source_title, "source_url": m.source_url,
+        "source_linked_by": m.source_linked_by or "manual", "designer": m.designer,
+    } for m in rows]}
+
+
+def unlink_many(session: Session, model_ids: Optional[list] = None, provider: Optional[str] = None,
+                linked_by: Optional[str] = None, query: Optional[str] = None) -> int:
+    """Remove the listing link (and the saved pictures) from many models at once.
+    Either explicit ids, or every linked model matching the filters."""
+    from app.source_linking import unlink_model   # lazy: that module imports this one
+    if model_ids is not None:
+        models = session.exec(select(Model3D).where(Model3D.id.in_(model_ids), Model3D.source_provider.is_not(None))).all()
+    else:
+        models = session.exec(select(Model3D).where(*_linked_filter(provider, linked_by, query))).all()
+    for model in models:
+        unlink_model(session, model)
+    return len(models)

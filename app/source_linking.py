@@ -14,17 +14,26 @@ from app.source_match_jobs import clear_match_data
 logger = logging.getLogger("modelhub.sources")
 
 MAX_SITE_TAGS = 8
-LINKED_BY = ("manual", "auto", "extension")
+LINKED_BY = ("manual", "auto", "extension", "download")
 
 
 def link_model_to_listing(
     session: Session, model: Model3D, provider: str, source_id: str,
     images: bool = True, fill_details: bool = True, add_tags: bool = False, linked_by: str = "manual",
+    details: Optional[dict] = None, reuse_images_from: Optional[int] = None,
 ) -> Model3D:
     """Fetch a listing and record it on the model. Network calls happen before
-    any database change, so a failed lookup leaves the model untouched."""
-    details = sources.fetch_details(provider, source_id, sources.load_credentials(session))
-    image_names = sources.store_images(model.id, details["images"]) if images else None
+    any database change, so a failed lookup leaves the model untouched.
+    details: already-fetched listing details (skips the lookup). reuse_images_from:
+    another model that already saved this listing's pictures (copied, not downloaded again)."""
+    if details is None:
+        details = sources.fetch_details(provider, source_id, sources.load_credentials(session))
+    if not images:
+        image_names = None
+    elif reuse_images_from:
+        image_names = sources.copy_images(reuse_images_from, model.id)
+    else:
+        image_names = sources.store_images(model.id, details["images"])
 
     model.source_provider = provider
     model.source_id = source_id
