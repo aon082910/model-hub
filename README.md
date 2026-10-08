@@ -89,6 +89,7 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | More than one login | Done — the first account is the administrator; **Settings → People** adds *members* (everything except Settings, backups, user management and deleting duplicate files) and read-only *viewers*. See [People](#people) |
 | Install on a phone | Done — Model Hub is an installable web app (manifest, icons, a service worker that caches nothing); pages are checked for horizontal overflow at phone width. See [On your phone](#on-your-phone) |
 | Printers | Done — add Klipper/Moonraker and OctoPrint printers, see their status, send them a G-code file, or slice a model first when a slicer is configured. Never starts a print unless you ask. See [Printers](#printers) |
+| Scheduled jobs and notifications | Done — a weekly (or daily, or off) saved backup, a check for new uploads from followed designers, low filament and low supply warnings, an optional daily check of linked listings, and noticing when a printer finishes a print; each kind of notification can be switched off. See [Things Model Hub does by itself](#things-model-hub-does-by-itself) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -319,6 +320,26 @@ API keys are never shown again after you save them, are never in an error messag
 **Status of testing:** the Moonraker and OctoPrint code follows their documented HTTP APIs and is tested against simulated printers and a stand-in slicer, and the whole flow was
 exercised in a browser against a simulated Klipper host. It has **not** been tried against a real printer or a real slicer, so try it with an idle printer first. Bambu Lab printers
 (which use their own protocol) are not supported.
+
+## Things Model Hub does by itself
+
+One timer runs in the background (it wakes every half minute and runs whatever is due; a failing job never stops the others):
+
+| What | How often | Settings |
+|---|---|---|
+| Saved backup (`auto-backup-*.zip` in `/config/backups`) | weekly by default | Settings → Backup: weekly / daily / off, and how many to keep (default 7). Other saved copies are never pruned by it |
+| New uploads from designers you follow | every 6 hours | notification only; also in the Following tab |
+| Low filament and supplies | every 6 hours | Settings → Notifications: warn at this many grams (default 100, 0 = off). Supplies use the minimum you set on each. You are told once per item, again only after it was restocked and ran low again |
+| Listing changes | about daily, **off by default** | Settings → Notifications: check linked listings by itself |
+| Printers | every 30 seconds | see below |
+
+**Printer finished:** when a printer that was printing stops, Model Hub notices (Klipper reports *complete*; for OctoPrint a print that ended at 100% counts as finished).
+If the file was one Model Hub sent for a model, the print is recorded for that model: the waiting print-queue entry is completed (which takes the filament off the spool) or, with no
+queue entry, a print-log entry with the print time is written. A cancelled or failed print is announced but not logged. Nothing is ever started or stopped by this, and a print that ends while Model Hub is
+restarting is not noticed (the state is kept in memory).
+
+**Notifications** go to the webhook you set (ntfy, Discord, Slack...). **Settings → Notifications** has a *Send a test message* button and a switch for every kind: new files, AI tagging finished,
+new uploads, listing changes, low stock, print finished or stopped, backup failed.
 
 ## Auth
 

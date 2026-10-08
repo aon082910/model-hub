@@ -128,9 +128,16 @@ def save_backup(prefix: str = "modelhub-backup") -> dict:
     path = BACKUP_DIR / f"{prefix}-{_stamp()}.zip"
     manifest = make_backup(path)
     if prefix == "before-restore":
-        for old in [b for b in saved_backups() if b["name"].startswith("before-restore-")][KEEP_SAFETY_COPIES:]:
-            (BACKUP_DIR / old["name"]).unlink(missing_ok=True)
+        prune(prefix, KEEP_SAFETY_COPIES)
     return {"name": path.name, "size": path.stat().st_size, **manifest}
+
+
+def prune(prefix: str, keep: int) -> int:
+    """Delete all but the newest `keep` saved copies whose name starts with prefix. Returns how many went."""
+    old = [b for b in saved_backups() if b["name"].startswith(prefix + "-")][max(0, keep):]
+    for b in old:
+        (BACKUP_DIR / b["name"]).unlink(missing_ok=True)
+    return len(old)
 
 
 # ---------- restoring ----------

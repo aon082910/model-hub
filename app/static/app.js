@@ -2776,6 +2776,38 @@ $('#backup-restore-btn').addEventListener('click', async () => {
   refreshBackups();
 });
 
+// ---------- Scheduled jobs and notifications (Settings) ----------
+async function saveSetting(values, statusSelector) {
+  const res = await jsonRequest('PUT', '/api/settings', values);
+  if (statusSelector) {
+    $(statusSelector).textContent = res.ok ? 'Saved.' : 'Could not save.';
+    setTimeout(() => { const el = $(statusSelector); if (el) el.textContent = ''; }, 2000);
+  }
+  return res.ok;
+}
+
+async function loadNotifyEvents() {
+  const res = await fetch('/api/settings/notify-events');
+  if (!res.ok) return;
+  $('#notify-events').innerHTML = (await res.json()).events.map(e => `
+    <label class="inline-check"><input type="checkbox" class="notify-event" data-event="${esc(e.id)}" ${e.enabled ? 'checked' : ''}> ${esc(e.label)}</label>`).join('');
+}
+
+$('#notify-events').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('notify-event')) return;
+  saveSetting({ [`notify_${e.target.dataset.event}`]: e.target.checked ? 'true' : 'false' });
+});
+$('#notify-test-btn').addEventListener('click', async () => {
+  await saveSetting({ notify_webhook_url: $('#notify-webhook-url').value });
+  $('#notify-test-status').textContent = 'Sending...';
+  const res = await fetch('/api/settings/notify-test', { method: 'POST' });
+  $('#notify-test-status').textContent = res.ok ? 'Sent. Check your phone or channel.' : await sourceErrorText(res);
+});
+$('#auto-backup').addEventListener('change', () => saveSetting({ auto_backup: $('#auto-backup').value }, '#auto-backup-status'));
+$('#auto-backup-keep').addEventListener('change', () => saveSetting({ auto_backup_keep: $('#auto-backup-keep').value }, '#auto-backup-status'));
+$('#low-filament-g').addEventListener('change', () => saveSetting({ low_filament_g: $('#low-filament-g').value }));
+$('#auto-listing-check').addEventListener('change', () => saveSetting({ auto_listing_check: $('#auto-listing-check').checked ? 'true' : 'false' }));
+
 async function loadSettings() {
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
@@ -2797,6 +2829,11 @@ async function loadSettings() {
   await renderSiteSettings(s);
   refreshBackups();
   loadUsers();
+  $('#auto-backup').value = s.auto_backup || 'weekly';
+  $('#auto-backup-keep').value = s.auto_backup_keep || '';
+  $('#low-filament-g').value = s.low_filament_g || '';
+  $('#auto-listing-check').checked = s.auto_listing_check === 'true';
+  loadNotifyEvents();
   const keyRes = await fetch('/api/settings/extension-key');
   $('#ext-api-key').value = keyRes.ok ? (await keyRes.json()).extension_api_key : '';
 }

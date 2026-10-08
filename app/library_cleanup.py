@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 from app.config import MODEL_EXTENSIONS
 from app.models import (
     Model3D, ModelCollectionLink, ModelTagLink, ProjectModelFilament, ProjectModelLink, QueueItem,
-    PrintLog, SourceCandidate, SourceMatchState,
+    PrinterJob, PrintLog, SourceCandidate, SourceMatchState,
 )
 
 
@@ -27,7 +27,7 @@ def delete_model_records(session: Session, model_ids: Iterable[int]) -> int:
 
     for log_id in session.exec(select(PrintLog.id).where(PrintLog.model_id.in_(ids))).all():
         delete_photo(log_id)
-    for table in (PrintLog, ModelTagLink, ModelCollectionLink, ProjectModelLink, ProjectModelFilament,
+    for table in (PrinterJob, PrintLog, ModelTagLink, ModelCollectionLink, ProjectModelLink, ProjectModelFilament,
                   QueueItem, SourceCandidate, SourceMatchState):
         session.exec(delete(table).where(table.model_id.in_(ids)))
     # other rows that were marked as copies of a removed model are no longer copies

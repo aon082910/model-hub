@@ -9,7 +9,7 @@ from app.ai.tagging import tag_model
 from app.ai import get_provider
 from app.ai.api_provider import APIProvider
 from app.settings_store import get_setting
-from app.notify import notify
+from app.notify import notify_event
 from app.memory_guard import memory_usage_critical
 
 logger = logging.getLogger("modelhub.ai")
@@ -79,7 +79,7 @@ def _run_batch_tagging(model_ids: list[int]):
                     session.expunge_all()
                     gc.collect()
 
-            notify(session, "Model Hub: tagging finished",
+            notify_event(session, "tagging_done", "Model Hub: tagging finished",
                    f"Tagged {_job_state['done']}/{_job_state['total']} model(s)." +
                    (f" Stopped early: {_job_state['stopped_reason']}." if _job_state["stopped_reason"] else "") +
                    (f" Est. cost: ${_job_state['estimated_cost_usd']:.3f}" if _job_state["estimated_cost_usd"] else ""))

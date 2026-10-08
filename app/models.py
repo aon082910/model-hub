@@ -267,6 +267,19 @@ class Printer(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class PrinterJob(SQLModel, table=True):
+    """A file Model Hub sent to a printer, so that when the printer reports it finished the
+    print can be logged against the right model."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(index=True)
+    filename: str
+    model_id: Optional[int] = None
+    started: bool = False
+    sent_at: datetime = Field(default_factory=datetime.utcnow)
+    finished_at: Optional[datetime] = None
+    outcome: Optional[str] = None            # done, stopped
+
+
 class AppUser(SQLModel, table=True):
     """A login besides the first (admin) account, which lives in the settings. role is
     "member" (uses everything except settings, backups and user management) or

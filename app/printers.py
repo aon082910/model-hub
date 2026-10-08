@@ -104,7 +104,8 @@ def _number(value) -> Optional[float]:
 
 def status(kind: str, url: str, api_key: Optional[str]) -> dict:
     """{online, state, progress (0-100), file, nozzle, bed, message}. Never raises for an unreachable printer."""
-    result = {"online": False, "state": "offline", "progress": None, "file": None, "nozzle": None, "bed": None, "message": None}
+    result = {"online": False, "state": "offline", "progress": None, "file": None, "nozzle": None, "bed": None, "message": None,
+              "duration": None}
     try:
         with _client() as client:
             if kind == "moonraker":
@@ -129,6 +130,7 @@ def _moonraker_status(client, url, api_key, result):
     result.update(
         online=True, state=str(stats.get("state") or "unknown"), file=stats.get("filename") or None,
         progress=round(progress * 100, 1) if isinstance(progress, (int, float)) else None,
+        duration=_number(stats.get("print_duration")),
         nozzle=_number((objects.get("extruder") or {}).get("temperature")),
         bed=_number((objects.get("heater_bed") or {}).get("temperature")),
     )

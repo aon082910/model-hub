@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import logging
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -16,7 +18,25 @@ from app.auth import path_requires_auth, current_user, forbidden_reason, bootstr
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("modelhub")
 
-app = FastAPI(title="Model Hub")
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
+    from sqlmodel import Session
+    with Session(engine) as session:
+        bootstrap_from_env(session)
+        ensure_extension_api_key(session)
+    tasks = [asyncio.create_task(_background_scan_loop())]
+    if not os.environ.get("MODELHUB_DISABLE_SCHEDULER"):          # (tests switch the timers off)
+        from app import scheduler
+        tasks.append(asyncio.create_task(scheduler.loop()))
+    yield
+    for task in tasks:
+        task.cancel()
+    from app.mesh_worker import shutdown_worker_pools
+    shutdown_worker_pools()
+
+
+app = FastAPI(title="Model Hub", lifespan=lifespan)
 
 # Permissive CORS: this app is meant to run on a private LAN/Unraid host, and the
 # Model Hub browser extension (running as an extension background worker, on an
@@ -136,12 +156,12 @@ def _run_scan():
     """Run one library scan outside the asyncio event loop."""
     from sqlmodel import Session
     from app.scanner import scan_library
-    from app.notify import notify
+    from app.notify import notify_event
 
     with Session(engine) as session:
         result = scan_library(session)
         if result.get("added"):
-            notify(session, "Model Hub: new files", f"{result['added']} new model(s) added to your library.")
+            notify_event(session, "new_files", "Model Hub: new files", f"{result['added']} new model(s) added to your library.")
         return result
 
 
@@ -160,19 +180,3 @@ async def _background_scan_loop():
         except Exception:
             logger.exception("Background scan failed")
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-
-
-@app.on_event("startup")
-async def on_startup():
-    init_db()
-    from sqlmodel import Session
-    with Session(engine) as session:
-        bootstrap_from_env(session)
-        ensure_extension_api_key(session)
-    asyncio.create_task(_background_scan_loop())
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    from app.mesh_worker import shutdown_worker_pools
-    shutdown_worker_pools()

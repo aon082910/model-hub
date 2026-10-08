@@ -41,7 +41,7 @@ class FakePrinter:
                 if self.moonraker_status_code != 200:
                     return httpx.Response(self.moonraker_status_code)
                 return httpx.Response(200, json={"result": {"status": {
-                    "print_stats": {"state": self.moonraker_state, "filename": "benchy.gcode"},
+                    "print_stats": {"state": self.moonraker_state, "filename": "benchy.gcode", "print_duration": 754.0},
                     "display_status": {"progress": 0.4237}, "extruder": {"temperature": 214.96}, "heater_bed": {"temperature": 59.9}}}})
             if path == "/server/files/upload":
                 return self._upload(request, {"item": {"path": "x"}, "print_started": self.print_started and b"true" in request.content})
@@ -117,7 +117,7 @@ def test_the_slicer_is_reported_as_off_unless_both_paths_are_set(authed, fake, m
 def test_moonraker_status(authed, fake):
     p = _add(authed, api_key=KEY)
     s = authed.get(f"/api/printers/{p['id']}/status").json()
-    assert s == {"online": True, "state": "printing", "progress": 42.4, "file": "benchy.gcode", "nozzle": 215.0, "bed": 59.9, "message": None}
+    assert s == {"online": True, "state": "printing", "progress": 42.4, "file": "benchy.gcode", "nozzle": 215.0, "bed": 59.9, "message": None, "duration": 754.0}
     assert ("GET", "/printer/objects/query", KEY) in fake.requests
 
 

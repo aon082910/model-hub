@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 from app import printers as printing
 from app.config import LIBRARY_PATH
 from app.db import get_session
-from app.models import Model3D, Printer
+from app.models import Model3D, Printer, PrinterJob
 
 router = APIRouter(prefix="/api/printers", tags=["printers"])
 
@@ -131,6 +131,10 @@ def send(printer_id: int, file: Optional[UploadFile] = File(None), model_id: Opt
                     raise HTTPException(404, "The model's file is missing from the library folder")
                 path = printing.slice_model(source, workdir, infill)
                 name = printing.safe_gcode_name(model.filename)
-            return printing.send_file(printer.kind, printer.url, printer.api_key, path, name, start)
+            result = printing.send_file(printer.kind, printer.url, printer.api_key, path, name, start)
+            session.add(PrinterJob(printer_id=printer.id, filename=result["filename"], model_id=model_id if file is None else None,
+                                   started=bool(result["started"])))
+            session.commit()
+            return result
     except printing.PrinterError as e:
         raise HTTPException(502, str(e))

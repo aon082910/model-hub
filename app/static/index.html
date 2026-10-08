@@ -440,6 +440,14 @@
         <input id="notify-webhook-url" placeholder="https://ntfy.sh/your-topic">
       </label>
       <button id="save-notify-btn">Save Notification Settings</button>
+      <button id="notify-test-btn">Send a test message</button>
+      <span id="notify-test-status" class="muted"></span>
+      <p class="muted">Tell me about:</p>
+      <div id="notify-events"></div>
+      <label>Low filament warning at <small>(grams left on a spool; 0 switches spool warnings off. Supplies warn at the minimum you set for them.)</small>
+        <input id="low-filament-g" type="number" min="0" step="10" placeholder="100">
+      </label>
+      <label class="inline-check"><input type="checkbox" id="auto-listing-check"> Check linked listings for changes by itself (about once a day)</label>
     </div>
 
     <h2>Browser Extension</h2>
@@ -465,6 +473,13 @@
         <a class="button-link" href="/api/backup" download>Download a backup</a>
         <button id="backup-save-btn">Save a copy on the server</button>
         <span id="backup-status" class="muted"></span>
+      </div>
+      <div class="row">
+        <label>Scheduled backups
+          <select id="auto-backup"><option value="weekly">weekly</option><option value="daily">daily</option><option value="off">off</option></select>
+        </label>
+        <label>Keep the newest <input id="auto-backup-keep" type="number" min="1" max="60" step="1" placeholder="7"></label>
+        <span id="auto-backup-status" class="muted"></span>
       </div>
       <div id="backup-saved"></div>
       <label>Restore from a backup file <small>(replaces your current tags, projects, notes and so on; a copy of the current data is saved first)</small>

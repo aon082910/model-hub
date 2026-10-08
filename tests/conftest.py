@@ -12,6 +12,8 @@ os.makedirs(os.environ["LIBRARY_PATH"], exist_ok=True)
 os.makedirs(os.environ["CONFIG_PATH"], exist_ok=True)
 # effectively disable the background scan loop firing mid-suite
 os.environ["SCAN_INTERVAL_SECONDS"] = "999999"
+# the scheduled jobs (backups, printer polling, designer checks) are driven by hand in tests
+os.environ["MODELHUB_DISABLE_SCHEDULER"] = "1"
 
 
 @pytest.fixture(scope="session")

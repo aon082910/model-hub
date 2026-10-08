@@ -80,7 +80,7 @@ def test_batch_tagging_checkpoints_session_and_resets_running_flag(monkeypatch):
     # function, so it needs patching independently.
     monkeypatch.setattr(tagging_module, "get_provider", lambda session: _FakeProvider())
     monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
-    monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "notify_event", lambda *a, **k: None)
     monkeypatch.setattr(ai_module, "memory_usage_critical", lambda: False)
 
     ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
@@ -132,7 +132,7 @@ def test_batch_tagging_continues_past_a_single_model_failure(monkeypatch):
     monkeypatch.setattr(ai_module, "get_provider", lambda session: flaky)
     monkeypatch.setattr(tagging_module, "get_provider", lambda session: flaky)
     monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
-    monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "notify_event", lambda *a, **k: None)
     monkeypatch.setattr(ai_module, "memory_usage_critical", lambda: False)
 
     ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
@@ -161,7 +161,7 @@ def test_batch_tagging_stops_early_when_memory_is_critical(monkeypatch):
     monkeypatch.setattr(ai_module, "get_provider", lambda session: provider)
     monkeypatch.setattr(tagging_module, "get_provider", lambda session: provider)
     monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
-    monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "notify_event", lambda *a, **k: None)
     monkeypatch.setattr(ai_module, "memory_usage_critical", lambda: True)
 
     ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)
@@ -193,7 +193,7 @@ def test_batch_tagging_stops_partway_when_memory_turns_critical(monkeypatch):
     monkeypatch.setattr(ai_module, "get_provider", lambda session: provider)
     monkeypatch.setattr(tagging_module, "get_provider", lambda session: provider)
     monkeypatch.setattr(ai_module, "get_setting", lambda session, key, default=None: default)
-    monkeypatch.setattr(ai_module, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(ai_module, "notify_event", lambda *a, **k: None)
     monkeypatch.setattr(ai_module, "memory_usage_critical", critical_after_three)
 
     ai_module._job_state.update(running=False, done=0, total=0, cancel=False, estimated_cost_usd=0.0)

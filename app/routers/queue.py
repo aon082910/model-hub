@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.db import get_session
@@ -30,6 +32,31 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
     return item
 
 
+def _on_done(session: Session, item: QueueItem) -> None:
+    """Deduct consumed filament exactly once, the moment a job transitions into "done",
+    and write it to the model's print log (once per queue entry)."""
+    if item.filament_id and item.estimated_grams:
+        spool = session.get(Filament, item.filament_id)
+        if spool:
+            spool.remaining_g = max(0.0, spool.remaining_g - item.estimated_grams)
+            session.add(spool)
+    from app.routers.prints import log_print
+    if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item.id)).first():
+        log_print(session, item.model_id, filament_id=item.filament_id, grams=item.estimated_grams,
+                  minutes=item.estimated_minutes, notes=item.notes, deduct=False, source="queue", queue_item_id=item.id)
+
+
+def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = None) -> None:
+    """Mark a queue entry done (as a printer reporting a finished print does)."""
+    if item.status == "done":
+        return
+    item.status = "done"
+    if minutes and not item.estimated_minutes:
+        item.estimated_minutes = round(minutes, 1)
+    session.add(item)
+    _on_done(session, item)
+
+
 @router.patch("/{item_id}")
 def update_queue_item(item_id: int, payload: dict, session: Session = Depends(get_session)):
     item = session.get(QueueItem, item_id)
@@ -41,18 +68,8 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         if field in payload:
             setattr(item, field, payload[field])
 
-    # deduct consumed filament exactly once, the moment a job transitions into "done",
-    # and write it to the model's print log (once per queue entry)
     if item.status == "done" and not was_done:
-        if item.filament_id and item.estimated_grams:
-            spool = session.get(Filament, item.filament_id)
-            if spool:
-                spool.remaining_g = max(0.0, spool.remaining_g - item.estimated_grams)
-                session.add(spool)
-        from app.routers.prints import log_print
-        if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item_id)).first():
-            log_print(session, item.model_id, filament_id=item.filament_id, grams=item.estimated_grams,
-                      minutes=item.estimated_minutes, notes=item.notes, deduct=False, source="queue", queue_item_id=item_id)
+        _on_done(session, item)
 
     session.add(item)
     session.commit()

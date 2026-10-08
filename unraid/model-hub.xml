@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.6.0
+Model Hub now does some things by itself: a saved backup every week (or day,
+or off; the newest 7 are kept), a look for new uploads from designers you
+follow, warnings when a filament spool or supply runs low, an optional daily
+check of linked listings, and noticing when a printer finishes a print (the
+print is logged for the model and its queue entry completed, taking the
+filament off the spool). Settings, Notifications has a test button and a
+switch for each kind of message. The release builds now use current GitHub
+Actions. No new settings are required; new tables are added automatically on
+first start.
+
 ### 2.5.0
 More than one login: the first account stays the administrator, and Settings,
 People adds members (use everything except Settings, backups and user

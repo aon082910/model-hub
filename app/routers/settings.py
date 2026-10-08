@@ -38,6 +38,25 @@ def update_settings(payload: dict, session: Session = Depends(get_session)):
     return {"status": "ok"}
 
 
+@router.get("/notify-events")
+def notify_events(session: Session = Depends(get_session)):
+    """The kinds of notification, and which are switched on."""
+    from app.notify import EVENTS, event_enabled
+    return {"events": [{"id": k, "label": v, "enabled": event_enabled(session, k)} for k, v in EVENTS.items()]}
+
+
+@router.post("/notify-test")
+def notify_test(session: Session = Depends(get_session)):
+    """Send a test message to the webhook, to check it is set up right."""
+    from app.notify import notify
+    from app.settings_store import get_setting
+    if not get_setting(session, "notify_webhook_url"):
+        raise HTTPException(400, "Save a webhook URL first")
+    if not notify(session, "Model Hub: test", "If you can read this, notifications work."):
+        raise HTTPException(502, "The webhook did not accept the message (check the address)")
+    return {"status": "sent"}
+
+
 @router.get("/extension-key")
 def get_extension_key(session: Session = Depends(get_session)):
     """Session-cookie only (RESERVED_SETTING_KEYS keeps it out of GET /api/settings,

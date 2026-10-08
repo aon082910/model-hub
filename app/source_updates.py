@@ -168,7 +168,7 @@ def _listings_to_check(force: bool) -> list:
     return [(p, i) for p, i, _ in due]
 
 
-def run_job(force: bool = False) -> None:
+def run_job(force: bool = False, notify_changes: bool = False) -> None:
     try:
         listings = _listings_to_check(force)
         _set(total=len(listings), message="Checking..." if listings else "Everything was checked recently.")
@@ -199,6 +199,11 @@ def run_job(force: bool = False) -> None:
                 _bump("changed")
             _stop.wait(PAUSE_SECONDS)
         _set(message="Finished.")
+        if notify_changes and job_status()["changed"]:
+            from app.notify import notify_event
+            with Session(engine) as session:
+                notify_event(session, "listing_changes", "Model Hub: listings changed",
+                             f"{job_status()['changed']} linked listing(s) changed. See Matches, Listing updates.")
     except Exception:
         logger.exception("Update job failed")
         _set(message="The job hit an unexpected error; see the container log.")
@@ -206,14 +211,14 @@ def run_job(force: bool = False) -> None:
         _set(running=False, finished_at=datetime.utcnow().isoformat())
 
 
-def start_job(force: bool = False) -> dict:
+def start_job(force: bool = False, notify_changes: bool = False) -> dict:
     with _lock:
         if _state["running"]:
             raise JobBusy("A check is already running")
         _state.update(running=True, started_at=datetime.utcnow().isoformat(), finished_at=None,
                       total=0, checked=0, changed=0, errors=0, message="Starting...")
     _stop.clear()
-    threading.Thread(target=run_job, args=(force,), name="source-updates", daemon=True).start()
+    threading.Thread(target=run_job, args=(force, notify_changes), name="source-updates", daemon=True).start()
     return job_status()
 
 
