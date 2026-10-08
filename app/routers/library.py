@@ -3,10 +3,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from app import library_filters
 from app.db import get_session
 from app.models import (
     Collection, Model3D, ModelCollectionLink, ModelTagLink, PrintLog, Project, ProjectModelLink, QueueItem, Tag,
@@ -54,6 +56,14 @@ def list_models(
     extension: Optional[str] = None,
     duplicates_only: bool = False,
     printed: Optional[bool] = None,
+    designer: Optional[str] = None,
+    license: Optional[str] = None,
+    collection_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    linked: Optional[bool] = None,
+    fits_bed: bool = False,
+    has_notes: bool = False,
+    sort: Optional[str] = None,
     limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
@@ -63,42 +73,27 @@ def list_models(
     The JSON response remains a plain list for backwards compatibility. Pagination
     metadata is returned through X-Total-Count, X-Limit, and X-Offset headers.
     """
-    # anything that is not a model file (older zip/notes records) stays out of the library views
-    conditions = [Model3D.extension.in_(MODEL_EXTENSIONS)]
-
-    if extension:
-        conditions.append(Model3D.extension == extension)
-    if duplicates_only:
-        conditions.append(Model3D.is_duplicate_of.is_not(None))
-    if printed is True:
-        conditions.append(Model3D.id.in_(select(PrintLog.model_id)))
-    elif printed is False:
-        conditions.append(Model3D.id.not_in(select(PrintLog.model_id)))
-    if q and q.strip():
-        pattern = f"%{q.strip()}%"
-        conditions.append(or_(
-            Model3D.filename.ilike(pattern),
-            Model3D.ai_description.ilike(pattern),
-        ))
-    if tag and tag.strip():
-        tag_pattern = tag.strip()
-        tagged_model_ids = (
-            select(ModelTagLink.model_id)
-            .join(Tag, ModelTagLink.tag_id == Tag.id)
-            .where(Tag.name.ilike(tag_pattern))
-        )
-        conditions.append(Model3D.id.in_(tagged_model_ids))
+    filters = {
+        "q": q, "tag": tag, "extension": extension, "duplicates_only": duplicates_only or None, "printed": printed,
+        "designer": designer, "license": license, "collection_id": collection_id, "project_id": project_id,
+        "linked": linked, "fits_bed": fits_bed or None, "has_notes": has_notes or None,
+    }
+    try:
+        conditions = library_filters.conditions(session, filters)
+    except library_filters.FilterError as e:
+        raise HTTPException(400, str(e))
+    ordering, joined = library_filters.order_by(sort)
 
     count_stmt = select(func.count()).select_from(Model3D)
     stmt = select(Model3D)
+    if joined is not None:
+        stmt = stmt.outerjoin(joined, joined.c.model_id == Model3D.id)
     for condition in conditions:
         count_stmt = count_stmt.where(condition)
         stmt = stmt.where(condition)
 
     total = session.exec(count_stmt).one()
-    models = session.exec(
-        stmt.order_by(Model3D.id).offset(offset).limit(limit)
-    ).all()
+    models = session.exec(stmt.order_by(*ordering).offset(offset).limit(limit)).all()
 
     response.headers["X-Total-Count"] = str(total)
     response.headers["X-Limit"] = str(limit)
@@ -230,6 +225,46 @@ def get_model_full(model_id: int, session: Session = Depends(get_session)):
         "duplicates": [{"id": m.id, "filename": m.filename, "path": m.path} for m in copies],
         "file_exists": (LIBRARY_PATH / model.path).exists(),
     }
+
+
+PRINT_SETTING_FIELDS = {
+    "material": 40, "layer_height": 20, "infill": 20, "supports": 40, "nozzle_temp": 20, "bed_temp": 20,
+    "speed": 30, "profile": 120, "notes": 1000,
+}
+
+
+def parse_print_settings(model: Model3D) -> dict:
+    try:
+        data = json.loads(model.print_settings) if model.print_settings else {}
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+@router.put("/models/{model_id}/print-settings")
+def set_print_settings(model_id: int, payload: dict, session: Session = Depends(get_session)):
+    """What worked for this model. Unknown fields are refused; empty ones are dropped."""
+    model = session.get(Model3D, model_id)
+    if not model:
+        raise HTTPException(404, "Model not found")
+    cleaned = {}
+    for key, value in payload.items():
+        if key not in PRINT_SETTING_FIELDS:
+            raise HTTPException(400, f"Unknown print setting: {str(key)[:40]}")
+        if value is None or value == "":
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise HTTPException(400, f"{key} must be text or a number")
+        text = str(value).strip()
+        if len(text) > PRINT_SETTING_FIELDS[key]:
+            raise HTTPException(400, f"{key} is too long")
+        if text:
+            cleaned[key] = text
+    model.print_settings = json.dumps(cleaned) if cleaned else None
+    model.updated_at = datetime.utcnow()
+    session.add(model)
+    session.commit()
+    return {"print_settings": cleaned}
 
 
 EDITABLE_TEXT_FIELDS = ("source_url", "designer", "license", "filename", "notes")

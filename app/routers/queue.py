@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.db import get_session
-from app.models import QueueItem, Filament, PrintLog
+from app.models import Model3D, QueueItem, Filament, PrintLog
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
 
@@ -55,6 +55,24 @@ def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = 
         item.estimated_minutes = round(minutes, 1)
     session.add(item)
     _on_done(session, item)
+
+
+@router.post("/again/{model_id}")
+def print_again(model_id: int, session: Session = Depends(get_session)):
+    """Queue the model again with the filament, grams and time of its most recent print."""
+    if not session.get(Model3D, model_id):
+        raise HTTPException(404, "Model not found")
+    last = session.exec(select(PrintLog).where(PrintLog.model_id == model_id)
+                        .order_by(PrintLog.printed_at.desc(), PrintLog.id.desc())).first()
+    top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
+    item = QueueItem(model_id=model_id, position=(top.position + 1) if top else 0,
+                     filament_id=last.filament_id if last else None,
+                     estimated_grams=last.grams if last else None, estimated_minutes=last.minutes if last else None,
+                     notes="Printed again" if last else None)
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item
 
 
 @router.patch("/{item_id}")

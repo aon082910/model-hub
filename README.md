@@ -90,6 +90,10 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Install on a phone | Done — Model Hub is an installable web app (manifest, icons, a service worker that caches nothing); pages are checked for horizontal overflow at phone width. See [On your phone](#on-your-phone) |
 | Printers | Done — add Klipper/Moonraker and OctoPrint printers, see their status, send them a G-code file, or slice a model first when a slicer is configured. Never starts a print unless you ask. See [Printers](#printers) |
 | Scheduled jobs and notifications | Done — a weekly (or daily, or off) saved backup, a check for new uploads from followed designers, low filament and low supply warnings, an optional daily check of linked listings, and noticing when a printer finishes a print; each kind of notification can be switched off. See [Things Model Hub does by itself](#things-model-hub-does-by-itself) |
+| Library filters, sorting, saved searches | Done — **Library → Filters** adds designer, license, collection, project, linked-or-not, has-notes and **Fits my printer's bed** filters, six sort orders, and saved searches. See [Library tools](#library-tools) |
+| Bulk edit | Done — **Select** in the Library, pick models (this page, or everything that matches the filters), then add or remove a tag, collection or project, set the designer or license, or add them to the print queue |
+| Print settings and print again | Done — every model's page has **What worked** (material, layer height, infill, supports, temperatures, speed, slicer profile, notes) and **Print again**, which queues it with the filament, grams and time of its last print |
+| Filament prices and low spools | Done — a spool's price history is kept (Filament tab, **prices**), and spools at or below the low-filament level appear on the shopping list (and its CSV and text exports) with their link and last price |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -320,6 +324,17 @@ API keys are never shown again after you save them, are never in an error messag
 **Status of testing:** the Moonraker and OctoPrint code follows their documented HTTP APIs and is tested against simulated printers and a stand-in slicer, and the whole flow was
 exercised in a browser against a simulated Klipper host. It has **not** been tried against a real printer or a real slicer, so try it with an idle printer first. Bambu Lab printers
 (which use their own protocol) are not supported.
+
+## Library tools
+
+- **Filters** (Library → *Filters, sorting and saved searches*): designer, license, collection, project, linked to a listing or not, has notes, printed or never printed, and
+  **Fits my printer's bed**. The bed filter uses the build volume you enter in **Settings → Print estimates**; a model passes when its footprint fits as it is or turned flat
+  on the plate (X and Y swapped) and its height fits. Models whose size is unknown (STEP files, failed parses) are left out of that filter.
+- **Sort** by name, newest or oldest added, largest or smallest file, or last printed.
+- **Saved searches** keep the current filters under a name; saving under an existing name replaces it. Viewers can use saved searches but not create them.
+- **Bulk edit**: press **Select**, click models (or **Select this page** / **Select everything that matches**, up to 5000), choose an action and **Apply**. It tells you how many changed and how many already were so.
+  Filter choices and bulk edits are for members and the administrator; viewers are read-only.
+- **What worked**: per-model print settings (free text fields, nothing is interpreted), kept in backups. **Print again** adds a queue entry copying the filament, grams and minutes of the most recent print.
 
 ## Things Model Hub does by itself
 

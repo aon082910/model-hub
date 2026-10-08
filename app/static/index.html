@@ -53,7 +53,50 @@
         <option value="">All models</option><option value="true">Printed</option><option value="false">Never printed</option>
       </select>
       <a href="#/duplicates" class="button-link">Review duplicates</a>
+      <button id="select-mode-btn" type="button">Select</button>
       <span id="tag-progress"></span>
+    </div>
+    <details id="library-filters" class="panel">
+      <summary>Filters, sorting and saved searches</summary>
+      <div class="row">
+        <input id="f-designer" placeholder="Designer">
+        <input id="f-license" placeholder="License">
+        <select id="f-collection"><option value="">any collection</option></select>
+        <select id="f-project"><option value="">any project</option></select>
+      </div>
+      <div class="row">
+        <select id="f-linked"><option value="">linked or not</option><option value="true">linked to a listing</option><option value="false">not linked</option></select>
+        <select id="f-sort">
+          <option value="">sort: oldest first (default)</option><option value="name">name</option><option value="newest">newest added</option>
+          <option value="largest">largest file</option><option value="smallest">smallest file</option><option value="last_printed">last printed</option>
+        </select>
+        <label class="inline-check"><input type="checkbox" id="f-fits"> Fits my printer's bed</label>
+        <label class="inline-check"><input type="checkbox" id="f-notes"> Has notes</label>
+      </div>
+      <div class="row">
+        <select id="f-saved"><option value="">saved searches...</option></select>
+        <button id="f-save" type="button">Save this search</button>
+        <button id="f-delete-saved" type="button">Delete the chosen one</button>
+        <button id="f-clear" type="button">Clear filters</button>
+        <span id="f-status" class="muted"></span>
+      </div>
+    </details>
+    <div id="bulk-bar" class="bulk-bar hidden">
+      <b id="bulk-count">0 selected</b>
+      <button id="bulk-page" type="button">Select this page</button>
+      <button id="bulk-all" type="button">Select everything that matches</button>
+      <button id="bulk-none" type="button">Clear</button>
+      <select id="bulk-action">
+        <option value="add_tag">Add a tag</option><option value="remove_tag">Remove a tag</option>
+        <option value="add_collection">Add to a collection</option><option value="remove_collection">Remove from a collection</option>
+        <option value="add_project">Add to a project</option><option value="remove_project">Remove from a project</option>
+        <option value="set_designer">Set the designer</option><option value="set_license">Set the license</option>
+        <option value="queue">Add to the print queue</option>
+      </select>
+      <input id="bulk-text" placeholder="value">
+      <select id="bulk-choice" class="hidden"></select>
+      <button id="bulk-apply" class="primary" type="button">Apply</button>
+      <span id="bulk-status" class="muted"></span>
     </div>
     <div id="grid" class="grid"></div>
   </section>
@@ -412,6 +455,9 @@
       <label>Default infill (0-1) <input id="est-infill" placeholder="0.15"></label>
       <label>Electricity price per kWh <small>(adds electricity to a project's cost; leave empty to leave it out)</small> <input id="cost-kwh-price" type="number" min="0" step="0.001" placeholder="0.15"></label>
       <label>Printer power draw (watts) <input id="cost-printer-watts" type="number" min="0" step="1" placeholder="150"></label>
+      <label>Printer build volume (mm) <small>(for the library's "fits my printer's bed" filter; a model may be turned flat)</small>
+        <span class="row"><input id="bed-x" type="number" min="0" placeholder="X"><input id="bed-y" type="number" min="0" placeholder="Y"><input id="bed-z" type="number" min="0" placeholder="Z"></span>
+      </label>
       <label>Optional exact slicer CLI path (advanced, set via container env <code>SLICER_CLI_PATH</code>, read-only here)
         <input id="est-slicer-path" disabled>
       </label>
@@ -529,6 +575,7 @@
         <div class="panel" id="model-facts"></div>
         <div class="panel" id="model-tags-panel"></div>
         <div class="panel" id="model-details-panel"></div>
+        <div class="panel" id="model-settings-panel"></div>
         <div class="panel" id="viewer-source"></div>
       </aside>
     </div>

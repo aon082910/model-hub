@@ -115,22 +115,160 @@ $$('#tabs button').forEach(btn => btn.addEventListener('click', () => {
 
 // ---------- Library ----------
 async function loadModels() {
-  const q = $('#search-box').value;
-  const dupOnly = $('#dup-only').checked;
-  const params = new URLSearchParams();
-  if (q) params.set('q', q);
-  if (dupOnly) params.set('duplicates_only', 'true');
-  if ($('#printed-filter').value) params.set('printed', $('#printed-filter').value);
+  const params = libraryParams();
   const res = await fetch(`/api/library/models?${params}`);
+  if (!res.ok) {
+    $('#f-status').textContent = await sourceErrorText(res);
+    renderGrid([]);
+    return;
+  }
+  $('#f-status').textContent = '';
+  libraryTotal = parseInt(res.headers.get('X-Total-Count') || '0') || 0;
   const models = await res.json();
   renderGrid(models);
 }
+
+// ---------- Library filters, saved searches, bulk edit ----------
+let libraryTotal = 0;
+const bulk = { select: false, picked: new Set() };
+
+function libraryParams() {
+  const params = new URLSearchParams();
+  const put = (key, value) => { if (value) params.set(key, value); };
+  put('q', $('#search-box').value);
+  if ($('#dup-only').checked) params.set('duplicates_only', 'true');
+  put('printed', $('#printed-filter').value);
+  put('designer', $('#f-designer').value.trim());
+  put('license', $('#f-license').value.trim());
+  put('collection_id', $('#f-collection').value);
+  put('project_id', $('#f-project').value);
+  put('linked', $('#f-linked').value);
+  put('sort', $('#f-sort').value);
+  if ($('#f-fits').checked) params.set('fits_bed', 'true');
+  if ($('#f-notes').checked) params.set('has_notes', 'true');
+  return params;
+}
+
+function setLibraryFilters(values) {
+  $('#search-box').value = values.q || '';
+  $('#dup-only').checked = values.duplicates_only === 'true' || values.duplicates_only === true;
+  $('#printed-filter').value = values.printed === undefined ? '' : String(values.printed);
+  $('#f-designer').value = values.designer || '';
+  $('#f-license').value = values.license || '';
+  $('#f-collection').value = values.collection_id ? String(values.collection_id) : '';
+  $('#f-project').value = values.project_id ? String(values.project_id) : '';
+  $('#f-linked').value = values.linked === undefined ? '' : String(values.linked);
+  $('#f-sort').value = values.sort || '';
+  $('#f-fits').checked = values.fits_bed === true || values.fits_bed === 'true';
+  $('#f-notes').checked = values.has_notes === true || values.has_notes === 'true';
+}
+
+// a filter changed: back to the first page, then reload (the paging script resets on a search-box input)
+function filtersChanged() { $('#search-box').dispatchEvent(new Event('input', { bubbles: true })); }
+
+async function loadFilterChoices() {
+  const [collections, projects, saved] = await Promise.all([
+    fetch('/api/collections').then(r => (r.ok ? r.json() : [])),
+    fetch('/api/projects').then(r => (r.ok ? r.json() : [])),
+    fetch('/api/saved-searches').then(r => (r.ok ? r.json() : [])),
+  ]);
+  const keep = [$('#f-collection').value, $('#f-project').value];
+  $('#f-collection').innerHTML = '<option value="">any collection</option>' + collections.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('#f-project').innerHTML = '<option value="">any project</option>' + projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  $('#f-collection').value = keep[0];
+  $('#f-project').value = keep[1];
+  savedSearches = saved;
+  $('#f-saved').innerHTML = '<option value="">saved searches...</option>' + saved.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('');
+}
+let savedSearches = [];
+
+['#f-designer', '#f-license'].forEach(sel => $(sel).addEventListener('input', debounce(filtersChanged, 400)));
+['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
+$('#library-filters').addEventListener('toggle', () => { if ($('#library-filters').open) loadFilterChoices(); });
+$('#f-clear').addEventListener('click', () => { setLibraryFilters({}); filtersChanged(); });
+$('#f-saved').addEventListener('change', () => {
+  const chosen = savedSearches.find(x => String(x.id) === $('#f-saved').value);
+  if (!chosen) return;
+  setLibraryFilters(chosen.params);
+  filtersChanged();
+});
+$('#f-save').addEventListener('click', async () => {
+  const params = Object.fromEntries(libraryParams());
+  for (const key of ['fits_bed', 'has_notes', 'duplicates_only']) if (params[key] === 'true') params[key] = true;
+  const name = prompt('Name this search:');
+  if (!name) return;
+  const res = await jsonRequest('POST', '/api/saved-searches', { name, params });
+  $('#f-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+  if (res.ok) loadFilterChoices();
+});
+$('#f-delete-saved').addEventListener('click', async () => {
+  const id = $('#f-saved').value;
+  if (!id) return;
+  await fetch(`/api/saved-searches/${id}`, { method: 'DELETE' });
+  loadFilterChoices();
+});
+
+// bulk selection
+function updateBulkBar() {
+  $('#bulk-bar').classList.toggle('hidden', !bulk.select);
+  $('#bulk-count').textContent = `${bulk.picked.size} selected`;
+  $('#select-mode-btn').textContent = bulk.select ? 'Done selecting' : 'Select';
+  $$('#grid .card').forEach(card => card.classList.toggle('selected', bulk.picked.has(parseInt(card.dataset.id))));
+}
+
+async function updateBulkInputs() {
+  const action = $('#bulk-action').value;
+  const needsChoice = ['add_collection', 'remove_collection', 'add_project', 'remove_project'].includes(action);
+  const needsText = ['add_tag', 'remove_tag', 'set_designer', 'set_license'].includes(action);
+  $('#bulk-text').classList.toggle('hidden', !needsText);
+  $('#bulk-choice').classList.toggle('hidden', !needsChoice);
+  $('#bulk-text').placeholder = action.endsWith('tag') ? 'tag' : action === 'set_designer' ? 'designer (empty clears it)' : 'license (empty clears it)';
+  if (needsChoice) {
+    const url = action.endsWith('collection') ? '/api/collections' : '/api/projects';
+    const rows = await fetch(url).then(r => (r.ok ? r.json() : []));
+    $('#bulk-choice').innerHTML = rows.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
+  }
+}
+
+$('#select-mode-btn').addEventListener('click', () => { bulk.select = !bulk.select; if (!bulk.select) bulk.picked.clear(); updateBulkBar(); updateBulkInputs(); });
+$('#bulk-action').addEventListener('change', updateBulkInputs);
+$('#bulk-none').addEventListener('click', () => { bulk.picked.clear(); updateBulkBar(); });
+$('#bulk-page').addEventListener('click', () => { $$('#grid .card').forEach(c => bulk.picked.add(parseInt(c.dataset.id))); updateBulkBar(); });
+$('#bulk-all').addEventListener('click', async () => {
+  const res = await fetch(`/api/library/models?${libraryParams()}&limit=5000`);
+  if (!res.ok) { $('#bulk-status').textContent = await sourceErrorText(res); return; }
+  (await res.json()).forEach(m => bulk.picked.add(m.id));
+  updateBulkBar();
+  $('#bulk-status').textContent = libraryTotal > 5000 ? 'That is more than 5000: only the first 5000 were selected.' : '';
+});
+$('#grid').addEventListener('click', (e) => {
+  if (!bulk.select) return;
+  const card = e.target.closest('.card');
+  if (!card) return;
+  e.preventDefault();
+  const id = parseInt(card.dataset.id);
+  if (bulk.picked.has(id)) bulk.picked.delete(id); else bulk.picked.add(id);
+  updateBulkBar();
+});
+$('#bulk-apply').addEventListener('click', async () => {
+  const action = $('#bulk-action').value;
+  if (!bulk.picked.size) { $('#bulk-status').textContent = 'Select some models first.'; return; }
+  const body = { action, ids: [...bulk.picked] };
+  if (['add_tag', 'remove_tag', 'set_designer', 'set_license'].includes(action)) body.value = $('#bulk-text').value;
+  if (['add_collection', 'remove_collection', 'add_project', 'remove_project'].includes(action)) body.value = parseInt($('#bulk-choice').value);
+  if (!confirm(`Apply "${$('#bulk-action').selectedOptions[0].textContent}" to ${bulk.picked.size} model${bulk.picked.size === 1 ? '' : 's'}?`)) return;
+  const res = await jsonRequest('POST', '/api/bulk', body);
+  const data = await res.json().catch(() => ({}));
+  $('#bulk-status').textContent = res.ok ? `Changed ${data.changed}, already so: ${data.unchanged}.` : (data.detail || 'Could not apply that.');
+  if (res.ok) loadModels();
+});
 
 // one library card (used by the Library grid and the Search page)
 function libraryCard(m) {
   const card = document.createElement('a');
   card.className = 'card' + (m.is_duplicate_of ? ' duplicate' : '');
   card.href = `#/model/${m.id}`;
+  card.dataset.id = m.id;
   // models the renderer couldn't thumbnail (STEP, FBX...) borrow the first picture from their site listing
   const siteImages = parseJsonList(m.source_images);
   const thumb = m.thumbnail_path ? `/api/library/thumbnails/${m.thumbnail_path}`
@@ -149,11 +287,12 @@ function renderGrid(models) {
   const grid = $('#grid');
   grid.innerHTML = '';
   for (const m of models) grid.appendChild(libraryCard(m));
+  updateBulkBar();
 }
 
 $('#search-box').addEventListener('input', debounce(loadModels, 300));
 $('#dup-only').addEventListener('change', loadModels);
-$('#printed-filter').addEventListener('change', loadModels);
+$('#printed-filter').addEventListener('change', filtersChanged);
 $('#scan-btn').addEventListener('click', async () => {
   $('#scan-btn').textContent = 'Scanning...';
   const res = await fetch('/api/library/scan', { method: 'POST' });
@@ -267,6 +406,36 @@ function renderModelPage(model) {
   renderModelLinks(model);
   renderModelPrints(model);
   renderModelPrinter(model);
+  renderPrintSettings(model);
+}
+
+// ---------- What worked: print settings per model ----------
+const PRINT_SETTING_FIELDS = [
+  ['material', 'Material'], ['layer_height', 'Layer height (mm)'], ['infill', 'Infill'], ['supports', 'Supports'],
+  ['nozzle_temp', 'Nozzle temperature'], ['bed_temp', 'Bed temperature'], ['speed', 'Speed'], ['profile', 'Slicer profile'],
+];
+
+function renderPrintSettings(model) {
+  let saved = {};
+  try { saved = JSON.parse(model.print_settings || '{}') || {}; } catch (e) { saved = {}; }
+  $('#model-settings-panel').innerHTML = `
+    <h3>What worked</h3>
+    <div class="stack">
+      ${PRINT_SETTING_FIELDS.map(([key, label]) => `<label>${esc(label)} <input class="ps-field" data-key="${key}" value="${esc(saved[key] || '')}"></label>`).join('')}
+      <label>Notes <textarea class="ps-field" data-key="notes" rows="3" placeholder="Orientation, tricks, what to avoid...">${esc(saved.notes || '')}</textarea></label>
+      <div class="row"><button id="ps-save">Save</button><button id="ps-again" title="Queue it again with the filament and grams of its last print">Print again</button><span id="ps-status" class="muted"></span></div>
+    </div>`;
+  $('#ps-save').onclick = async () => {
+    const body = {};
+    $$('#model-settings-panel .ps-field').forEach(f => { body[f.dataset.key] = f.value; });
+    const res = await jsonRequest('PUT', `/api/library/models/${model.id}/print-settings`, body);
+    $('#ps-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    if (res.ok) setTimeout(() => { const el = $('#ps-status'); if (el) el.textContent = ''; }, 2000);
+  };
+  $('#ps-again').onclick = async () => {
+    const res = await fetch(`/api/queue/again/${model.id}`, { method: 'POST' });
+    $('#ps-status').textContent = res.ok ? 'Added to the print queue.' : await sourceErrorText(res);
+  };
 }
 
 // ---------- Print history on a model's page ----------
@@ -1154,7 +1323,11 @@ async function loadShoppingList() {
       <th>Part</th><th>Type</th><th>Qty</th><th>Have</th><th>Project</th><th>Cost</th><th></th>
     </tr></thead><tbody>${rows}</tbody></table></div>
     <div class="project-summary">Estimated total: $${data.total_cost.toFixed(2)}</div>`
-      : '<p class="muted">Nothing to buy -- every project has the parts it needs.</p>'}`;
+      : '<p class="muted">Nothing to buy -- every project has the parts it needs.</p>'}
+    ${(data.low_filament || []).length ? `
+    <h3>Filament running low</h3>
+    <ul class="link-list">${data.low_filament.map(f => `<li>${esc(f.label)} <span class="muted">${f.remaining_g} g left${f.cost != null ? ` &middot; last price $${Number(f.cost).toFixed(2)}` : ''}</span>
+      ${safeUrl(f.purchase_url) ? `<a href="${esc(safeUrl(f.purchase_url))}" target="_blank" rel="noopener noreferrer">buy</a>` : ''}</li>`).join('')}</ul>` : ''}`;
   $('#shopping-combine').onchange = (e) => { shoppingCombine = e.target.checked; loadShoppingList(); };
   const copyBtn = $('#shopping-copy');
   if (copyBtn) {
@@ -2358,12 +2531,23 @@ async function loadFilament() {
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
       <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
         ${f.cost != null && f.spool_weight_g ? `<small class="muted">$${(f.cost / f.spool_weight_g * 1000).toFixed(2)}/kg</small>` : ''}</td>
-      <td><button data-id="${f.id}" class="del-fil">delete</button></td>
-    </tr>`).join('');
+      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="del-fil">delete</button></td>
+    </tr>
+    <tr class="fil-history-row hidden" data-for="${f.id}"><td colspan="6"></td></tr>`).join('');
   $$('.fil-price').forEach(input => input.onchange = async () => {
     const value = input.value.trim();
     await jsonRequest('PATCH', `/api/filament/${input.dataset.id}`, { cost: value === '' ? null : parseFloat(value) });
     loadFilament();
+  });
+  $$('.fil-history').forEach(b => b.onclick = async () => {
+    const row = document.querySelector(`.fil-history-row[data-for="${b.dataset.id}"]`);
+    if (!row.classList.contains('hidden')) { row.classList.add('hidden'); return; }
+    const res = await fetch(`/api/filament/${b.dataset.id}/prices`);
+    const prices = res.ok ? await res.json() : [];
+    row.firstElementChild.innerHTML = prices.length
+      ? prices.map(p => `<div class="muted">${esc(String(p.at).slice(0, 10))}: $${Number(p.cost).toFixed(2)} ($${p.per_kg.toFixed(2)}/kg)</div>`).join('')
+      : '<div class="muted">No prices recorded yet. Set a price on the spool to start the history.</div>';
+    row.classList.remove('hidden');
   });
   $$('.del-fil').forEach(b => b.onclick = async () => { await fetch(`/api/filament/${b.dataset.id}`, { method: 'DELETE' }); loadFilament(); });
 }
@@ -2825,6 +3009,9 @@ async function loadSettings() {
   $('#est-infill').value = s.est_infill || '15';
   $('#cost-kwh-price').value = s.cost_kwh_price || '';
   $('#cost-printer-watts').value = s.cost_printer_watts || '';
+  $('#bed-x').value = s.bed_x || '';
+  $('#bed-y').value = s.bed_y || '';
+  $('#bed-z').value = s.bed_z || '';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
   await renderSiteSettings(s);
   refreshBackups();
@@ -2880,6 +3067,7 @@ $('#save-estimate-settings-btn').addEventListener('click', async () => {
       est_infill: $('#est-infill').value,
       cost_kwh_price: $('#cost-kwh-price').value,
       cost_printer_watts: $('#cost-printer-watts').value,
+      bed_x: $('#bed-x').value, bed_y: $('#bed-y').value, bed_z: $('#bed-z').value,
     }),
   });
 });

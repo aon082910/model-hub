@@ -303,3 +303,11 @@ body.not-admin .admin-only { display: none !important; }
 .printer-state { flex: 1 1 240px; }
 #printers-panel { margin-bottom: 14px; }
 #printers-panel .row, #model-printer-panel .row { margin: 6px 0; }
+
+/* ---------- Library tools ---------- */
+#library-filters { margin: 8px 0; }
+#library-filters .row { margin: 6px 0; }
+.card.selected { outline: 2px solid var(--accent); }
+body .card { position: relative; }
+#bulk-bar { position: sticky; top: 0; z-index: 10; }
+.fil-history-row td { background: var(--panel); }

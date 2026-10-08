@@ -40,6 +40,18 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.7.0
+The Library has filters (designer, license, collection, project, linked or
+not, has notes, and "fits my printer's bed" using the build volume you enter in
+Settings), more sort orders and saved searches. Press Select to change many
+models at once: add or remove a tag, collection or project, set the designer or
+license, or queue them. Each model's page has a "What worked" panel for its
+print settings and a Print again button that queues it with the filament of its
+last print. Filament spools keep a price history, and spools that are running
+low appear on the shopping list. Saved backups made in the same second no longer
+replace each other. No new settings are required; new tables and columns are
+added automatically on first start.
+
 ### 2.6.0
 Model Hub now does some things by itself: a saved backup every week (or day,
 or off; the newest 7 are kept), a look for new uploads from designers you

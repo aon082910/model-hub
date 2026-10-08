@@ -77,6 +77,7 @@ class Model3D(SQLModel, table=True):
     source_change: Optional[str] = None       # JSON list of the parts that changed since (title, files...)
     source_changed_at: Optional[datetime] = None
     notes: Optional[str] = None             # your own notes on this model
+    print_settings: Optional[str] = None    # JSON: what worked (material, layer height, infill, supports, temperatures...)
 
     is_duplicate_of: Optional[int] = Field(default=None, foreign_key="model3d.id")
 
@@ -278,6 +279,23 @@ class PrinterJob(SQLModel, table=True):
     sent_at: datetime = Field(default_factory=datetime.utcnow)
     finished_at: Optional[datetime] = None
     outcome: Optional[str] = None            # done, stopped
+
+
+class SavedSearch(SQLModel, table=True):
+    """A set of library filters kept under a name."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    params: str = "{}"               # JSON
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class FilamentPrice(SQLModel, table=True):
+    """What a spool cost, noted whenever its price is set or changed (so you can see prices move)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    filament_id: int = Field(index=True)
+    cost: float
+    spool_weight_g: float = 1000
+    at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AppUser(SQLModel, table=True):

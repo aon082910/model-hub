@@ -293,7 +293,19 @@ def shopping_list(combine: bool = False, session: Session = Depends(get_session)
     identical parts (same name and type) from different projects into one line.
     in_stock is the quantity of a same-named part in the inventory, as a hint."""
     items = _shopping_items(session, combine)
-    return {"items": items, "total_cost": round(sum(i["cost_needed"] or 0 for i in items), 2)}
+    return {"items": items, "total_cost": round(sum(i["cost_needed"] or 0 for i in items), 2),
+            "low_filament": _low_filament(session)}
+
+
+def _low_filament(session: Session) -> list:
+    """Spools at or below the low-filament warning level (Settings), as things to reorder."""
+    from app.stock_watch import low_filament_threshold
+    threshold = low_filament_threshold(session)
+    if threshold <= 0:
+        return []
+    rows = session.exec(select(Filament).where(Filament.remaining_g <= threshold).order_by(Filament.material, Filament.color)).all()
+    return [{"id": f.id, "label": " ".join(x for x in (f.material, f.brand, f.color) if x), "remaining_g": f.remaining_g,
+             "cost": f.cost, "purchase_url": f.purchase_url} for f in rows]
 
 
 def _spreadsheet_safe(value) -> str:
@@ -325,6 +337,13 @@ def export_shopping_list(format: str = "csv", combine: bool = False, session: Se
             ])
         writer.writerow([])
         writer.writerow(["Estimated total", "", "", "", f"{total:.2f}"])
+        low = _low_filament(session)
+        if low:
+            writer.writerow([])
+            writer.writerow(["Filament running low", "", "Left (g)", "Spool price", "", "", "", "Link"])
+            for f in low:
+                writer.writerow([_spreadsheet_safe(f["label"]), "filament", f"{f['remaining_g']:g}",
+                                 "" if f["cost"] is None else f"{f['cost']:.2f}", "", "", "", _spreadsheet_safe(f["purchase_url"])])
         body, media = out.getvalue(), "text/csv"
     else:
         lines = [f"Shopping list - {stamp}", f"{len(items)} item(s), estimated ${total:.2f}", ""]
@@ -339,6 +358,14 @@ def export_shopping_list(format: str = "csv", combine: bool = False, session: Se
                 lines.append(f"[ ] {i['quantity_needed']} x {i['name']}{cost}{stock}  [{i['project_name']}]")
                 if i["purchase_url"]:
                     lines.append(f"    {i['purchase_url']}")
+            lines.append("")
+        low = _low_filament(session)
+        if low:
+            lines.append("FILAMENT RUNNING LOW")
+            for f in low:
+                lines.append(f"[ ] {f['label']} ({f['remaining_g']:g} g left)" + (f" - ${f['cost']:.2f}" if f["cost"] is not None else ""))
+                if f["purchase_url"]:
+                    lines.append(f"    {f['purchase_url']}")
             lines.append("")
         body, media = "\n".join(lines).rstrip() + "\n", "text/plain"
 
