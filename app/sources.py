@@ -272,7 +272,7 @@ _PRINTABLES_DETAIL = """
 query($id: ID!) { print(id: $id) {
   id name slug summary description
   license { name abbreviation }
-  user { publicUsername }
+  user { id publicUsername }
   image { filePath }
   images { filePath }
   category { name }
@@ -321,6 +321,7 @@ def _printables_details(client: httpx.Client, source_id: str) -> dict:
         "url": f"https://www.printables.com/model/{source_id}-{item.get('slug') or ''}".rstrip("-"),
         "title": item.get("name") or "",
         "designer": (item.get("user") or {}).get("publicUsername") or "",
+        "designer_handle": str((item.get("user") or {}).get("id") or ""),
         "license": license_info.get("abbreviation") or license_info.get("name") or "",
         "description": html_to_text(item.get("description")) or html_to_text(item.get("summary")),
         "tags": [t["name"] for t in (item.get("tags") or []) if t.get("name")],
@@ -393,6 +394,7 @@ def _sketchfab_details(client: httpx.Client, source_id: str) -> dict:
         "url": data.get("viewerUrl") or f"https://sketchfab.com/3d-models/{source_id}",
         "title": data.get("name") or "",
         "designer": user.get("displayName") or user.get("username") or "",
+        "designer_handle": user.get("username") or "",
         "license": license_info.get("label") or license_info.get("fullName") or "",
         "description": html_to_text(data.get("description")),
         "tags": [t["name"] for t in (data.get("tags") or []) if t.get("name")],
@@ -422,6 +424,7 @@ def _search_sketchfab(client: httpx.Client, query: str, limit: int, page: int = 
             "url": r.get("viewerUrl") or f"https://sketchfab.com/3d-models/{r['uid']}",
             "title": r.get("name") or "",
             "designer": user.get("displayName") or user.get("username") or "",
+            "designer_handle": user.get("username") or "",
             "license": license_info.get("label") or "",
             "thumbnail": _sketchfab_thumbnail((r.get("thumbnails") or {}).get("images"), 320),
         })
@@ -486,6 +489,7 @@ def _thingiverse_details(client: httpx.Client, source_id: str, token: str) -> di
         "url": thing.get("public_url") or f"https://www.thingiverse.com/thing:{source_id}",
         "title": thing.get("name") or "",
         "designer": (thing.get("creator") or {}).get("name") or "",
+        "designer_handle": (thing.get("creator") or {}).get("name") or "",
         "license": thing.get("license") or "",
         "description": "\n\n".join(part for part in (description, instructions) if part),
         "tags": tags,
@@ -507,6 +511,7 @@ def _search_thingiverse(client: httpx.Client, query: str, limit: int, token: str
         "url": h.get("public_url") or f"https://www.thingiverse.com/thing:{h['id']}",
         "title": h.get("name") or "",
         "designer": (h.get("creator") or {}).get("name") or "",
+        "designer_handle": (h.get("creator") or {}).get("name") or "",
         "license": "",
         "thumbnail": h.get("thumbnail") or h.get("preview_image"),
     } for h in (hits or []) if h.get("id")]
@@ -1144,7 +1149,7 @@ def makerworld_filaments(extension: dict) -> list:
 
 _PRINTABLES_SEARCH = """
 query($q: String!, $limit: Int!, $offset: Int!) { result: searchPrints2(query: $q, printType: print, limit: $limit, offset: $offset) {
-  items { id name slug user { publicUsername } license { abbreviation name } image { filePath } }
+  items { id name slug user { id publicUsername } license { abbreviation name } image { filePath } }
 } }
 """
 
@@ -1201,6 +1206,108 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
     return {"results": results, "errors": errors}
 
 
+# ---------- a designer's newest uploads (for "follow") ----------
+# Printables (verified against the live site) and Sketchfab (verified) need no account; Thingiverse
+# uses its documented /users/<name>/things with your token.
+
+FOLLOW_PROVIDERS = ("printables", "sketchfab", "thingiverse")
+_PRINTABLES_USER_PRINTS = """
+query($uid: ID!, $limit: Int!) { r: morePrints(userId: $uid, limit: $limit) {
+  items { id name slug user { id publicUsername } license { abbreviation name } image { filePath } }
+} }
+"""
+_HANDLE = re.compile(r"[A-Za-z0-9_.-]{1,60}")
+
+
+def valid_designer_handle(provider: str, handle) -> bool:
+    handle = str(handle or "")
+    if provider == "printables":
+        return handle.isdigit() and len(handle) <= 12
+    return provider in FOLLOW_PROVIDERS and _HANDLE.fullmatch(handle) is not None
+
+
+def designer_uploads(provider: str, handle: str, credentials: Optional[dict] = None, limit: int = 24) -> list:
+    """The designer's newest listings, newest first, in the same shape as search results."""
+    if not valid_designer_handle(provider, handle):
+        raise SourceError("That designer cannot be followed")
+    with _client() as client:
+        if provider == "printables":
+            data = _printables_query(client, _PRINTABLES_USER_PRINTS, {"uid": handle, "limit": limit})
+            items = ((data.get("r") or {}).get("items")) or []
+            return [{
+                "provider": "printables", "source_id": str(i["id"]),
+                "url": f"https://www.printables.com/model/{i['id']}-{i.get('slug') or ''}".rstrip("-"),
+                "title": i.get("name") or "", "designer": (i.get("user") or {}).get("publicUsername") or "",
+                "designer_handle": str((i.get("user") or {}).get("id") or handle),
+                "license": (i.get("license") or {}).get("abbreviation") or (i.get("license") or {}).get("name") or "",
+                "thumbnail": _printables_thumbnail((i.get("image") or {}).get("filePath")),
+            } for i in items if i.get("id")]
+        if provider == "sketchfab":
+            data = _sketchfab_get(client, "/models", user=handle, count=limit, sort_by="-publishedAt")
+            found = []
+            for r in data.get("results") or []:
+                if not r.get("uid"):
+                    continue
+                user, license_info = r.get("user") or {}, r.get("license") or {}
+                found.append({
+                    "provider": "sketchfab", "source_id": r["uid"],
+                    "url": r.get("viewerUrl") or f"https://sketchfab.com/3d-models/{r['uid']}",
+                    "title": r.get("name") or "", "designer": user.get("displayName") or user.get("username") or "",
+                    "designer_handle": user.get("username") or handle, "license": license_info.get("label") or "",
+                    "thumbnail": _sketchfab_thumbnail((r.get("thumbnails") or {}).get("images"), 320),
+                })
+            return found
+        token = _thingiverse_token(credentials)
+        data = _thingiverse_get(client, f"/users/{quote(handle, safe='')}/things", token, per_page=limit, page=1, sort="newest")
+        return _thingiverse_things(data)
+
+
+def _thingiverse_things(data) -> list:
+    """Search-result-shaped entries from a Thingiverse list of things."""
+    things = data.get("hits") if isinstance(data, dict) else data
+    return [{
+        "provider": "thingiverse", "source_id": str(t["id"]),
+        "url": t.get("public_url") or f"https://www.thingiverse.com/thing:{t['id']}",
+        "title": t.get("name") or "", "designer": (t.get("creator") or {}).get("name") or "",
+        "designer_handle": (t.get("creator") or {}).get("name") or "", "license": "",
+        "thumbnail": t.get("thumbnail") or t.get("preview_image"),
+    } for t in (things or []) if isinstance(t, dict) and t.get("id")]
+
+
+THINGIVERSE_COLLECTION = re.compile(r"^https?://(?:www\.)?thingiverse\.com/[^/]+/collections/(\d+)", re.I)
+
+
+def thingiverse_import_list(kind: str, ref: str, credentials: Optional[dict], limit: int = 100) -> list:
+    """Things from your likes (kind 'likes') or from a collection (kind 'collection', ref = id or link)."""
+    token = _thingiverse_token(credentials)
+    out = []
+    with _client() as client:
+        if kind == "likes":
+            me = _thingiverse_get(client, "/users/me", token)
+            name = me.get("name") if isinstance(me, dict) else None
+            if not name or not _HANDLE.fullmatch(str(name)):
+                raise SourceError("Thingiverse did not say whose token this is")
+            path = f"/users/{quote(str(name), safe='')}/likes"
+        elif kind == "collection":
+            match = THINGIVERSE_COLLECTION.match(ref or "")
+            collection_id = match.group(1) if match else (ref or "")
+            if not str(collection_id).isdigit():
+                raise SourceError("Give the collection's link (thingiverse.com/<user>/collections/<number>/...)")
+            path = f"/collections/{collection_id}/things"
+        else:
+            raise SourceError("Unknown kind of list")
+        page = 1
+        while len(out) < limit:
+            batch = _thingiverse_things(_thingiverse_get(client, path, token, per_page=30, page=page))
+            if not batch:
+                break
+            out.extend(batch)
+            if len(batch) < 30:
+                break
+            page += 1
+    return out[:limit]
+
+
 def _search_printables(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
     data = _printables_query(client, _PRINTABLES_SEARCH, {"q": query, "limit": limit, "offset": (page - 1) * limit})
     items = ((data.get("result") or {}).get("items")) or []
@@ -1210,6 +1317,7 @@ def _search_printables(client: httpx.Client, query: str, limit: int, page: int =
         "url": f"https://www.printables.com/model/{i['id']}-{i.get('slug') or ''}".rstrip("-"),
         "title": i.get("name") or "",
         "designer": (i.get("user") or {}).get("publicUsername") or "",
+        "designer_handle": str((i.get("user") or {}).get("id") or ""),
         "license": (i.get("license") or {}).get("abbreviation") or (i.get("license") or {}).get("name") or "",
         "thumbnail": _printables_thumbnail((i.get("image") or {}).get("filePath")),
     } for i in items]

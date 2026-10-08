@@ -44,6 +44,7 @@ def link_model_to_listing(
     model.source_filaments = json.dumps(details.get("filaments") or [])
     model.source_linked_by = linked_by if linked_by in LINKED_BY else "manual"
     model.source_synced_at = datetime.utcnow()
+    model.source_fingerprint = model.source_checked_at = model.source_change = model.source_changed_at = None   # a fresh baseline is taken at the next check
     if image_names is not None:
         model.source_images = json.dumps(image_names)
     if fill_details:
@@ -75,7 +76,8 @@ def link_model_to_listing(
 def unlink_model(session: Session, model: Model3D) -> Model3D:
     sources.delete_images(model.id)
     for field in ("source_provider", "source_id", "source_title", "source_description", "source_tags",
-                  "source_images", "source_synced_at", "source_url", "source_filaments", "source_linked_by"):
+                  "source_images", "source_synced_at", "source_url", "source_filaments", "source_linked_by",
+                  "source_fingerprint", "source_checked_at", "source_change", "source_changed_at"):
         setattr(model, field, None)
     session.add(model)
     session.commit()

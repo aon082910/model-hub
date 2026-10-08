@@ -83,6 +83,9 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Backup and restore | Done — **Settings → Backup** downloads (or saves on the server) a zip with everything Model Hub knows apart from the model files, and restores from one. See [Backup and restore](#backup-and-restore) |
 | Print log | Done — every model's page has a print history (date, rating, filament and grams, minutes, notes, a photo); the Library can filter to printed or never-printed models and shows a printed badge; finishing a job in the print queue logs it automatically. See [Print log](#print-log) |
 | Duplicate cleanup | Done — **Library → Review duplicates** lists groups of identical files, keeps the one you pick (carrying tags, collections, projects, notes, print history and listing link over), and can delete the other files after checking them again. See [Duplicates](#duplicates) |
+| Follow designers | Done — **Follow** a designer from one of their listings; the **Following** tab shows their new uploads (Printables and Sketchfab need no account, Thingiverse uses your token). See [Following designers](#following-designers) |
+| Listing updates | Done — **Matches → Listing updates** checks the online listing of every linked model and flags changed descriptions, pictures, tags, licenses and files; refresh the model from the listing or dismiss the flag. See [Listing updates](#listing-updates) |
+| Project costs | Done — give each spool a price (Filament tab) and a project shows what it costs: filament, every part (owned or not), and optionally electricity (price per kWh and printer watts in Settings); it is in the project PDF too. See [Project costs](#project-costs) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -237,6 +240,41 @@ to every copy (tags, collections, projects, prints, listing link, notes) and sug
   filament lines move to the kept model.
 - **Clean up every group** does the suggested clean-up for all groups at once (with a confirmation).
 - *Same shape, different file* lists files with the same geometry but different contents (re-exports and the like); these are only shown, never merged.
+
+## Following designers
+
+On a listing's page, **Follow <designer>** adds them to the **Following** tab. The first look only records what they have already uploaded;
+after that, **Check for new uploads** (and a quiet check whenever you open the tab and it has been six hours) lists anything new, which you
+can preview, **Save** to the wishlist, **Add to library**, or mark **Seen**. The tab's button shows how many are new.
+
+| Site | Needs | Status |
+|---|---|---|
+| Printables | nothing | tested against the live site |
+| Sketchfab | nothing | tested against the live site |
+| Thingiverse | your token (Settings) | follows Thingiverse's documented `/users/<name>/things`; tested against a simulated server only |
+| MakerWorld, MyMiniFactory, Cults3D | — | not available (no usable public list of a designer's models) |
+
+## Listing updates
+
+**Matches → Listing updates → Check for changes** runs a gentle background job (one listing at a time, stops if a site rate limits) over every linked
+model. A listing shared by several models (a pack) is looked at once. The first check records a fingerprint of the listing's title,
+description, tags, pictures, license and (for Printables, Thingiverse, Commons and NASA) file list; later checks flag what differs. **Refresh from the listing** updates
+the model's saved title, description, tags and pictures (your own designer, license and notes are not touched) and starts a new baseline; **Dismiss** just accepts the change.
+Listings checked in the last 20 hours are skipped.
+
+## Project costs
+
+Give a spool a **price** on the Filament tab (the price per kg is shown). A project then shows **Cost**: filament (grams per spool × that spool's price per gram; grams on
+spools without a price are listed, not guessed), parts (quantity × unit cost for all of them, including ones you already own; the
+existing "to buy" figure is unchanged) and, when **Settings → Electricity price per kWh** is set, electricity (printer watts, default 150 W,
+× print hours). Print hours are worked out from the grams on the same assumptions as the volumetric print estimate, so treat electricity as a rough figure. The cost is in the project's PDF.
+
+## Wishlist
+
+Each item has a **priority** (high items sort first and are downloaded first) and a **status** (*Still want it*, *Got it elsewhere*, *Not any more*; only
+the first is included in **Add all to library**). **Export as CSV** downloads the list. **Import links** takes any text with links (up to 40 at a time) and
+adds each recognised listing; **Import my likes** and **Import this collection** pull things from Thingiverse with your token (these follow
+Thingiverse's documented API and are tested against a simulated server only). Printables likes and collections need a login and can't be read from here.
 
 ## Auth
 

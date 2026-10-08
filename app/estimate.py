@@ -30,6 +30,15 @@ PRINT_SPEED_MM_S = 60
 TRAVEL_OVERHEAD_FACTOR = 1.35  # fudge for travel moves, retraction, acceleration
 
 
+def minutes_for_grams(grams: float, material: str = "PLA") -> float:
+    """Rough print time for a given amount of filament, on the same assumptions as the volumetric
+    estimate (so a project's electricity cost can be worked out from the grams it uses)."""
+    density = MATERIAL_DENSITY_G_CM3.get(material, MATERIAL_DENSITY_G_CM3["PLA"])
+    volume_mm3 = (max(0.0, grams) / density) * 1000
+    flow_rate_mm3_s = LAYER_HEIGHT_MM * NOZZLE_DIAMETER_MM * PRINT_SPEED_MM_S
+    return (volume_mm3 / flow_rate_mm3_s) * TRAVEL_OVERHEAD_FACTOR / 60
+
+
 def _heuristic_estimate(volume_mm3: float, surface_area_mm2: float, material: str, infill: float) -> dict:
     density = MATERIAL_DENSITY_G_CM3.get(material, MATERIAL_DENSITY_G_CM3["PLA"])
 

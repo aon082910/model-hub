@@ -163,6 +163,11 @@ NASA_TREE = {"tree": [
 ]}
 
 
+def _user_print(n, name):
+    return {"id": str(n), "name": name, "slug": f"p{n}", "user": {"id": "16", "publicUsername": "Prusa Research"},
+            "license": {"abbreviation": "CC0", "name": "x"}, "image": None}
+
+
 class FakeSites:
     """Records calls and answers like the two sites; flip the flags to break one."""
 
@@ -188,6 +193,14 @@ class FakeSites:
         self.cults_no_description = False       # the schema has no description field
         self.cults_queries = []                 # (query text, variables)
         self.cults_auth = []
+        self.printables_user_prints = [_user_print(500, "Newest"), _user_print(499, "Older")]   # a designer's uploads, newest first
+        self.sketchfab_user_models = [{"uid": "b" * 32, "name": "Sketch upload", "user": {"username": "jhon", "displayName": "Jhon"},
+                                       "thumbnails": SKETCHFAB_THUMBS}]
+        self.thingiverse_user_things = [{"id": 900, "name": "Tv upload", "creator": {"name": "CreativeTools"},
+                                         "thumbnail": "https://cdn.thingiverse.com/t.jpg"}]
+        self.thingiverse_likes = [{"id": 901, "name": "Liked A", "creator": {"name": "x"}}, {"id": 902, "name": "Liked B", "creator": {"name": "y"}}]
+        self.thingiverse_collection = [{"id": 903, "name": "In a collection", "creator": {"name": "z"}}]
+        self.printables_print = PRINTABLES_PRINT         # what the listing details query returns (tests change it)
         self.commons_status = 200
         self.nasa_status = 200
         self.file_hosts_seen = []               # hosts that served a model file (commons / nasa)
@@ -201,6 +214,8 @@ class FakeSites:
                 return httpx.Response(503)
             body = json.loads(request.content)
             query_text = body["query"]
+            if "morePrints" in query_text:
+                return httpx.Response(200, json={"data": {"r": {"items": self.printables_user_prints}}})
             if "downloadPacks" in query_text:
                 return httpx.Response(200, json=self.printables_files)
             if "getDownloadLink" in query_text:
@@ -209,7 +224,7 @@ class FakeSites:
                     "https://files.printables.com/media/prints/3161/packs/7763318_x/3d-benchy-model_files.zip" if kind == "pack"
                     else "https://files.printables.com/media/prints/3161/stls/49068_x/3dbenchy.stl")
                 return httpx.Response(200, json={"data": {"getDownloadLink": {"ok": True, "errors": None, "output": {"link": link, "ttl": 86400}}}})
-            return httpx.Response(200, json=PRINTABLES_SEARCH if "searchPrints2" in body["query"] else PRINTABLES_PRINT)
+            return httpx.Response(200, json=PRINTABLES_SEARCH if "searchPrints2" in body["query"] else self.printables_print)
         if host == "api.bambulab.com":
             if self.makerworld_status != 200:
                 return httpx.Response(self.makerworld_status)
@@ -219,6 +234,8 @@ class FakeSites:
         if host == "api.sketchfab.com":
             if self.sketchfab_status != 200:
                 return httpx.Response(self.sketchfab_status)
+            if request.url.path == "/v3/models":
+                return httpx.Response(200, json={"results": self.sketchfab_user_models})
             return httpx.Response(200, json=SKETCHFAB_SEARCH if request.url.path.endswith("/search") else SKETCHFAB_MODEL)
         if host == "www.myminifactory.com" and request.url.path.startswith("/api/v2/"):
             self.mmf_requests.append(url)
@@ -267,6 +284,14 @@ class FakeSites:
             if request.headers.get("authorization") != f"Bearer {THINGIVERSE_TOKEN}":
                 return httpx.Response(401, json={"error": "invalid"})
             path = request.url.path
+            if path == "/users/me":
+                return httpx.Response(200, json={"name": "me_user"})
+            if path.startswith("/users/") and path.endswith("/things"):
+                return httpx.Response(200, json=self.thingiverse_user_things)
+            if path.startswith("/users/") and path.endswith("/likes"):
+                return httpx.Response(200, json=self.thingiverse_likes)
+            if path.startswith("/collections/") and path.endswith("/things"):
+                return httpx.Response(200, json=self.thingiverse_collection)
             if path.startswith("/search/"):
                 return httpx.Response(200, json=THINGIVERSE_SEARCH)
             if path.endswith("/files"):

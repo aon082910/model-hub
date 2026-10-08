@@ -8,7 +8,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel import Session, select
 from app.db import get_session
+from app.estimate import minutes_for_grams
 from app.filament_match import match_spool, spool_label
+from app.settings_store import get_setting
 from app.models import Filament, InventoryItem, Model3D, Project, ProjectModelFilament, ProjectModelLink, ProjectPart
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -126,6 +128,41 @@ def _apply_filament_status(session: Session, project: Project):
         project.filament_deducted = False
 
 
+def _setting_number(session: Session, key: str, default: Optional[float]) -> Optional[float]:
+    try:
+        value = float(get_setting(session, key, "") or "")
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _cost_breakdown(session: Session, lines: list, spools: dict, part_rows: list) -> dict:
+    """What the project costs: filament (spools with a price), every part whether or not you
+    already own it, and electricity when a price per kWh is set in Settings. Print time is
+    derived from the grams, so it is as rough as the print estimate."""
+    filament, unpriced, minutes = 0.0, 0.0, 0.0
+    for line in lines:
+        spool = spools.get(line.filament_id)
+        if spool and spool.cost is not None and spool.spool_weight_g:
+            filament += line.grams * spool.cost / spool.spool_weight_g
+        else:
+            unpriced += line.grams
+        minutes += minutes_for_grams(line.grams, spool.material if spool else "PLA")
+    priced = [p for p in part_rows if p["unit_cost"] is not None]
+    parts = sum(p["quantity"] * p["unit_cost"] for p in priced)
+    price = _setting_number(session, "cost_kwh_price", None)
+    watts = _setting_number(session, "cost_printer_watts", 150.0) or 0.0
+    hours = minutes / 60
+    electricity = round(hours * watts / 1000 * price, 2) if price else None
+    total = filament + parts + (electricity or 0)
+    return {
+        "filament": round(filament, 2), "filament_unpriced_g": round(unpriced, 1),
+        "parts": round(parts, 2), "parts_unpriced": len(part_rows) - len(priced),
+        "electricity": electricity, "print_hours": round(hours, 1), "printer_watts": watts,
+        "total": round(total, 2),
+    }
+
+
 def _project_json(session: Session, project: Project) -> dict:
     parts = session.exec(
         select(ProjectPart).where(ProjectPart.project_id == project.id).order_by(ProjectPart.id)
@@ -178,6 +215,7 @@ def _project_json(session: Session, project: Project) -> dict:
         "parts_total": len(part_rows),
         "parts_missing": len(missing),
         "cost_needed": round(sum(p["cost_needed"] or 0 for p in missing), 2),
+        "cost": _cost_breakdown(session, lines, spools, part_rows),
     }
 
 

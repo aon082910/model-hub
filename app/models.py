@@ -72,6 +72,10 @@ class Model3D(SQLModel, table=True):
     source_synced_at: Optional[datetime] = None
     source_filaments: Optional[str] = None  # JSON list: filament the listing suggests (MakerWorld)
     source_linked_by: Optional[str] = None  # manual, auto (matching job), extension
+    source_fingerprint: Optional[str] = None  # JSON: a hash per part of the listing, to notice changes
+    source_checked_at: Optional[datetime] = None
+    source_change: Optional[str] = None       # JSON list of the parts that changed since (title, files...)
+    source_changed_at: Optional[datetime] = None
     notes: Optional[str] = None             # your own notes on this model
 
     is_duplicate_of: Optional[int] = Field(default=None, foreign_key="model3d.id")
@@ -98,6 +102,7 @@ class Filament(SQLModel, table=True):
     remaining_g: float = 1000
     purchase_url: Optional[str] = None
     notes: Optional[str] = None
+    cost: Optional[float] = None   # what the spool cost; with spool_weight_g it gives the price per gram
 
 
 class QueueItem(SQLModel, table=True):
@@ -201,7 +206,36 @@ class WishlistItem(SQLModel, table=True):
     designer: Optional[str] = None
     license: Optional[str] = None
     note: Optional[str] = None
+    priority: int = 1               # 0 low, 1 normal, 2 high (rows from before this column read as normal)
+    status: str = "wanted"          # wanted, got (have it elsewhere), skip (changed my mind)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class FollowedDesigner(SQLModel, table=True):
+    """A designer on a site whose new uploads you want to hear about. handle is what the site
+    needs to list their work (Printables: the user id; Sketchfab and Thingiverse: the username)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True)
+    handle: str = Field(index=True)
+    name: Optional[str] = None
+    known_ids: Optional[str] = None          # JSON list: listings already seen (newest first)
+    last_checked_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DesignerUpload(SQLModel, table=True):
+    """A new listing from a followed designer, waiting for you to look at it."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    designer_id: int = Field(foreign_key="followeddesigner.id", index=True)
+    provider: str
+    source_id: str
+    title: str
+    thumbnail: Optional[str] = None
+    url: Optional[str] = None
+    license: Optional[str] = None
+    seen: bool = False
+    found_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class PrintLog(SQLModel, table=True):

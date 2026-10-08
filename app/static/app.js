@@ -65,7 +65,7 @@ function ensureViewerColorControl() {
 // Hash routing, so every page has an address that survives a reload and works with
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
-  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(),
+  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(),
   collections: () => loadCollections(), projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
@@ -956,6 +956,14 @@ function renderProject(p) {
     ? `<div class="project-summary">Filament: <b>${p.filament_grams}g</b> &mdash; ${totals}
         ${locked ? '<br><small>Already subtracted from inventory. Move the project back to planning/building to undo.</small>' : ''}</div>`
     : '';
+  const c = p.cost || { total: 0 };
+  const money = v => `$${Number(v).toFixed(2)}`;
+  const costPanel = c.total > 0 ? `
+    <div class="project-summary project-cost">Cost: <b>${money(c.total)}</b> &mdash;
+      filament ${money(c.filament)}${c.filament_unpriced_g ? ` <small>(${c.filament_unpriced_g} g on spools without a price)</small>` : ''}
+      &middot; parts ${money(c.parts)}${c.parts_unpriced ? ` <small>(${c.parts_unpriced} without a price)</small>` : ''}
+      ${c.electricity != null ? `&middot; electricity ${money(c.electricity)} <small>(about ${c.print_hours} h at ${c.printer_watts} W, rough)</small>` : ''}
+    </div>` : '';
   return `
     <div class="project-card page-card" data-project="${p.id}" data-locked="${locked ? 1 : 0}">
       <div class="project-head">
@@ -973,6 +981,7 @@ function renderProject(p) {
       </div>
       <div class="project-summary">${projectSummaryText(p)}</div>
       ${filamentSummary}
+      ${costPanel}
 
       <h3>3D models</h3>
       ${models ? `<div class="project-models">${models}</div>`
@@ -1440,10 +1449,60 @@ function matchLinkOptions() {
   };
 }
 
+// ---------- Listing updates (Matches tab) ----------
+let updatesPoll = null;
+
+async function loadUpdates() {
+  const res = await fetch('/api/source-updates/changed');
+  if (!res.ok) return;
+  const listings = (await res.json()).listings;
+  $('#match-updates-count').textContent = listings.length ? `(${listings.length} changed)` : '';
+  $('#updates-list').innerHTML = listings.length ? listings.map(l => `
+    <div class="auto-row" data-provider="${esc(l.provider)}" data-source="${esc(l.source_id)}">
+      <span class="badge">${esc(l.label)}</span>
+      <b>${esc(l.title || l.source_id)}</b>
+      <span class="status-badge status-building">${esc(l.changes.join(', '))} changed</span>
+      <span class="muted">${l.models.map(m => `<a href="#/model/${m.id}">${esc(m.filename)}</a>`).join(', ')}</span>
+      ${safeHttpUrl(l.url) ? `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">listing</a>` : ''}
+      <button class="update-refresh">Refresh from the listing</button>
+      <button class="update-dismiss">Dismiss</button>
+    </div>`).join('') : '<p class="muted">No changes found.</p>';
+}
+
+async function refreshUpdatesStatus() {
+  const res = await fetch('/api/source-updates/status');
+  if (!res.ok) return;
+  const s = await res.json();
+  $('#updates-status').textContent = s.running
+    ? `Checking ${s.checked} of ${s.total} (${s.changed} changed${s.errors ? `, ${s.errors} problems` : ''})...`
+    : (s.message ? `${s.message}${s.checked ? ` ${s.checked} checked, ${s.changed} changed.` : ''}` : '');
+  if (s.running && !updatesPoll) updatesPoll = setInterval(async () => { await refreshUpdatesStatus(); loadUpdates(); }, 2000);
+  if (!s.running && updatesPoll) { clearInterval(updatesPoll); updatesPoll = null; loadUpdates(); }
+}
+
+$('#match-updates-box').addEventListener('toggle', () => { if ($('#match-updates-box').open) { loadUpdates(); refreshUpdatesStatus(); } });
+$('#updates-check').addEventListener('click', async () => {
+  const res = await jsonRequest('POST', '/api/source-updates/start', {});
+  if (!res.ok) $('#updates-status').textContent = await sourceErrorText(res);
+  refreshUpdatesStatus();
+});
+$('#updates-stop').addEventListener('click', async () => { await fetch('/api/source-updates/stop', { method: 'POST' }); refreshUpdatesStatus(); });
+$('#updates-list').addEventListener('click', async (e) => {
+  const row = e.target.closest('.auto-row');
+  const refresh = e.target.classList.contains('update-refresh');
+  if (!row || !(refresh || e.target.classList.contains('update-dismiss'))) return;
+  e.target.disabled = true;
+  const res = await jsonRequest('POST', `/api/source-updates/${refresh ? 'refresh' : 'dismiss'}`,
+    { provider: row.dataset.provider, source_id: row.dataset.source });
+  if (!res.ok) { $('#updates-status').textContent = await sourceErrorText(res); e.target.disabled = false; return; }
+  loadUpdates();
+});
+
 async function loadMatches() {
   await refreshMatchStatus();
   await loadMatchQueue();
   await loadAutoLinked();
+  loadUpdates();
 }
 
 async function loadAutoLinked() {
@@ -1782,6 +1841,12 @@ function wishlistRow(i) {
       <div class="result-info grow">
         <a href="${open}"><b>${esc(i.title)}</b></a>
         <div class="muted">${esc(i.label)}${i.designer ? ' · ' + esc(i.designer) : ''}${i.license ? ' · ' + esc(i.license) : ''}</div>
+        <div class="row">
+          <select class="wishlist-priority" aria-label="Priority">${[['2', 'High'], ['1', 'Normal'], ['0', 'Low']].map(([v, t]) =>
+            `<option value="${v}" ${String(i.priority) === v ? 'selected' : ''}>${t} priority</option>`).join('')}</select>
+          <select class="wishlist-state" aria-label="Status">${[['wanted', 'Still want it'], ['got', 'Got it elsewhere'], ['skip', 'Not any more']].map(([v, t]) =>
+            `<option value="${v}" ${i.status === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        </div>
         <input class="wishlist-note" value="${esc(i.note || '')}" placeholder="Add a note..." maxlength="2000" aria-label="Note for ${esc(i.title)}">
         <div class="result-actions">
           ${i.in_library ? `<a class="button-link" href="#/model/${i.in_library}">In your library</a>`
@@ -1848,11 +1913,34 @@ $('#wishlist-list').addEventListener('click', async (e) => {
   }
 });
 $('#wishlist-list').addEventListener('change', async (e) => {
-  if (!e.target.classList.contains('wishlist-note')) return;
+  const kinds = { 'wishlist-note': ['note', v => v], 'wishlist-priority': ['priority', v => parseInt(v)], 'wishlist-state': ['status', v => v] };
+  const kind = [...e.target.classList].find(c => kinds[c]);
+  if (!kind) return;
   const id = parseInt(e.target.closest('.wishlist-row').dataset.id);
-  const res = await jsonRequest('PATCH', `/api/wishlist/${id}`, { note: e.target.value });
-  $('#wishlist-status').textContent = res.ok ? 'Note saved.' : 'Could not save the note.';
+  const [field, convert] = kinds[kind];
+  const res = await jsonRequest('PATCH', `/api/wishlist/${id}`, { [field]: convert(e.target.value) });
+  $('#wishlist-status').textContent = res.ok ? 'Saved.' : 'Could not save that.';
+  if (res.ok && field !== 'note') loadWishlist();
 });
+
+async function wishlistImport(url, body) {
+  const status = $('#wishlist-status');
+  status.textContent = 'Importing...';
+  const res = await jsonRequest('POST', url, body);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { status.textContent = data.detail || 'Could not import.'; return; }
+  const bits = [`Added ${data.added}.`];
+  if (data.already) bits.push(`${data.already} already on the list.`);
+  if (data.unrecognized) bits.push(`${data.unrecognized} link${data.unrecognized === 1 ? '' : 's'} not recognised.`);
+  if (data.failed && data.failed.length) bits.push(`${data.failed.length} could not be looked up (${data.failed[0].reason}).`);
+  if (data.left_for_next_time) bits.push(`${data.left_for_next_time} left: press the button again to continue.`);
+  status.textContent = bits.join(' ');
+  loadWishlist();
+}
+$('#wishlist-import-links').addEventListener('click', () => wishlistImport('/api/wishlist/import-links', { text: $('#wishlist-links').value }));
+$('#wishlist-import-likes').addEventListener('click', () => wishlistImport('/api/wishlist/import-thingiverse', { kind: 'likes' }));
+$('#wishlist-import-collection').addEventListener('click', () =>
+  wishlistImport('/api/wishlist/import-thingiverse', { kind: 'collection', ref: $('#wishlist-collection-url').value.trim() }));
 
 // ---------- Search: the library and every site at once ----------
 let lastSearchHash = '#/search';
@@ -2054,6 +2142,7 @@ function renderListing(data) {
       ${data.can_download && !inLibrary.length && !downloading && data.files && data.files.some(f => f.selectable)
         ? '<button id="listing-add" class="primary">Add to library</button>' : ''}
       <button id="listing-save" class="${data.wishlist_id ? 'saved' : ''}">${data.wishlist_id ? '&#9733; On your wishlist' : '&#9734; Save to wishlist'}</button>
+      ${data.can_follow ? `<button id="listing-follow" class="${data.following_id ? 'saved' : ''}">${data.following_id ? '&#10003; Following ' : 'Follow '}${esc(d.designer || 'this designer')}</button>` : ''}
       ${safeHttpUrl(d.url) ? `<a class="button-link" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(site)}</a>` : ''}
       <label class="muted"><input type="checkbox" id="listing-opt-tags"> Also add the site's tags</label>
     </div>
@@ -2104,6 +2193,19 @@ function renderListing(data) {
     data.wishlist_id = id;
     renderListing(data);
   };
+  const follow = $('#listing-follow');
+  if (follow) {
+    follow.onclick = async () => {
+      follow.disabled = true;
+      const res = data.following_id
+        ? await fetch(`/api/designers/${data.following_id}`, { method: 'DELETE' })
+        : await jsonRequest('POST', '/api/designers', { provider: d.provider, handle: d.designer_handle, name: d.designer });
+      if (!res.ok) { follow.disabled = false; follow.textContent = await sourceErrorText(res); return; }
+      data.following_id = data.following_id ? null : (await res.json()).id;
+      renderListing(data);
+      refreshFollowBadge();
+    };
+  }
   const add = $('#listing-add');
   if (add) {
     add.onclick = async () => {
@@ -2243,8 +2345,15 @@ async function loadFilament() {
     <tr>
       <td>${f.material}</td><td>${f.brand || ''}</td><td>${f.color || ''}</td>
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
+      <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
+        ${f.cost != null && f.spool_weight_g ? `<small class="muted">$${(f.cost / f.spool_weight_g * 1000).toFixed(2)}/kg</small>` : ''}</td>
       <td><button data-id="${f.id}" class="del-fil">delete</button></td>
     </tr>`).join('');
+  $$('.fil-price').forEach(input => input.onchange = async () => {
+    const value = input.value.trim();
+    await jsonRequest('PATCH', `/api/filament/${input.dataset.id}`, { cost: value === '' ? null : parseFloat(value) });
+    loadFilament();
+  });
   $$('.del-fil').forEach(b => b.onclick = async () => { await fetch(`/api/filament/${b.dataset.id}`, { method: 'DELETE' }); loadFilament(); });
 }
 $('#add-filament-btn').addEventListener('click', async () => {
@@ -2254,6 +2363,7 @@ $('#add-filament-btn').addEventListener('click', async () => {
       material: $('#fil-material').value, brand: $('#fil-brand').value,
       color: $('#fil-color').value, spool_weight_g: parseFloat($('#fil-weight').value) || 1000,
       remaining_g: parseFloat($('#fil-weight').value) || 1000,
+      cost: $('#fil-cost').value.trim() === '' ? null : parseFloat($('#fil-cost').value),
     }),
   });
   loadFilament();
@@ -2294,6 +2404,110 @@ async function loadQueue() {
 }
 
 // ---------- Settings ----------
+// ---------- Following designers ----------
+async function refreshFollowBadge() {
+  const res = await fetch('/api/designers');
+  if (!res.ok) return;
+  const data = await res.json();
+  const button = document.querySelector('#tabs button[data-tab="following"]');
+  if (button) button.textContent = data.new_total ? `Following (${data.new_total})` : 'Following';
+  return data;
+}
+
+let followUploads = [];
+
+function renderFollowing(data) {
+  $('#follow-list').innerHTML = data.designers.length ? data.designers.map(d => `
+    <div class="follow-row" data-id="${d.id}">
+      <span class="badge">${esc(d.label)}</span>
+      <b>${esc(d.name || d.handle)}</b>
+      ${d.new_count ? `<span class="status-badge status-building">${d.new_count} new</span>` : ''}
+      <span class="muted">${d.last_error ? `<span class="error-text">${esc(d.last_error)}</span>` : (d.last_checked_at ? 'checked ' + esc(String(d.last_checked_at).slice(0, 16).replace('T', ' ')) : '')}</span>
+      <button class="follow-unfollow">Unfollow</button>
+    </div>`).join('')
+    : '<p class="muted">You are not following anyone yet. Open a listing and press <b>Follow</b> next to the designer.</p>';
+}
+
+function followUploadCard(u) {
+  const open = `#/listing/${u.provider}/${encodeURIComponent(u.source_id)}`;
+  return `
+    <div class="result-card" data-id="${u.id}">
+      <a href="${open}">${u.thumbnail && safeHttpUrl(u.thumbnail)
+        ? `<img class="result-thumb" src="${esc(u.thumbnail)}" loading="lazy" referrerpolicy="no-referrer" alt="">` : '<div class="result-thumb"></div>'}</a>
+      <div class="result-info">
+        <a href="${open}"><b>${esc(u.title)}</b></a>
+        <div class="muted">${esc(PROVIDER_LABELS[u.provider] || u.provider)} · ${esc(u.designer)}${u.license ? ' · ' + esc(u.license) : ''}</div>
+        <div class="result-actions">
+          ${u.in_library ? `<a class="button-link" href="#/model/${u.in_library}">In your library</a>`
+            : (u.can_download ? '<button class="upload-add">Add to library</button>' : '')}
+          <button class="upload-save ${u.wishlist_id ? 'saved' : ''}">${u.wishlist_id ? '&#9733; Saved' : '&#9734; Save'}</button>
+          <button class="upload-seen">Seen</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadFollowing() {
+  const status = $('#follow-status');
+  let data = await refreshFollowBadge();
+  if (!data) return;
+  renderFollowing(data);
+  // quietly look for anything new when it has been a while
+  if (data.designers.some(d => !d.last_checked_at || (Date.now() - Date.parse(d.last_checked_at + 'Z')) > 6 * 3600 * 1000)) {
+    status.textContent = 'Checking for new uploads...';
+    const res = await jsonRequest('POST', '/api/designers/check', { stale_hours: 6 });
+    status.textContent = res.ok ? '' : 'Could not check just now.';
+    data = await refreshFollowBadge();
+    renderFollowing(data);
+  }
+  const res = await fetch('/api/designers/uploads');
+  followUploads = res.ok ? await res.json() : [];
+  $('#follow-uploads').innerHTML = followUploads.length ? followUploads.map(followUploadCard).join('')
+    : '<p class="muted">No new uploads.</p>';
+}
+
+$('#follow-check').addEventListener('click', async () => {
+  const status = $('#follow-status');
+  status.textContent = 'Checking...';
+  const res = await jsonRequest('POST', '/api/designers/check', {});
+  const data = await res.json().catch(() => ({}));
+  const problems = Object.entries(data.errors || {}).map(([who, msg]) => `${who}: ${msg}`);
+  await loadFollowing();
+  status.textContent = res.ok ? `${data.new} new${problems.length ? ' — ' + problems.join('; ') : ''}` : 'Could not check.';
+});
+$('#follow-seen-all').addEventListener('click', async () => {
+  await jsonRequest('POST', '/api/designers/uploads/seen', { all: true });
+  loadFollowing();
+});
+$('#follow-list').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('follow-unfollow')) return;
+  await fetch(`/api/designers/${e.target.closest('.follow-row').dataset.id}`, { method: 'DELETE' });
+  loadFollowing();
+});
+$('#follow-uploads').addEventListener('click', async (e) => {
+  const card = e.target.closest('.result-card');
+  if (!card) return;
+  const upload = followUploads.find(u => u.id === parseInt(card.dataset.id));
+  if (!upload) return;
+  if (e.target.classList.contains('upload-seen')) {
+    await jsonRequest('POST', '/api/designers/uploads/seen', { ids: [upload.id] });
+    loadFollowing();
+  } else if (e.target.classList.contains('upload-save')) {
+    const id = await toggleWishlist(upload.wishlist_id, upload);
+    if (id !== false) { upload.wishlist_id = id; card.outerHTML = followUploadCard(upload); }
+  } else if (e.target.classList.contains('upload-add')) {
+    e.target.disabled = true;
+    e.target.textContent = 'Queued...';
+    const data = await queueDownloads([{ provider: upload.provider, source_id: upload.source_id, title: upload.title, thumbnail: upload.thumbnail }],
+      { images: true, add_tags: false });
+    if (data.error || (data.rejected && data.rejected.length)) {
+      e.target.disabled = false;
+      e.target.textContent = 'Add to library';
+      $('#follow-status').textContent = data.error || data.rejected[0].reason;
+    }
+  }
+});
+
 // ---------- Duplicates ----------
 const dupState = { shown: 0, total: 0 };
 
@@ -2456,6 +2670,8 @@ async function loadSettings() {
   $('#est-material').value = s.est_material || 'PLA';
   $('#est-density').value = s.est_density || '';
   $('#est-infill').value = s.est_infill || '15';
+  $('#cost-kwh-price').value = s.cost_kwh_price || '';
+  $('#cost-printer-watts').value = s.cost_printer_watts || '';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
   await renderSiteSettings(s);
   refreshBackups();
@@ -2503,6 +2719,8 @@ $('#save-estimate-settings-btn').addEventListener('click', async () => {
       est_material: $('#est-material').value,
       est_density: $('#est-density').value,
       est_infill: $('#est-infill').value,
+      cost_kwh_price: $('#cost-kwh-price').value,
+      cost_printer_watts: $('#cost-printer-watts').value,
     }),
   });
 });
@@ -2570,6 +2788,7 @@ async function boot() {
   const settings = await probe.json();
   viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
   route();
+  refreshFollowBadge();
 }
 
 function showAuthOverlay(mode) {
@@ -2605,6 +2824,7 @@ function showAuthOverlay(mode) {
       viewerModelColor = normalizeViewerModelColor(settings.viewer_model_color);
     }
     route();
+    refreshFollowBadge();
   };
 }
 

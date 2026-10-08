@@ -282,3 +282,11 @@ button.danger { color: #e0645a; border-color: #e0645a; }
 .dup-info a { color: var(--accent); text-decoration: none; }
 #backup-saved .link-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .inline-check { display: flex !important; flex-direction: row !important; align-items: center; gap: 6px; }
+
+/* ---------- Following, wishlist import ---------- */
+.follow-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.upload-save.saved { color: #e6b800; border-color: #e6b800; }
+#follow-uploads { margin-bottom: 16px; }
+#wishlist-links { width: 100%; box-sizing: border-box; }
+#wishlist-collection-url { flex: 1; min-width: 200px; }
+#wishlist-import-box { margin-bottom: 10px; }

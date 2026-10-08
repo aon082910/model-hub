@@ -20,6 +20,7 @@
       <button data-tab="library" class="active">Library</button>
       <button data-tab="search">Search</button>
       <button data-tab="wishlist">Wishlist</button>
+      <button data-tab="following">Following</button>
       <button data-tab="collections">Collections</button>
       <button data-tab="projects">Projects</button>
       <button data-tab="supplies">Supplies</button>
@@ -89,6 +90,20 @@
     <div id="downloads-panel" class="panel hidden"></div>
   </section>
 
+  <section id="tab-following" class="tab">
+    <h2>Following</h2>
+    <p class="muted">Follow a designer with the <b>Follow</b> button on one of their listings, and new uploads show up here. Works for
+      Printables and Sketchfab, and for Thingiverse once you have added your token in Settings.</p>
+    <div class="bulk-bar">
+      <button id="follow-check" class="primary">Check for new uploads</button>
+      <button id="follow-seen-all">Mark all as seen</button>
+      <span id="follow-status" class="muted"></span>
+    </div>
+    <div id="follow-list"></div>
+    <h3>New uploads</h3>
+    <div id="follow-uploads" class="result-grid"></div>
+  </section>
+
   <section id="tab-wishlist" class="tab">
     <h2>Wishlist</h2>
     <p class="muted">Listings you want to keep for later. Save them from the Search page or a listing page, then add the whole list to your library in one go (where the site allows downloads).</p>
@@ -97,8 +112,22 @@
       <label><input type="checkbox" id="wishlist-opt-images" checked> Save pictures</label>
       <label><input type="checkbox" id="wishlist-opt-tags"> Add the site's tags</label>
       <button id="wishlist-remove-added">Remove the ones already in my library</button>
+      <a class="button-link" href="/api/wishlist/export.csv" download>Export as CSV</a>
       <span id="wishlist-status" class="muted"></span>
     </div>
+    <details class="panel" id="wishlist-import-box">
+      <summary>Import links</summary>
+      <p class="muted">Paste any text with model links (Printables, MakerWorld, Sketchfab, Thingiverse, MyMiniFactory, Cults3D, NASA 3D): a list, your
+        bookmarks, a chat. Up to 40 at a time.</p>
+      <textarea id="wishlist-links" rows="4" placeholder="https://www.printables.com/model/..."></textarea>
+      <div class="row"><button id="wishlist-import-links">Add these to the wishlist</button></div>
+      <p class="muted">From Thingiverse (needs your token in Settings):</p>
+      <div class="row">
+        <button id="wishlist-import-likes">Import my likes</button>
+        <input id="wishlist-collection-url" placeholder="https://www.thingiverse.com/user/collections/123/name">
+        <button id="wishlist-import-collection">Import this collection</button>
+      </div>
+    </details>
     <div id="wishlist-list"></div>
   </section>
 
@@ -228,6 +257,17 @@
       <span id="match-link-status" class="muted"></span>
     </div>
     <div id="match-auto-list" class="hidden"></div>
+    <details id="match-updates-box" class="panel">
+      <summary>Listing updates <span id="match-updates-count" class="muted"></span></summary>
+      <p class="muted">Checks the online listing of every linked model for changes (description, pictures, tags, license and, where the site
+        lists them, files). The first check only records how each listing looks now; later checks flag what changed.</p>
+      <div class="row">
+        <button id="updates-check" class="primary">Check for changes</button>
+        <button id="updates-stop">Stop</button>
+        <span id="updates-status" class="muted"></span>
+      </div>
+      <div id="updates-list"></div>
+    </details>
     <details id="match-linked-box" class="panel">
       <summary>Linked models &mdash; review or unlink in bulk</summary>
       <div class="toolbar">
@@ -270,11 +310,12 @@
       <input id="fil-brand" placeholder="Brand">
       <input id="fil-color" placeholder="Color">
       <input id="fil-weight" placeholder="Spool weight g" value="1000">
+      <input id="fil-cost" type="number" min="0" step="0.01" placeholder="Spool price">
       <button id="add-filament-btn">Add Spool</button>
     </div>
     <div class="table-scroll">
       <table id="filament-table"><thead><tr>
-        <th>Material</th><th>Brand</th><th>Color</th><th>Remaining</th><th></th>
+        <th>Material</th><th>Brand</th><th>Color</th><th>Remaining</th><th>Price</th><th></th>
       </tr></thead><tbody></tbody></table>
     </div>
   </section>
@@ -330,6 +371,8 @@
       <label>Default material <input id="est-material" placeholder="PLA"></label>
       <label>Material density (g/cm&sup3;) <input id="est-density" placeholder="1.24"></label>
       <label>Default infill (0-1) <input id="est-infill" placeholder="0.15"></label>
+      <label>Electricity price per kWh <small>(adds electricity to a project's cost; leave empty to leave it out)</small> <input id="cost-kwh-price" type="number" min="0" step="0.001" placeholder="0.15"></label>
+      <label>Printer power draw (watts) <input id="cost-printer-watts" type="number" min="0" step="1" placeholder="150"></label>
       <label>Optional exact slicer CLI path (advanced, set via container env <code>SLICER_CLI_PATH</code>, read-only here)
         <input id="est-slicer-path" disabled>
       </label>

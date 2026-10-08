@@ -199,6 +199,21 @@ def build_project_pdf(project: dict) -> bytes:
             rows.append([_p("Already subtracted from your filament inventory.", st["small"]), "", "", ""])
         story.append(_table(rows, [CONTENT_WIDTH * 0.5, CONTENT_WIDTH * 0.15, CONTENT_WIDTH * 0.15, CONTENT_WIDTH * 0.2]))
 
+    # ---- cost ----
+    cost_info = project.get("cost")
+    if cost_info and cost_info["total"] > 0:
+        story.append(Paragraph("What it costs", st["h2"]))
+        rows = [[_p("", st["head"]), _p("Amount", st["headr"]), _p("", st["head"])]]
+        rows.append([_p("Filament", st["cell"]), _p(_money(cost_info["filament"]), st["right"]),
+                     _p(f"{cost_info['filament_unpriced_g']:g} g on spools without a price" if cost_info["filament_unpriced_g"] else "", st["small"])])
+        rows.append([_p("Parts (all, including ones you already have)", st["cell"]), _p(_money(cost_info["parts"]), st["right"]),
+                     _p(f"{cost_info['parts_unpriced']} without a price" if cost_info["parts_unpriced"] else "", st["small"])])
+        if cost_info["electricity"] is not None:
+            rows.append([_p("Electricity (about %g h printing at %g W)" % (cost_info["print_hours"], cost_info["printer_watts"]), st["cell"]),
+                         _p(_money(cost_info["electricity"]), st["right"]), _p("rough", st["small"])])
+        rows.append([_p("Total", st["cellb"]), _p(_money(cost_info["total"]), st["rightb"]), _p("", st["cell"])])
+        story.append(_table(rows, [CONTENT_WIDTH * 0.55, CONTENT_WIDTH * 0.2, CONTENT_WIDTH * 0.25]))
+
     # ---- parts ----
     story.append(Paragraph("Parts list", st["h2"]))
     if not project["parts"]:

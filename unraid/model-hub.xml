@@ -40,6 +40,19 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.4.0
+New Following tab: follow a designer from one of their listings and see
+their new uploads (Printables and Sketchfab need no account; Thingiverse uses
+your token). Matches has a Listing updates check that flags linked models
+whose online listing changed (description, pictures, tags, license, files) so
+you can refresh them. Projects now show what they cost: give your spools a
+price (Filament tab) and optionally an electricity price per kWh (Settings),
+and the project page and PDF add up filament, parts and electricity. The
+wishlist gained priorities, a got-it-elsewhere status, CSV export, pasting a
+list of links, and importing your Thingiverse likes or a collection. No new
+settings are required; new tables and columns are added automatically on
+first start.
+
 ### 2.3.0
 New Backup section in Settings: download or save on the server a copy of
 everything Model Hub knows (tags, collections, projects, supplies, links to

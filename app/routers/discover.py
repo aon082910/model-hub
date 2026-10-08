@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from app import downloads, sources
 from app.config import MODEL_EXTENSIONS
 from app.db import get_session
-from app.models import Model3D, ModelTagLink, Tag, WishlistItem
+from app.models import FollowedDesigner, Model3D, ModelTagLink, Tag, WishlistItem
 from app.routers.library import _with_tags
 from app.routers.sources import _resolve_listing
 
@@ -150,6 +150,9 @@ def discover_listing(
         "download": downloads.find_item(provider, source_id),
         "wishlist_id": session.exec(select(WishlistItem.id).where(
             WishlistItem.provider == provider, WishlistItem.source_id == source_id)).first(),
+        "can_follow": bool(details.get("designer_handle")) and provider in sources.FOLLOW_PROVIDERS,
+        "following_id": session.exec(select(FollowedDesigner.id).where(
+            FollowedDesigner.provider == provider, FollowedDesigner.handle == (details.get("designer_handle") or "-"))).first(),
     }
 
 
