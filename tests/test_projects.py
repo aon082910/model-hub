@@ -3,17 +3,8 @@
 
 
 def _ensure_authenticated(client):
-    if client.get("/api/settings").status_code == 200:
-        return
-    status = client.get("/api/auth/status").json()
-    if not status.get("configured"):
-        creds = {"username": "projects-test-admin", "password": "projects test password"}
-        assert client.post("/api/auth/setup", json=creds).status_code == 200
-        assert client.post("/api/auth/login", json=creds).status_code == 200
-        return
-    # test_app.py leaves the shared client logged out, with this account
-    login = client.post("/api/auth/login", json={"username": "admin", "password": "new password long enough"})
-    assert login.status_code == 200
+    from conftest import ensure_authenticated
+    ensure_authenticated(client)
 
 
 def _project(client, name, **extra):
@@ -296,3 +287,34 @@ def test_deleted_spool_does_not_break_project(client):
     assert data["models"][0]["filament"][0]["filament_label"] == "(deleted spool)"
     assert client.patch(f"/api/projects/{pid}", json={"status": "printed"}).status_code == 200
     assert client.patch(f"/api/projects/{pid}", json={"status": "planning"}).status_code == 200
+
+
+# ---------- bulk add (a listing's parts list) ----------
+
+def test_bulk_add_parts(client):
+    _ensure_authenticated(client)
+    pid = _project(client, "Bulk project")["id"]
+    rows = [
+        {"name": "Bulk servo", "category": "electronics", "quantity": 4, "unit_cost": 5.49, "purchase_url": "https://example.com/s"},
+        {"name": "Bulk screw", "category": "parts", "quantity": 2, "notes": "from listing"},
+    ]
+    r = client.post(f"/api/projects/{pid}/parts/bulk", json={"parts": rows})
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == 2
+    got = client.get(f"/api/projects/{pid}").json()
+    assert got["parts_total"] == 2 and got["parts_missing"] == 2 and got["cost_needed"] == 21.96
+
+
+def test_bulk_add_is_all_or_nothing(client):
+    _ensure_authenticated(client)
+    pid = _project(client, "Bulk bad row")["id"]
+    rows = [{"name": "Fine part", "category": "parts"}, {"name": "Bad part", "category": "weapons"}]
+    r = client.post(f"/api/projects/{pid}/parts/bulk", json={"parts": rows})
+    assert r.status_code == 400 and "part 2" in r.json()["detail"]
+    assert client.get(f"/api/projects/{pid}").json()["parts_total"] == 0     # the good row was not added either
+
+    for payload in ({}, {"parts": []}, {"parts": "x"}, {"parts": ["not an object"]}):
+        assert client.post(f"/api/projects/{pid}/parts/bulk", json=payload).status_code == 400, payload
+    too_many = [{"name": f"p{i}", "category": "parts"} for i in range(201)]
+    assert client.post(f"/api/projects/{pid}/parts/bulk", json={"parts": too_many}).status_code == 400
+    assert client.post("/api/projects/999999/parts/bulk", json={"parts": rows[:1]}).status_code == 404

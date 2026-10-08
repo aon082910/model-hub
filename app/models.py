@@ -150,6 +150,28 @@ class ProjectPart(SQLModel, table=True):
     notes: Optional[str] = None
 
 
+class SourceMatchState(SQLModel, table=True):
+    """Where a library model stands in the 'match my whole library' job."""
+    model_id: Optional[int] = Field(default=None, foreign_key="model3d.id", primary_key=True)
+    status: str = "candidates"     # candidates (awaiting review), none (nothing close found), skipped (you said no)
+    query: Optional[str] = None
+    checked_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SourceCandidate(SQLModel, table=True):
+    """A possible listing for a model, found by the matching job, for you to accept."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model_id: int = Field(foreign_key="model3d.id", index=True)
+    provider: str
+    source_id: str
+    title: str
+    designer: Optional[str] = None
+    license: Optional[str] = None
+    thumbnail: Optional[str] = None
+    url: Optional[str] = None
+    score: float = 0
+
+
 class InventoryItem(SQLModel, table=True):
     """Parts, electronics and supplies on hand, independent of any project."""
     id: Optional[int] = Field(default=None, primary_key=True)

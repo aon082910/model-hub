@@ -23,8 +23,8 @@ Username/Password below to skip that screen). Also includes print time/filament
 weight estimates, projects that track the electronics/parts/supplies each
 build needs (with an exportable shopping list and a Supplies page for what you
 already own) and subtract the filament used when a project is marked printed,
-matching of your models to their Printables/MakerWorld listings (pictures,
-designer, license, tags), a browser extension for one-click import, and
+matching of your models (one by one or your whole library) to their Printables/MakerWorld
+listings (pictures, designer, license, tags, parts lists), a browser extension for one-click import, and
 optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
@@ -38,8 +38,19 @@ optional webhook notifications (ntfy/Discord/Slack).
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Date>2026-10-07</Date>
+  <Date>2026-10-08</Date>
   <Changes>
+### 1.9.0
+New Matches tab: a background job searches Printables and MakerWorld for
+every model in your library that is not linked yet and builds a review queue
+of the closest listings. Link one, tick and link many at once, or mark a
+model as skipped; nothing is linked without your say-so. In a project you can
+now import the parts list from a MakerWorld listing (Bambu Lab store items
+with links and prices, plus the designer's own list), edit the rows, and add
+them in one go. Match thumbnails use small versions of the pictures, and the
+database now waits longer for a lock instead of failing while a background
+job is running. No settings changes; new tables are added automatically.
+
 ### 1.8.0
 Shopping list export: download the Projects shopping list as CSV or text, or
 copy it, and optionally combine identical parts from different projects. New

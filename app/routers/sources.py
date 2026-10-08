@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from app import sources
 from app.db import get_session
 from app.models import Model3D, Tag
+from app.source_match_jobs import clear_match_data
 
 router = APIRouter(prefix="/api", tags=["sources"])
 logger = logging.getLogger("modelhub.sources")
@@ -79,6 +80,7 @@ def link_model_to_listing(
             if tag not in model.tags:
                 model.tags.append(tag)
     model.updated_at = datetime.utcnow()
+    clear_match_data(session, model.id)   # decided: nothing left to review for this model
     session.add(model)
     session.commit()
     session.refresh(model)
@@ -120,6 +122,27 @@ def lookup_source(url: str):
         return sources.fetch_details(*parsed)
     except sources.SourceError as e:
         raise HTTPException(502, str(e))
+
+
+@router.get("/sources/parts")
+def listing_parts(url: Optional[str] = None, provider: Optional[str] = None, source_id: Optional[str] = None):
+    """The parts a listing says you need (MakerWorld), as rows ready to add to a project."""
+    provider, source_id = _resolve_listing({"url": url, "provider": provider, "source_id": source_id})
+    try:
+        details = sources.fetch_details(provider, source_id)
+    except sources.SourceError as e:
+        raise HTTPException(502, str(e))
+    note = ""
+    if provider == "printables":
+        note = "Printables listings don't have a parts list that can be read automatically."
+    elif not details["parts"]:
+        note = "This listing doesn't list any parts to buy."
+    return {
+        "listing": {"provider": provider, "source_id": source_id, "title": details["title"],
+                    "url": details["url"], "designer": details["designer"]},
+        "parts": details["parts"],
+        "note": note,
+    }
 
 
 @router.get("/library/models/{model_id}/source/suggest")

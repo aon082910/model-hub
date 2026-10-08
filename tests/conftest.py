@@ -28,18 +28,29 @@ def client():
         yield c
 
 
-@pytest.fixture()
-def authed(client):
-    """The shared client, logged in. Other test files leave it logged out or
-    never logged in, so set up / log in whichever way is needed."""
+# Accounts other test files leave behind, most likely first. Wrong guesses count
+# toward the login rate limit (5 failures), so the list stays short.
+KNOWN_ACCOUNTS = [
+    ("admin", "new password long enough"),                    # test_app.py (after its password change)
+    ("fixture-admin", "fixture admin password"),              # created here when nothing else has
+    ("pagination-test-admin", "pagination test password"),    # test_library_pagination.py
+]
+
+
+def ensure_authenticated(client):
+    """Log the shared client in, however the earlier tests left it: logged in,
+    logged out, or not set up at all. Works for any subset of the suite."""
     if client.get("/api/settings").status_code == 200:
         return client
     if not client.get("/api/auth/status").json().get("configured"):
-        creds = {"username": "fixture-admin", "password": "fixture admin password"}
-        assert client.post("/api/auth/setup", json=creds).status_code == 200
-        assert client.post("/api/auth/login", json=creds).status_code == 200
-    else:
-        # test_app.py ends logged out, with the password set in its change-password test
-        login = client.post("/api/auth/login", json={"username": "admin", "password": "new password long enough"})
-        assert login.status_code == 200
-    return client
+        username, password = KNOWN_ACCOUNTS[1]
+        assert client.post("/api/auth/setup", json={"username": username, "password": password}).status_code == 200
+    for username, password in KNOWN_ACCOUNTS:
+        if client.post("/api/auth/login", json={"username": username, "password": password}).status_code == 200:
+            return client
+    raise AssertionError("could not log in as any known test account")
+
+
+@pytest.fixture()
+def authed(client):
+    return ensure_authenticated(client)

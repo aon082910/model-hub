@@ -205,7 +205,9 @@ def delete_model_record(model_id: int, session: Session = Depends(get_session)):
     if not model:
         raise HTTPException(404, "Model not found")
     from app.sources import delete_images
+    from app.source_match_jobs import clear_match_data
     delete_images(model_id)
+    clear_match_data(session, model_id)
     session.delete(model)
     session.commit()
     return {"status": "deleted"}

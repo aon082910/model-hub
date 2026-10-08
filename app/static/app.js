@@ -71,6 +71,7 @@ $$('#tabs button').forEach(btn => {
     if (btn.dataset.tab === 'collections') loadCollections();
     if (btn.dataset.tab === 'projects') loadProjects();
     if (btn.dataset.tab === 'supplies') loadSupplies();
+    if (btn.dataset.tab === 'matches') loadMatches();
     if (btn.dataset.tab === 'filament') loadFilament();
     if (btn.dataset.tab === 'queue') loadQueue();
     if (btn.dataset.tab === 'settings') loadSettings();
@@ -612,7 +613,7 @@ function renderPartRow(projectId, part) {
   const url = safeUrl(part.purchase_url);
   const cost = part.unit_cost != null ? `$${part.unit_cost.toFixed(2)}` : '';
   return `
-    <tr class="${part.quantity_needed ? '' : 'part-complete'}" data-project="${projectId}" data-part="${part.id}">
+    <tr class="${part.quantity_needed ? '' : 'part-complete'}" data-project="${projectId}" data-part="${part.id}" data-name="${esc(part.name.toLowerCase())}">
       <td>${esc(part.name)}${part.notes ? `<br><small>${esc(part.notes)}</small>` : ''}</td>
       <td>${esc(part.category)}</td>
       <td>${part.quantity}</td>
@@ -641,10 +642,11 @@ function renderProjectModel(m, locked) {
       ${locked ? '' : '<button class="line-del" title="Remove this filament">&times;</button>'}
     </div>`).join('');
   return `
-    <div class="project-model" data-model="${m.id}">
+    <div class="project-model" data-model="${m.id}" data-source-id="${esc(m.source_id || '')}">
       <div class="project-model-head">
         <b>${esc(m.filename)}</b>
         ${m.filament_grams ? `<span class="muted">${m.filament_grams}g</span>` : ''}
+        ${m.source_provider === 'makerworld' ? '<button class="model-import-parts" title="Add the parts list from the MakerWorld listing this model is linked to">Import parts</button>' : ''}
         ${locked ? '' : `<button class="model-estimate" title="Estimate filament use for this model">Estimate</button>
         <button class="model-unlink" title="Remove from project">&times;</button>`}
         <span class="model-estimate-note muted"></span>
@@ -703,6 +705,17 @@ function renderProject(p) {
         <input class="new-part-cost" type="number" min="0" step="0.01" placeholder="Unit cost" aria-label="Unit cost">
         <input class="new-part-url" placeholder="Purchase link (optional)">
         <button class="part-add-btn">Add Part</button>
+      </div>
+      <div class="parts-import-bar">
+        <button class="parts-import-toggle">Import parts from a MakerWorld listing</button>
+      </div>
+      <div class="parts-import hidden">
+        <div class="row">
+          <input class="parts-import-url" placeholder="Paste a MakerWorld model link">
+          <button class="parts-import-fetch">Get parts list</button>
+        </div>
+        <div class="parts-import-status muted"></div>
+        <div class="parts-import-results"></div>
       </div>
     </div>`;
 }
@@ -892,6 +905,20 @@ $('#projects-list').addEventListener('click', async (e) => {
   } else if (target.classList.contains('model-estimate')) {
     await estimateProjectModel(projectId, target.closest('.project-model'));
     return;
+  } else if (target.classList.contains('parts-import-toggle')) {
+    card.querySelector('.parts-import').classList.toggle('hidden');
+    return;
+  } else if (target.classList.contains('parts-import-fetch')) {
+    const url = card.querySelector('.parts-import-url').value.trim();
+    if (url) await fetchListingParts(card, { url });
+    return;
+  } else if (target.classList.contains('model-import-parts')) {
+    card.querySelector('.parts-import').classList.remove('hidden');
+    await fetchListingParts(card, { provider: 'makerworld', source_id: target.closest('.project-model').dataset.sourceId });
+    return;
+  } else if (target.classList.contains('parts-import-add')) {
+    await addImportedParts(card, projectId);
+    return;
   } else if (target.classList.contains('part-add-btn')) {
     const name = card.querySelector('.new-part-name').value.trim();
     if (!name) return;
@@ -912,6 +939,59 @@ $('#projects-list').addEventListener('click', async (e) => {
   }
   loadProjects();
 });
+
+// ---------- Import a listing's parts list into a project ----------
+let importedParts = new WeakMap();   // project card -> the rows last fetched for it
+
+async function fetchListingParts(card, params) {
+  const status = card.querySelector('.parts-import-status');
+  const results = card.querySelector('.parts-import-results');
+  status.textContent = 'Getting the parts list...';
+  results.innerHTML = '';
+  const res = await fetch(`/api/sources/parts?${new URLSearchParams(params)}`);
+  if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
+  const data = await res.json();
+  importedParts.set(card, data.parts);
+  const have = new Set([...card.querySelectorAll('.parts-table tbody tr')].map(r => r.dataset.name));
+  status.innerHTML = `${esc(data.listing.title)} ${data.parts.length ? `&mdash; ${data.parts.length} part(s). Tick the ones to add; names, types and quantities can be edited first.` : ''}`
+    + (data.note ? ` <span>${esc(data.note)}</span>` : '');
+  if (!data.parts.length) return;
+  results.innerHTML = `
+    <div class="table-scroll"><table class="parts-table import-table"><thead><tr>
+      <th></th><th>Part</th><th>Type</th><th>Qty</th><th>Unit cost</th><th></th>
+    </tr></thead><tbody>${data.parts.map((p, i) => {
+      const dup = have.has(p.name.toLowerCase());
+      return `
+      <tr data-index="${i}">
+        <td><input type="checkbox" class="import-pick" ${dup ? '' : 'checked'} aria-label="Add this part"></td>
+        <td><input class="import-name" value="${esc(p.name)}">
+          <small>${esc(p.notes || '')}${dup ? ' <b>(already in this project)</b>' : ''}</small></td>
+        <td><select class="import-category">${['electronics', 'parts', 'supplies'].map(c =>
+          `<option value="${c}" ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
+        <td><input class="import-qty" type="number" min="1" value="${p.quantity}"></td>
+        <td><input class="import-cost" type="number" min="0" step="0.01" value="${p.unit_cost ?? ''}"></td>
+        <td>${safeUrl(p.purchase_url) ? `<a href="${esc(p.purchase_url)}" target="_blank" rel="noopener noreferrer">store</a>` : ''}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>
+    <div class="row"><button class="parts-import-add">Add ticked parts to this project</button></div>`;
+}
+
+async function addImportedParts(card, projectId) {
+  const source = importedParts.get(card) || [];
+  const rows = [...card.querySelectorAll('.import-table tbody tr')].filter(r => r.querySelector('.import-pick').checked);
+  if (!rows.length) { card.querySelector('.parts-import-status').textContent = 'Tick at least one part.'; return; }
+  const parts = rows.map(r => ({
+    name: r.querySelector('.import-name').value,
+    category: r.querySelector('.import-category').value,
+    quantity: r.querySelector('.import-qty').value,
+    unit_cost: r.querySelector('.import-cost').value,
+    purchase_url: source[parseInt(r.dataset.index)].purchase_url,
+    notes: source[parseInt(r.dataset.index)].notes,
+  }));
+  const res = await jsonRequest('POST', `/api/projects/${projectId}/parts/bulk`, { parts });
+  if (!res.ok) { card.querySelector('.parts-import-status').textContent = await sourceErrorText(res); return; }
+  loadProjects();
+}
 
 // Fills in filament grams from the print estimate, using the material of the
 // model's first assigned spool (PLA if none yet). With several filament lines
@@ -973,6 +1053,164 @@ $('#projects-list').addEventListener('change', async (e) => {
     if (!res.ok) alert('Quantity owned must be a whole number, 0 or more.');
     loadProjects();
   }
+});
+
+// ---------- Match the whole library (review queue) ----------
+const MATCH_PAGE = 20;
+let matchOffset = 0;
+let matchTotal = 0;
+let matchItems = [];
+let matchPoll = null;
+
+function matchLinkOptions() {
+  return {
+    images: $('#match-opt-images').checked,
+    fill_details: $('#match-opt-fill').checked,
+    add_tags: $('#match-opt-tags').checked,
+  };
+}
+
+async function loadMatches() {
+  await refreshMatchStatus();
+  await loadMatchQueue();
+}
+
+async function refreshMatchStatus() {
+  const res = await fetch('/api/source-match/status');
+  if (!res.ok) return;
+  const { job, summary } = await res.json();
+  $('#match-summary').innerHTML = [
+    ['Models', summary.total], ['Linked', summary.linked], ['Waiting for review', summary.waiting_review],
+    ['No match found', summary.no_match], ['Skipped', summary.skipped], ['Not checked yet', summary.unchecked],
+  ].map(([label, n]) => `<div class="match-stat"><b>${n}</b><span>${label}</span></div>`).join('');
+  $('#match-start').disabled = job.running;
+  $('#match-stop').classList.toggle('hidden', !job.running);
+  $('#match-progress').textContent = job.running
+    ? `Searching... ${job.checked} of ${job.total} checked, ${job.with_candidates} with matches${job.errors ? `, ${job.errors} errors` : ''}`
+    : (job.message ? `${job.message}${job.checked ? ` (${job.checked} checked, ${job.with_candidates} with matches)` : ''}` : '');
+  if (job.running && !matchPoll) {
+    matchPoll = setInterval(async () => {
+      await refreshMatchStatus();
+      await loadMatchQueue();
+    }, 2500);
+  } else if (!job.running && matchPoll) {
+    clearInterval(matchPoll);
+    matchPoll = null;
+  }
+}
+
+async function loadMatchQueue() {
+  const minScore = $('#match-min').value;
+  const res = await fetch(`/api/source-match/queue?offset=${matchOffset}&limit=${MATCH_PAGE}&min_score=${minScore}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  matchTotal = data.total;
+  if (!data.items.length && matchOffset > 0) { matchOffset = Math.max(0, matchOffset - MATCH_PAGE); return loadMatchQueue(); }
+  matchItems = data.items;
+  const ticked = new Set([...$$('.match-pick:checked')].map(c => c.closest('.match-row').dataset.model));
+  $('#match-queue').innerHTML = data.items.length ? data.items.map(renderMatchRow).join('')
+    : '<p class="muted">Nothing to review. Click "Find matches" to look up the models that are not linked yet.</p>';
+  $$('.match-pick').forEach(c => { if (ticked.has(c.closest('.match-row').dataset.model)) c.checked = true; });
+  const pages = Math.max(1, Math.ceil(matchTotal / MATCH_PAGE));
+  $('#match-pager').classList.toggle('hidden', matchTotal <= MATCH_PAGE);
+  $('#match-page-info').textContent = `Page ${Math.floor(matchOffset / MATCH_PAGE) + 1} of ${pages} (${matchTotal} to review)`;
+  $('#match-prev').disabled = matchOffset === 0;
+  $('#match-next').disabled = matchOffset + MATCH_PAGE >= matchTotal;
+}
+
+function renderMatchRow(item) {
+  const m = item.model;
+  const thumb = m.thumbnail_path
+    ? `<img src="/api/library/thumbnails/${esc(m.thumbnail_path)}" loading="lazy" alt="">`
+    : `<div class="source-noimg">${esc(m.extension)}</div>`;
+  return `
+    <div class="match-row" data-model="${m.id}">
+      <div class="match-model">
+        <input type="checkbox" class="match-pick" aria-label="Link the best match for ${esc(m.filename)}">
+        ${thumb}
+        <div class="match-name" title="${esc(m.filename)}">${esc(m.filename)}</div>
+        <button class="match-skip">None of these</button>
+      </div>
+      <div class="match-candidates">${item.candidates.map((c, i) => `
+        <div class="match-candidate ${i === 0 ? 'best' : ''}" data-index="${i}">
+          ${c.thumbnail ? `<img src="${esc(c.thumbnail)}" loading="lazy" referrerpolicy="no-referrer" alt="">` : '<div class="source-noimg"></div>'}
+          <div class="match-candidate-info">
+            <b>${esc(c.title)}</b>
+            <div class="muted">${esc(PROVIDER_LABELS[c.provider] || c.provider)} &middot; ${esc(c.designer || '')}${c.license ? ' &middot; ' + esc(c.license) : ''} &middot; ${Math.round(c.score * 100)}%</div>
+            ${safeHttpUrl(c.url) ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">view listing</a>` : ''}
+          </div>
+          <button class="match-link">Link</button>
+        </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+async function linkMatch(modelId, candidate) {
+  const res = await jsonRequest('POST', `/api/library/models/${modelId}/source`,
+    { provider: candidate.provider, source_id: candidate.source_id, ...matchLinkOptions() });
+  return res.ok ? null : await sourceErrorText(res);
+}
+
+$('#match-start').addEventListener('click', async () => {
+  const res = await jsonRequest('POST', '/api/source-match/start', { recheck_none: $('#match-recheck').checked });
+  if (!res.ok) $('#match-progress').textContent = await sourceErrorText(res);
+  matchOffset = 0;
+  await refreshMatchStatus();
+});
+$('#match-stop').addEventListener('click', async () => {
+  await fetch('/api/source-match/stop', { method: 'POST' });
+  $('#match-progress').textContent = 'Stopping...';
+});
+$('#match-min').addEventListener('change', () => { matchOffset = 0; loadMatchQueue(); });
+$('#match-prev').addEventListener('click', () => { matchOffset = Math.max(0, matchOffset - MATCH_PAGE); loadMatchQueue(); });
+$('#match-next').addEventListener('click', () => { matchOffset += MATCH_PAGE; loadMatchQueue(); });
+$('#match-select-high').addEventListener('click', () => {
+  matchItems.forEach(item => {
+    const box = document.querySelector(`.match-row[data-model="${item.model.id}"] .match-pick`);
+    if (box) box.checked = item.best_score >= 0.9;
+  });
+});
+$('#match-select-none').addEventListener('click', () => $$('.match-pick').forEach(c => { c.checked = false; }));
+
+$('#match-queue').addEventListener('click', async (e) => {
+  const row = e.target.closest('.match-row');
+  if (!row) return;
+  const modelId = parseInt(row.dataset.model);
+  const item = matchItems.find(i => i.model.id === modelId);
+  if (e.target.classList.contains('match-skip')) {
+    await fetch(`/api/source-match/models/${modelId}/skip`, { method: 'POST' });
+  } else if (e.target.classList.contains('match-link')) {
+    e.target.disabled = true;
+    e.target.textContent = 'Linking...';
+    const problem = await linkMatch(modelId, item.candidates[parseInt(e.target.closest('.match-candidate').dataset.index)]);
+    if (problem) { e.target.disabled = false; e.target.textContent = 'Link'; $('#match-link-status').textContent = problem; return; }
+  } else {
+    return;
+  }
+  await refreshMatchStatus();
+  await loadMatchQueue();
+});
+
+$('#match-link-selected').addEventListener('click', async () => {
+  const picks = [...$$('.match-pick:checked')].map(c => parseInt(c.closest('.match-row').dataset.model));
+  if (!picks.length) { $('#match-link-status').textContent = 'Tick at least one row first.'; return; }
+  if (!confirm(`Link the best match for ${picks.length} model(s)? Each one downloads a few pictures, so this can take a little while.`)) return;
+  const button = $('#match-link-selected');
+  button.disabled = true;
+  let done = 0;
+  const problems = [];
+  for (const modelId of picks) {
+    $('#match-link-status').textContent = `Linking ${done + 1} of ${picks.length}...`;
+    const item = matchItems.find(i => i.model.id === modelId);
+    const problem = item && item.candidates.length ? await linkMatch(modelId, item.candidates[0]) : 'no candidate';
+    if (problem) problems.push(`${item ? item.model.filename : modelId}: ${problem}`);
+    done += 1;
+  }
+  button.disabled = false;
+  $('#match-link-status').textContent = `Linked ${picks.length - problems.length} of ${picks.length}.`
+    + (problems.length ? ` Problems: ${problems.slice(0, 3).join('; ')}` : '');
+  await refreshMatchStatus();
+  await loadMatchQueue();
 });
 
 // ---------- Collections ----------

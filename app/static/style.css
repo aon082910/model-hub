@@ -99,6 +99,24 @@ fieldset { border: 1px solid var(--border); border-radius: 6px; }
 .source-result img, .source-noimg { width: 64px; height: 64px; flex: 0 0 64px; object-fit: cover; border-radius: 4px; background: #0d0f12; }
 .source-result-info { flex: 1; min-width: 0; }
 .source-result-info a { color: var(--accent); font-size: 12px; }
+.parts-import-bar { margin-top: 8px; }
+.parts-import { margin-top: 8px; padding: 10px; border: 1px dashed var(--border); border-radius: 6px; }
+.import-table input.import-name { width: 100%; min-width: 180px; }
+.import-table input.import-qty, .import-table input.import-cost { width: 80px; }
+.match-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.match-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; min-width: 110px; }
+.match-stat b { display: block; font-size: 20px; }
+.match-stat span { color: var(--muted); font-size: 12px; }
+.match-row { display: flex; gap: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.match-model { flex: 0 0 150px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.match-model img, .match-model .source-noimg { width: 110px; height: 80px; object-fit: cover; border-radius: 4px; background: #0d0f12; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+.match-name { font-size: 12px; overflow-wrap: anywhere; }
+.match-candidates { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.match-candidate { display: flex; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.match-candidate.best { border-color: var(--accent); }
+.match-candidate img, .match-candidate .source-noimg { width: 64px; height: 64px; flex: 0 0 64px; object-fit: cover; border-radius: 4px; background: #0d0f12; }
+.match-candidate-info { flex: 1; min-width: 0; }
+.match-candidate-info a { color: var(--accent); font-size: 12px; }
 #shopping-list { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px 14px 10px; margin-bottom: 14px; }
 
 /* ---------- Mobile ---------- */
@@ -121,6 +139,8 @@ fieldset { border: 1px solid var(--border); border-radius: 6px; }
   .modal-content { width: 100% !important; max-width: 100vw; height: 100%; max-height: 100vh; border-radius: 0; overflow-y: auto; padding: 12px; }
   #viewer-canvas-wrap { height: 40vh; }
   .settings-form { max-width: 100%; }
+  .match-row { flex-direction: column; }
+  .match-model { flex-basis: auto; flex-direction: row; align-items: center; flex-wrap: wrap; }
   .pagination { justify-content: center; }
   .pagination > span { min-width: 0; }
 }

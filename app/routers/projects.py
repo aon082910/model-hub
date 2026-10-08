@@ -144,7 +144,8 @@ def _project_json(session: Session, project: Project) -> dict:
     if model_ids:
         models = [
             {"id": m.id, "filename": m.filename, "thumbnail_path": m.thumbnail_path,
-             "extension": m.extension, "filament": lines_by_model.get(m.id, []),
+             "extension": m.extension, "source_provider": m.source_provider, "source_id": m.source_id,
+             "filament": lines_by_model.get(m.id, []),
              "filament_grams": round(sum(l["grams"] for l in lines_by_model.get(m.id, [])), 2)}
             for m in session.exec(select(Model3D).where(Model3D.id.in_(model_ids))).all()
         ]
@@ -356,10 +357,10 @@ def delete_project(project_id: int, session: Session = Depends(get_session)):
 
 # --- Parts (bill of materials) ---
 
-@router.post("/{project_id}/parts")
-def add_part(project_id: int, payload: dict, session: Session = Depends(get_session)):
-    _get_project(session, project_id)
-    part = ProjectPart(
+def _build_part(project_id: int, payload: dict) -> ProjectPart:
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "each part must be an object")
+    return ProjectPart(
         project_id=project_id,
         name=_clean_text(payload.get("name"), "name", required=True),
         category=_clean_choice(payload.get("category", "electronics"), "category", PART_CATEGORIES),
@@ -369,10 +370,42 @@ def add_part(project_id: int, payload: dict, session: Session = Depends(get_sess
         purchase_url=_clean_text(payload.get("purchase_url"), "purchase_url"),
         notes=_clean_text(payload.get("notes"), "notes"),
     )
+
+
+@router.post("/{project_id}/parts")
+def add_part(project_id: int, payload: dict, session: Session = Depends(get_session)):
+    _get_project(session, project_id)
+    part = _build_part(project_id, payload)
     session.add(part)
     session.commit()
     session.refresh(part)
     return _part_json(part)
+
+
+MAX_BULK_PARTS = 200
+
+
+@router.post("/{project_id}/parts/bulk")
+def add_parts_bulk(project_id: int, payload: dict, session: Session = Depends(get_session)):
+    """Add several parts at once (e.g. a listing's parts list). All are checked
+    first, so one bad row adds nothing rather than half the list."""
+    _get_project(session, project_id)
+    rows = payload.get("parts")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "parts must be a non-empty list")
+    if len(rows) > MAX_BULK_PARTS:
+        raise HTTPException(400, f"at most {MAX_BULK_PARTS} parts at a time")
+    parts = []
+    for index, row in enumerate(rows, start=1):
+        try:
+            parts.append(_build_part(project_id, row))
+        except HTTPException as e:
+            raise HTTPException(400, f"part {index}: {e.detail}")
+    session.add_all(parts)
+    session.commit()
+    for part in parts:
+        session.refresh(part)
+    return {"added": len(parts), "parts": [_part_json(p) for p in parts]}
 
 
 @router.patch("/{project_id}/parts/{part_id}")

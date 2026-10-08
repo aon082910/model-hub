@@ -324,3 +324,97 @@ def test_models_list_and_detail_include_tags(authed, sites):
     assert [t["name"] for t in authed.get(f"/api/library/models/{mid}").json()["tags"]] == ["benchy", "boat"]
     untagged = _import_model(authed, "tags-none.stl")
     assert authed.get(f"/api/library/models/{untagged['id']}").json()["tags"] == []
+
+
+# ---------- parts lists (MakerWorld) ----------
+
+PARTS_EXTENSION = {
+    "boms": [
+        {"sku": "B-AA041", "quantity": 2, "url": "https://store.bambulab.com/products/m3?id=1",
+         "title": "M3x25 SHCS Machine Screw (5PCS) - AA041", "displayTitle": "M3x25 SHCS Machine Screw (5PCS) - AA041",
+         "parentTitle": "M3 Socket Head Cap Machine Screws (SHCS)",
+         "displayParentTitle": "M3 Socket Head Cap Machine Screws (SHCS)", "priceInfo": {"priceX100": 0}},
+        {"sku": "B-PG001", "quantity": 4, "url": "http://insecure.example.com/x", "title": "9g Servo (1PCS)",
+         "parentTitle": "9g Servo Motor", "priceInfo": {"priceX100": 0}},
+        {"sku": "B-NOPRICE", "quantity": 1, "title": "Lamp Base", "priceInfo": {"priceX100": 1250, "code": "USD"}},
+    ],
+    "boms_v2": [{"productSkuList": [{"sku": "b-aa041", "price": 1.06, "currency": "USD"},
+                                    {"sku": "b-pg001", "price": 5.49, "currency": "EUR"}]}],
+    "boms_of_other_part_list": [
+        {"name": "Arduino Uno", "quantity": 1, "note": ""},
+        {"name": "- HC-SR04 Distance Sensor\n- 2mm diameter screws\n- 3 x wires", "quantity": 1},
+    ],
+    "boms_of_other_parts": "- HC-SR04 Distance Sensor\n- 2x MG90S servo\n1. Super glue",
+    "boms_of_filaments": [{"title": "PLA Basic"}],
+}
+
+
+def test_classify_part():
+    cases = {
+        "M3 Button Head Cap Machine Screws": "parts", "608ZZ bearing": "parts", "Heat-set insert M3": "parts",
+        "MG90S Servo": "electronics", "Arduino Uno or Mega": "electronics", "Jumper Cables": "electronics",
+        "Puck Lights": "electronics", "Super glue": "supplies", "Solder wire": "supplies",
+        "Cable ties": "supplies", "Mystery widget": "parts",
+    }
+    for name, expected in cases.items():
+        assert sources.classify_part(name) == expected, name
+
+
+def test_parse_free_parts():
+    rows = sources.parse_free_parts("- 2x MG90S servo\n* Jumper wires x10\n  3 M3 screws\n2mm diameter screws\n1. DeskPi board\n\n")
+    assert [(r["name"], r["quantity"]) for r in rows] == [
+        ("MG90S servo", 2), ("Jumper wires", 10), ("M3 screws", 3), ("2mm diameter screws", 1), ("DeskPi board", 1)]
+    assert sources.parse_free_parts(None) == []
+
+
+def test_makerworld_parts():
+    rows = sources.makerworld_parts(PARTS_EXTENSION)
+    by_name = {r["name"]: r for r in rows}
+    screw = by_name["M3 Socket Head Cap Machine Screws (SHCS) - M3x25 SHCS Machine Screw (5PCS) - AA041"]
+    assert (screw["quantity"], screw["unit_cost"], screw["category"], screw["kind"]) == (2, 1.06, "parts", "store")
+    assert screw["purchase_url"].startswith("https://store.bambulab.com/")
+    assert "sold in packs" in screw["notes"]                    # "x2 of a 5-pack": the person decides how many to buy
+
+    servo = by_name["9g Servo Motor - 9g Servo (1PCS)"]
+    assert servo["unit_cost"] == 5.49 and servo["quantity"] == 4 and servo["category"] == "electronics"
+    assert servo["purchase_url"] is None                          # only https links are kept
+    assert "EUR" in servo["notes"]
+
+    assert by_name["Lamp Base"]["unit_cost"] == 12.5              # falls back to the item's own price
+
+    assert by_name["Arduino Uno"]["kind"] == "listed"
+    assert by_name["wires"]["quantity"] == 3
+    assert by_name["MG90S servo"]["quantity"] == 2
+    assert by_name["Super glue"]["category"] == "supplies"
+    names = [r["name"].lower() for r in rows]
+    assert names.count("hc-sr04 distance sensor") == 1           # listed twice, shown once
+    assert not any("pla basic" in n for n in names)               # filament is tracked separately
+    assert sources.makerworld_parts({}) == []
+
+
+def test_parts_endpoint(authed, sites, monkeypatch):
+    monkeypatch.setitem(MAKERWORLD_DESIGN, "designExtension", {**MAKERWORLD_DESIGN["designExtension"], **PARTS_EXTENSION})
+    r = authed.get("/api/sources/parts", params={"url": "https://makerworld.com/en/models/40146-benchy"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["listing"]["title"] == "Benchy Bambu Pla Basic" and data["note"] == ""
+    assert len(data["parts"]) >= 8
+    assert all(p["category"] in ("electronics", "parts", "supplies") for p in data["parts"])
+
+    pr = authed.get("/api/sources/parts", params={"provider": "printables", "source_id": "3161"}).json()
+    assert pr["parts"] == [] and "Printables" in pr["note"]
+    assert authed.get("/api/sources/parts").status_code == 400
+    assert authed.get("/api/sources/parts", params={"url": "https://evil.com/models/1"}).status_code == 400
+    sites.makerworld_status = 404
+    assert authed.get("/api/sources/parts", params={"url": "https://makerworld.com/en/models/1"}).status_code == 502
+
+
+def test_printables_search_thumbnails_are_small_versions(sites):
+    thumb = sources._printables_thumbnail
+    assert thumb("media/prints/3161/images/20206_x/benchy.jpg") == \
+        "https://media.printables.com/media/prints/3161/images/20206_x/thumbs/inside/320x320/jpg/benchy.jpg"
+    assert thumb("media/prints/1/images/a/Cover.PNG").endswith("/thumbs/inside/320x320/png/Cover.PNG")
+    assert thumb("media/prints/1/images/a/pic.jpeg") == "https://media.printables.com/media/prints/1/images/a/pic.jpeg"
+    assert thumb(None) is None
+    found = sources.search("benchy", providers=("printables",))
+    assert "/thumbs/inside/320x320/" in found["results"][0]["thumbnail"]

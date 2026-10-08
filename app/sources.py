@@ -115,6 +115,20 @@ def _printables_media(file_path: Optional[str]) -> Optional[str]:
     return PRINTABLES_MEDIA + file_path.lstrip("/") if file_path else None
 
 
+def _printables_thumbnail(file_path: Optional[str]) -> Optional[str]:
+    """A 320px version of a Printables picture for result lists (a few KB
+    instead of several MB). Their image host resizes when the path carries
+    thumbs/inside/<size>/<format>/ and the format matches the file's extension;
+    anything else falls back to the original."""
+    if not file_path:
+        return None
+    folder, _, name = file_path.lstrip("/").rpartition("/")
+    extension = name.rpartition(".")[2].lower()
+    if folder and extension in ("jpg", "png", "webp", "gif"):
+        return f"{PRINTABLES_MEDIA}{folder}/thumbs/inside/320x320/{extension}/{name}"
+    return _printables_media(file_path)
+
+
 # ---------- details ----------
 
 _PRINTABLES_DETAIL = """
@@ -164,6 +178,7 @@ def _printables_details(client: httpx.Client, source_id: str) -> dict:
         "images": images,
         "likes": item.get("likesCount"),
         "downloads": item.get("downloadCount"),
+        "parts": [],
     }
 
 
@@ -194,7 +209,125 @@ def _makerworld_details(client: httpx.Client, source_id: str) -> dict:
         "images": images,
         "likes": data.get("likeCount"),
         "downloads": data.get("downloadCount"),
+        "parts": makerworld_parts(extension),
     }
+
+
+# ---------- parts lists (MakerWorld "what you need to buy") ----------
+
+_SUPPLY_WORDS = re.compile(
+    r"glue|adhesive|\btape\b|solder|flux|paint|primer|sandpaper|zip ?ties?|cable ?ties?|epoxy|lubricant|"
+    r"grease|cleaning|alcohol|velcro|heat ?shrink|thread ?locker|loctite", re.I)
+_ELECTRONIC_WORDS = re.compile(
+    r"servo|arduino|esp[ -]?\d|raspberry|\bpi\b|pico|\bleds?\b|neopixel|sensor|display|oled|lcd|\bboard\b|"
+    r"controller|batter|motor|switch|button|wires?\b|cables?\b|jumper|resistor|capacitor|usb|module|relay|"
+    r"speaker|buzzer|microcontroller|breadboard|pcb|chip|transistor|diode|\bfans?\b|stepper|driver|camera|"
+    r"antenna|charger|power supply|psu|tea ?light|candle|\blights?\b|\blamps?\b|cyberbrick|bluetooth|wifi", re.I)
+_HARDWARE_WORDS = re.compile(
+    r"screws?|bolts?|\bnuts?\b|washers?|inserts?|bearings?|standoffs?|spacers?|\brods?\b|springs?|magnets?|"
+    r"hinges?|brackets?|rivets?|\bbhcs\b|\bshcs\b|\bpins?\b", re.I)
+_UNIT_AFTER_NUMBER = re.compile(r"^(mm|cm|m|v|a|mah|k|uf|ohm|gb|mb|in|inch|pin|pcs)\b", re.I)
+
+
+def classify_part(name: str) -> str:
+    """Best guess at electronics / parts / supplies from a part's name. It is
+    only a default -- every imported row can be changed before it is added."""
+    if _SUPPLY_WORDS.search(name):
+        return "supplies"
+    if _HARDWARE_WORDS.search(name):          # before electronics: "Button Head" screws, "LED standoffs"
+        return "parts"
+    if _ELECTRONIC_WORDS.search(name):
+        return "electronics"
+    return "parts"
+
+
+def _store_part_name(item: dict) -> str:
+    parent = (item.get("displayParentTitle") or item.get("parentTitle") or "").strip()
+    title = (item.get("displayTitle") or item.get("title") or "").strip()
+    if not parent or parent.lower() in title.lower():
+        return title or parent
+    return f"{parent} - {title}" if title else parent
+
+
+def parse_free_parts(text: str) -> list:
+    """A listing's plain-text parts ('- 2x MG90S servo' per line) as rows."""
+    rows = []
+    for line in re.split(r"[\r\n]+", text or ""):
+        line = re.sub(r"^[\s\-\*\u2022]+", "", line)
+        line = re.sub(r"^\d{1,2}[.)]\s+", "", line).strip()      # "1. DeskPi board" list numbering
+        if not line:
+            continue
+        quantity, name = 1, line
+        lead = re.match(r"^(\d{1,3})\s*[x\u00d7]?\s+(.+)$", line)
+        trail = re.match(r"^(.+?)\s*[x\u00d7]\s*(\d{1,3})$", line)
+        if lead and not _UNIT_AFTER_NUMBER.match(lead.group(2)):
+            quantity, name = int(lead.group(1)), lead.group(2).strip()
+        elif trail:
+            quantity, name = int(trail.group(2)), trail.group(1).strip()
+        rows.append({"name": name[:200], "quantity": max(1, quantity), "unit_cost": None,
+                     "purchase_url": None, "notes": None})
+    return rows
+
+
+def makerworld_parts(extension: dict) -> list:
+    """Every non-filament part a MakerWorld listing says you need: Bambu Lab
+    store items (with link and price) and the designer's own free-text list.
+    Rows are {name, category, quantity, unit_cost, purchase_url, notes, kind}."""
+    prices = {}
+    for spu in extension.get("boms_v2") or []:
+        for sku in spu.get("productSkuList") or []:
+            if sku.get("sku") and sku.get("price"):
+                prices[str(sku["sku"]).lower()] = (sku["price"], sku.get("currency") or "")
+
+    rows = []
+    for item in (extension.get("boms") or []) + (extension.get("boms_of_materials") or []):
+        name = _store_part_name(item)
+        if not name:
+            continue
+        price, currency = prices.get(str(item.get("sku") or "").lower(), (None, ""))
+        if price is None and (item.get("priceInfo") or {}).get("priceX100"):
+            price, currency = item["priceInfo"]["priceX100"] / 100, item["priceInfo"].get("code") or ""
+        link = item.get("url") or ""
+        quantity = max(1, int(item.get("quantity") or 1))
+        note = "From the listing's Bambu Lab store list"
+        if re.search(r"\(\d+\s*pcs\)", name, re.I):
+            # the listing's "x11" and the pack size in the name don't say how many packs to buy
+            note += f"; listing quantity x{quantity}, sold in packs - set how many you need"
+        if currency and currency != "USD":
+            note += f" (price in {currency})"
+        rows.append({
+            "name": name[:200], "quantity": quantity, "unit_cost": price,
+            "purchase_url": link if link.startswith("https://") else None,
+            "notes": note, "kind": "store",
+        })
+    for entry in extension.get("boms_of_other_part_list") or []:
+        name = (entry.get("name") or "").strip()
+        if not name:
+            continue
+        note = (entry.get("note") or "").strip()[:200] or "From the listing's parts list"
+        if "\n" in name:
+            # a designer pasted a whole list into one entry: split it into rows
+            for row in parse_free_parts(name):
+                rows.append({**row, "notes": note, "kind": "listed"})
+            continue
+        rows.append({
+            "name": name[:200], "quantity": max(1, int(entry.get("quantity") or 1)), "unit_cost": None,
+            "purchase_url": None, "notes": note, "kind": "listed",
+        })
+    free = extension.get("boms_of_other_parts")
+    if isinstance(free, str):
+        for row in parse_free_parts(free):
+            rows.append({**row, "notes": "From the listing's parts list", "kind": "listed"})
+
+    unique, seen = [], set()
+    for row in rows:                       # the same part is often listed twice (structured list and free text)
+        key = row["name"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        row["category"] = classify_part(row["name"])
+        unique.append(row)
+    return unique
 
 
 # ---------- search ----------
@@ -235,7 +368,7 @@ def _search_printables(client: httpx.Client, query: str, limit: int) -> list:
         "title": i.get("name") or "",
         "designer": (i.get("user") or {}).get("publicUsername") or "",
         "license": (i.get("license") or {}).get("abbreviation") or (i.get("license") or {}).get("name") or "",
-        "thumbnail": _printables_media((i.get("image") or {}).get("filePath")),
+        "thumbnail": _printables_thumbnail((i.get("image") or {}).get("filePath")),
     } for i in items]
 
 

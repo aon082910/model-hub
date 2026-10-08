@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, engine
 from app.config import SCAN_INTERVAL_SECONDS
-from app.routers import library, tags, collections, filament, inventory, projects, sources, queue, settings, ai, slicer, auth_router
+from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, queue, settings, ai, slicer, auth_router
 from app.auth import path_requires_auth, request_is_authenticated, bootstrap_from_env, ensure_extension_api_key
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +36,7 @@ app.include_router(filament.router)
 app.include_router(projects.router)
 app.include_router(inventory.router)
 app.include_router(sources.router)
+app.include_router(source_match.router)
 app.include_router(queue.router)
 app.include_router(settings.router)
 app.include_router(ai.router)

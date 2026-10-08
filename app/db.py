@@ -3,7 +3,10 @@ from sqlalchemy import inspect, text
 from sqlmodel import SQLModel, create_engine, Session
 from app.config import DB_PATH
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+# timeout: how long a query waits for another connection's lock (SQLite's default
+# is 5s). Background jobs (scan, tagging, matching) write while the UI polls them,
+# so waiting a little longer beats surfacing "database is locked".
+engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False, "timeout": 30})
 logger = logging.getLogger("modelhub.db")
 
 _SQLITE_TYPES = {"INTEGER": "INTEGER", "VARCHAR": "TEXT", "BOOLEAN": "BOOLEAN",

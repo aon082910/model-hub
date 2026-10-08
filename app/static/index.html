@@ -21,6 +21,7 @@
       <button data-tab="collections">Collections</button>
       <button data-tab="projects">Projects</button>
       <button data-tab="supplies">Supplies</button>
+      <button data-tab="matches">Matches</button>
       <button data-tab="filament">Filament</button>
       <button data-tab="queue">Print Queue</button>
       <button data-tab="settings">Settings</button>
@@ -118,6 +119,42 @@
       </tr></thead><tbody></tbody></table>
     </div>
     <p id="supplies-empty" class="muted hidden">Nothing here yet.</p>
+  </section>
+
+  <section id="tab-matches" class="tab">
+    <h2>Match your library to Printables / MakerWorld</h2>
+    <p class="muted">Looks up each model that is not linked yet by its file name and keeps the closest listings here for you to confirm.
+      Nothing is linked until you say so, and matching by name can be wrong, so check the picture and title.</p>
+    <div id="match-summary" class="match-summary"></div>
+    <div class="toolbar">
+      <button id="match-start">Find matches</button>
+      <button id="match-stop" class="hidden">Stop</button>
+      <label><input type="checkbox" id="match-recheck"> Also search again for models that had no match</label>
+      <span id="match-progress" class="muted"></span>
+    </div>
+    <div class="toolbar">
+      <label>Show matches of at least
+        <select id="match-min">
+          <option value="0">any</option><option value="0.5">50%</option><option value="0.7">70%</option>
+          <option value="0.85">85%</option><option value="0.95">95%</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="match-opt-images" checked> Save pictures</label>
+      <label><input type="checkbox" id="match-opt-fill" checked> Fill designer / license</label>
+      <label><input type="checkbox" id="match-opt-tags"> Add the site's tags</label>
+    </div>
+    <div class="toolbar">
+      <button id="match-select-high">Tick all 90%+</button>
+      <button id="match-select-none">Untick all</button>
+      <button id="match-link-selected">Link ticked (best match each)</button>
+      <span id="match-link-status" class="muted"></span>
+    </div>
+    <div id="match-queue"></div>
+    <div class="pagination hidden" id="match-pager">
+      <button id="match-prev" type="button">Previous</button>
+      <span id="match-page-info"></span>
+      <button id="match-next" type="button">Next</button>
+    </div>
   </section>
 
   <section id="tab-filament" class="tab">

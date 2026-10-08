@@ -79,6 +79,8 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Shopping list export | Done — the Projects tab's **Shopping List** can be downloaded as CSV or plain text, or copied to the clipboard (for a notes app or your phone). **Combine identical parts across projects** merges the same part from different projects into one line; each line also shows how many you already have in Supplies |
 | Supplies on hand | Done — a **Supplies** tab for the electronics, parts and supplies you own: quantity, a low-stock threshold (flagged and filterable), location (bin/drawer), unit cost, search, and CSV export. Typing a project part name suggests items from here and pre-fills its type and cost |
 | Match models to Printables / MakerWorld | Done — see [Matching models to site listings](#matching-models-to-site-listings) below |
+| Match your whole library | Done — the **Matches** tab runs a background job that searches Printables and MakerWorld for every model that isn't linked yet and keeps the closest listings as a review queue; you link, tick-and-link in bulk, or skip. See [Matching models to site listings](#matching-models-to-site-listings) |
+| Import a listing's parts into a project | Done — paste a MakerWorld link (or use **Import parts** on a model linked to one) to get the listing's store items and parts list as editable rows, then add the ticked ones to the project in one go |
 | Browser extension for Printables/MakerWorld import | Done — `browser-extension/` (Manifest V3), see [Browser extension](#browser-extension) below |
 | Login/auth | Done — see [Auth](#auth) below |
 | Print time / filament weight estimate | Done — see [Print estimates](#print-time--filament-estimates) below |
@@ -105,6 +107,30 @@ are matched automatically from the page address, so they arrive with their detai
 - **Pictures are shrunk** to preview-sized JPEGs (at most 1200 px, up to 6 per model, stored under
   `/config/source_images/`), and oversized images are refused before they are decoded.
 - Matching is by name, so check the match before linking; a wrong link is one click to undo.
+
+### Match your whole library
+
+The **Matches** tab does the lookup for every model that isn't linked yet. **Find matches** starts a background
+job that searches both sites by file name and keeps the best few listings per model (name similarity of 45% or
+better) as candidates. Nothing is linked by the job itself: you review the queue, best matches first.
+
+- **Link** one candidate, or tick rows (**Tick all 90%+** helps) and **Link ticked** to take each row's best
+  match. The pictures / designer-license / tags options above the queue apply to every link you make.
+- **None of these** marks a model as skipped so it stays out of the queue and future runs.
+- The job goes easy on the sites (about one search pair per second), stops by itself if a site rate limits or
+  keeps failing, and can be stopped any time. It remembers what it has checked, so running it again only looks
+  at new models; tick **Also search again for models that had no match** to retry those too.
+- Models whose names say nothing (a hash like `a1b2c3d4e5f6.stl`) are not searched.
+
+### Parts lists from MakerWorld
+
+MakerWorld listings can include what you need to buy besides the print. In a project, **Import parts from a
+MakerWorld listing** (or the **Import parts** button on a model that is linked to a MakerWorld listing) fetches that
+list: Bambu Lab store items (with link and price) and the designer's own parts list (servos, boards, screws...).
+Each row comes with a guessed type (electronics / parts / supplies) and can be edited before adding; parts already
+in the project are flagged and unticked. Filament entries are skipped, since filament is tracked separately.
+A store item's quantity is how the listing counts it, not necessarily packs to buy, so check pack sizes in the name.
+Printables listings have no machine-readable parts list.
 
 ## Auth
 
