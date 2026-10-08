@@ -65,7 +65,7 @@ function ensureViewerColorControl() {
 // Hash routing, so every page has an address that survives a reload and works with
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
-  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(),
+  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(),
   collections: () => loadCollections(), projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
@@ -3283,6 +3283,109 @@ $('#auto-backup-keep').addEventListener('change', () => saveSetting({ auto_backu
 $('#low-filament-g').addEventListener('change', () => saveSetting({ low_filament_g: $('#low-filament-g').value }));
 $('#auto-listing-check').addEventListener('change', () => saveSetting({ auto_listing_check: $('#auto-listing-check').checked ? 'true' : 'false' }));
 
+// ---------- Stats ----------
+function barChart(title, rows, valueKey, format) {
+  const max = Math.max(...rows.map(r => r[valueKey]), 0);
+  const width = 600, height = 120, gap = 4;
+  const bar = rows.length ? (width - gap * (rows.length - 1)) / rows.length : 0;
+  const bars = rows.map((r, i) => {
+    const h = max ? Math.max(r[valueKey] ? 2 : 0, Math.round(r[valueKey] / max * (height - 18))) : 0;
+    const x = i * (bar + gap);
+    return `<g><title>${esc(r.month)}: ${esc(format(r[valueKey]))}</title>
+      <rect x="${x}" y="${height - 14 - h}" width="${bar}" height="${h}" rx="2" class="bar"/>
+      <text x="${x + bar / 2}" y="${height - 2}" text-anchor="middle" class="bar-label">${esc(r.month.slice(5))}</text></g>`;
+  }).join('');
+  return `<div class="chart"><h3>${esc(title)} <small class="muted">most in a month: ${esc(format(max))}</small></h3>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}">${bars}</svg></div>`;
+}
+
+async function loadStats() {
+  const months = $('#stats-months').value;
+  const res = await fetch(`/api/stats?months=${months}`);
+  if (!res.ok) { $('#stats-body').innerHTML = '<p class="error-text">Could not load the statistics.</p>'; return; }
+  const d = await res.json();
+  const t = d.totals;
+  const card = (label, value) => `<div class="stat-card"><div class="stat-value">${value}</div><div class="muted">${esc(label)}</div></div>`;
+  const money = v => `$${Number(v).toFixed(2)}`;
+  $('#stats-body').innerHTML = `
+    <div class="stat-cards">
+      ${card('prints', t.prints)}${card('models printed', t.models_printed)}${card('filament used', `${t.grams.toLocaleString()} g`)}
+      ${card('print time', `${t.hours} h`)}${card('filament cost', money(t.cost))}
+      ${card('printer success rate', d.printer_jobs.success_rate == null ? 'n/a' : `${d.printer_jobs.success_rate}%`)}
+      ${card('never printed', `${d.library.never_printed} of ${d.library.models}`)}${card('on spools', `${d.filament.remaining_g.toLocaleString()} g`)}
+    </div>
+    ${barChart('Prints per month', d.per_month, 'prints', v => String(v))}
+    ${barChart('Filament per month (g)', d.per_month, 'grams', v => `${v} g`)}
+    ${barChart('Filament cost per month', d.per_month, 'cost', money)}
+    ${barChart('Models added per month', d.per_month, 'models_added', v => String(v))}
+    <div class="page-grid">
+      <div class="panel"><h3>Most printed</h3>${d.top_models.length ? `<ol class="link-list">${d.top_models.map(m =>
+        `<li><a href="#/model/${m.id}">${esc(m.filename)}</a> <span class="muted">${m.prints} print${m.prints === 1 ? '' : 's'}</span></li>`).join('')}</ol>` : '<p class="muted">Nothing printed yet.</p>'}</div>
+      <div class="panel"><h3>By material</h3>${d.materials.length ? `<ul class="link-list">${d.materials.map(m =>
+        `<li>${esc(m.material)} <span class="muted">${m.grams.toLocaleString()} g</span></li>`).join('')}</ul>` : '<p class="muted">No filament recorded on prints yet.</p>'}
+        <h3>Printer jobs</h3><p class="muted">${d.printer_jobs.done} finished, ${d.printer_jobs.stopped} stopped or failed</p></div>
+    </div>`;
+}
+$('#stats-months').addEventListener('change', loadStats);
+
+// ---------- Updates and API tokens (Settings) ----------
+function versionLine(v) {
+  if (!v) return '';
+  const when = v.checked_at ? ` Checked ${new Date(v.checked_at * 1000).toLocaleString()}.` : '';
+  if (v.update_available) return `You have <b>${esc(v.current)}</b>; <b>${esc(v.latest)}</b> is out. <a href="${esc(v.url)}" target="_blank" rel="noopener noreferrer">What's new</a>. On Unraid, update the container to get it.${when}`;
+  return `You have <b>${esc(v.current)}</b>${v.latest ? ' (the newest release)' : ''}.${when}`;
+}
+
+async function loadVersion() {
+  const res = await fetch('/api/system/version');
+  if (!res.ok) return;
+  const v = await res.json();
+  $('#version-line').innerHTML = versionLine(v);
+  $('#update-check-on').checked = v.enabled !== false;
+  $('#update-badge').classList.toggle('hidden', !v.update_available);
+  if (v.update_available) $('#update-badge').textContent = `Update ${v.latest}`;
+}
+async function refreshUpdateBadge() { if (currentUser.role === 'admin') await loadVersion(); }
+
+$('#update-check-on').addEventListener('change', () => saveSetting({ update_check: $('#update-check-on').checked ? 'true' : 'false' }));
+$('#update-check-now').addEventListener('click', async () => {
+  $('#update-status').textContent = 'Checking...';
+  const res = await fetch('/api/system/update-check', { method: 'POST' });
+  $('#update-status').textContent = res.ok ? '' : await sourceErrorText(res);
+  if (res.ok) $('#version-line').innerHTML = versionLine(await res.json());
+  loadVersion();
+});
+
+async function loadTokens() {
+  const res = await fetch('/api/tokens');
+  if (!res.ok) return;
+  const list = (await res.json()).tokens;
+  $('#tokens-list').innerHTML = list.length ? list.map(t => `
+    <div class="user-row" data-id="${t.id}"><b>${esc(t.name)}</b> <span class="badge">${esc(t.scope)}</span> <code>${esc(t.prefix)}...</code>
+      <span class="muted">${t.last_used_at ? 'last used ' + esc(String(t.last_used_at).slice(0, 16).replace('T', ' ')) : 'never used'}${t.expires_at ? ' · expires ' + esc(String(t.expires_at).slice(0, 10)) : ''}</span>
+      <button class="token-revoke danger">Revoke</button></div>`).join('') : '<p class="muted">No tokens yet.</p>';
+}
+$('#token-add').addEventListener('click', async () => {
+  const body = { name: $('#token-name').value, scope: $('#token-scope').value };
+  if ($('#token-expiry').value) body.expires_days = parseInt($('#token-expiry').value);
+  const res = await jsonRequest('POST', '/api/tokens', body);
+  if (!res.ok) { $('#token-status').textContent = await sourceErrorText(res); return; }
+  const made = await res.json();
+  $('#token-name').value = '';
+  $('#token-status').textContent = '';
+  const box = $('#token-new');
+  box.classList.remove('hidden');
+  box.innerHTML = `Copy this key now; it is not shown again:<br><input readonly class="share-url" value="${esc(made.token)}" aria-label="New token"> <button id="token-copy">Copy</button>`;
+  $('#token-copy').onclick = async (e) => { e.target.textContent = (await copyText(made.token)) ? 'Copied' : 'Select + copy'; };
+  loadTokens();
+});
+$('#tokens-list').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('token-revoke')) return;
+  if (!confirm('Revoke this token? Anything using it stops working at once.')) return;
+  await fetch(`/api/tokens/${e.target.closest('.user-row').dataset.id}`, { method: 'DELETE' });
+  loadTokens();
+});
+
 async function loadSettings() {
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
@@ -3307,6 +3410,8 @@ async function loadSettings() {
   await renderSiteSettings(s);
   refreshBackups();
   loadUsers();
+  loadVersion();
+  loadTokens();
   $('#auto-backup').value = s.auto_backup || 'weekly';
   $('#auto-backup-keep').value = s.auto_backup_keep || '';
   $('#low-filament-g').value = s.low_filament_g || '';
@@ -3515,6 +3620,7 @@ async function boot() {
   await loadViewerColor();
   route();
   refreshFollowBadge();
+  refreshUpdateBadge();
 }
 
 async function loadViewerColor() {

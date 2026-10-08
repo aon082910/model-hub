@@ -331,3 +331,14 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
   #tab-labels { display: block !important; }
   .labels-sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 }
+
+/* ---------- Stats, updates ---------- */
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0 16px; }
+.stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.stat-value { font-size: 22px; font-weight: 600; }
+.chart { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+.chart h3 { margin: 4px 0; font-size: 14px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.bar { fill: var(--accent); }
+.bar-label { fill: var(--muted); font-size: 9px; }
+.update-badge { background: #e6b800; color: #14161a; border-radius: 10px; padding: 1px 9px; font-size: 12px; text-decoration: none; font-weight: 600; }

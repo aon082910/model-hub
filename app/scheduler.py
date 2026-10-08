@@ -23,19 +23,21 @@ INTERVALS = {                     # seconds between runs of each job
     "designers": 6 * 3600,
     "low_stock": 6 * 3600,
     "listing_updates": 24 * 3600,
+    "updates": 24 * 3600,
 }
 
 _last_run: dict = {}
 
 
 def _jobs() -> dict:
-    from app import auto_backup, follow_watch, printwatch, source_updates_auto, stock_watch
+    from app import auto_backup, follow_watch, printwatch, source_updates_auto, stock_watch, update_check
     return {
         "printers": printwatch.poll,
         "backup": auto_backup.maybe_backup,
         "designers": follow_watch.check_and_notify,
         "low_stock": stock_watch.check_and_notify,
         "listing_updates": source_updates_auto.maybe_start,
+        "updates": update_check.scheduled,
     }
 
 

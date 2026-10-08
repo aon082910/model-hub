@@ -17,6 +17,9 @@ COPY browser-extension ./browser-extension
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+ARG VERSION=dev
+ENV MODELHUB_VERSION=$VERSION
+
 ENV LIBRARY_PATH=/data \
     CONFIG_PATH=/config \
     MPLCONFIGDIR=/config/matplotlib \

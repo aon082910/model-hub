@@ -320,6 +320,19 @@ class ShareLink(SQLModel, table=True):
     expires_at: Optional[datetime] = None
 
 
+class ApiToken(SQLModel, table=True):
+    """A long-lived key for scripts and other programs. Only a hash is stored; the key is shown once."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    token_hash: str = Field(index=True, unique=True)
+    prefix: str                                  # the first characters, so you can tell tokens apart
+    scope: str = "read"                          # read, write, import
+    created_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+
 class AppUser(SQLModel, table=True):
     """A login besides the first (admin) account, which lives in the settings. role is
     "member" (uses everything except settings, backups and user management) or

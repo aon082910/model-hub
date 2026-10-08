@@ -24,6 +24,7 @@ EVENTS = {
     "low_stock": "A spool or supply is running low",
     "print_done": "A printer finished a print",
     "backup_failed": "A scheduled backup failed",
+    "update_available": "A newer Model Hub release is out",
 }
 
 

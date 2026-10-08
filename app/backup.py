@@ -37,7 +37,7 @@ FORMAT = 1
 PICTURE_FOLDERS = {"source_images": IMAGE_ROOT, "print_photos": PHOTO_ROOT}
 SETTINGS_TABLE = AppSettings.__tablename__
 # logins belong to this installation: never written into a backup, never replaced by a restore
-LOGIN_TABLES = ("appuser", "sharelink")
+LOGIN_TABLES = ("appuser", "sharelink", "apitoken")
 MAX_UNPACKED_BYTES = 4 * 1024 ** 3
 MAX_FILES = 200_000
 KEEP_SAFETY_COPIES = 3

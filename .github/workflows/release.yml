@@ -52,6 +52,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
           tags: |
             allornothing/model-hub:latest
             allornothing/model-hub:${{ steps.v.outputs.version }}

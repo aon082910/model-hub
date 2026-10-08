@@ -40,6 +40,16 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.9.0
+New Stats tab: prints, filament used and its cost, print time per month,
+most printed models, filament by material, printer success rate and how much of
+the library has never been printed. Model Hub now tells the administrator when
+a newer release is out (checked once a day, can be switched off in Settings,
+Updates). Settings, API tokens makes read, write or import keys for scripts and
+other programs. Behind an HTTPS proxy the login cookie is now marked Secure
+(the README has a short reverse proxy guide). No new settings are required; new
+tables are added automatically on first start.
+
 ### 2.8.0
 Several files can now be grouped as versions of one model (v1, v2...), with a
 "Latest versions only" filter. Models and projects can be shared through a

@@ -135,10 +135,10 @@ def ensure_extension_api_key(session: Session) -> str:
 ROLES = ("member", "viewer")
 
 # Only the administrator may use these at all (reading them included)...
-ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers")
+ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens")
 # ...and these they alone may change (members can still look): they delete files from disk
 ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
-ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove"}
+ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-check"}
 # Share links are secrets: viewers may not even list them
 NO_VIEWER_PREFIXES = ("/api/shares",)
 
@@ -161,6 +161,16 @@ def current_user(request: Request, session: Session):
         stored_key = get_setting(session, "extension_api_key")
         if api_key and stored_key and hmac.compare_digest(api_key, stored_key):
             return {"username": "extension", "role": "importer"}
+    bearer = request.headers.get("authorization", "")
+    if bearer.lower().startswith("bearer "):
+        from app import tokens
+        row = tokens.lookup(session, bearer[7:].strip())
+        if row:
+            role = tokens.SCOPE_ROLES.get(row.scope)
+            if role == "importer" and request.url.path not in API_KEY_ALLOWED_PATHS:
+                return None
+            if role:
+                return {"username": f"token:{row.name}", "role": role}
     return None
 
 

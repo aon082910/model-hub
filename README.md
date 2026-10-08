@@ -98,6 +98,9 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Share links | Done — a secret read-only link to a model or a project for someone without a login; downloads and part costs are off unless you switch them on, notes and print history are never shown, links can expire or be revoked |
 | QR labels | Done — printable QR labels for filament spools and supplies; scanning one with a phone camera opens that item |
 | 3D view tools | Done — **Measure** (click two points), **Section** (cut with a plane to look inside) and **Compare** with another version (overlaid in orange, with the size difference) |
+| Statistics | Done — the **Stats** tab: prints, models printed, filament used, print time and filament cost per month (charts for the last 6, 12 or 24 months), most printed models, filament by material, printer success rate (from the finished and cancelled prints printers report), and how much of the library has never been printed |
+| Update notice | Done — Model Hub looks for a newer release once a day (switch off in Settings → Updates; only the public GitHub release information is requested) and shows an *Update* badge to the administrator, plus a notification once per new version |
+| API tokens | Done — **Settings → API tokens**: read, write and import keys for scripts and other programs; shown once, stored only as a hash. See [API tokens](#api-tokens) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -328,6 +331,32 @@ API keys are never shown again after you save them, are never in an error messag
 **Status of testing:** the Moonraker and OctoPrint code follows their documented HTTP APIs and is tested against simulated printers and a stand-in slicer, and the whole flow was
 exercised in a browser against a simulated Klipper host. It has **not** been tried against a real printer or a real slicer, so try it with an idle printer first. Bambu Lab printers
 (which use their own protocol) are not supported.
+
+## API tokens
+
+The administrator makes tokens in **Settings → API tokens** (a name, a scope, optionally an expiry). Send one as `Authorization: Bearer mh_...` on any request:
+
+| Scope | Acts as | Cannot |
+|---|---|---|
+| read | a viewer: looks at everything, changes nothing | |
+| write | a member: everything a member can | Settings, backups, users, printers, tokens, duplicate deletion |
+| import | the browser extension: only `POST /api/library/import` | anything else |
+
+The key is shown once when it is made; only a SHA-256 fingerprint and its first characters are kept, so a lost key means making a new one. Each token shows when it was last used, can be revoked at any time
+(it stops working at once), and tokens are left out of backups and untouched by a restore. A token cannot make tokens. Example: `curl -H "Authorization: Bearer mh_..." http://server:8420/api/stats`.
+The interactive API documentation is at `/docs` on your server.
+
+## Behind a reverse proxy (HTTPS)
+
+Model Hub speaks plain HTTP on port 8420. To reach it from outside your network (or to use camera or clipboard features that need a secure page) put an HTTPS proxy in front of it and **expose as little as you can**:
+the administrator login protects everything except share links (`/share/...`), which are public to anyone holding the secret link.
+
+- Pass `X-Forwarded-Proto` so the session cookie is marked **Secure** (Model Hub does this automatically when it sees `https` in that header).
+- Allow large uploads (model files are big): nginx `client_max_body_size 2g;`, Caddy needs nothing, Nginx Proxy Manager has *Custom Nginx Configuration*.
+- Nginx: `proxy_pass http://UNRAID-IP:8420; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; proxy_read_timeout 600s;`
+- Caddy: `models.example.com { reverse_proxy UNRAID-IP:8420 }`
+- Prefer a VPN (WireGuard/Tailscale) over opening the port to the internet if you only need access yourself. The login has a rate limit but no second factor.
+- Unraid: Nginx Proxy Manager, SWAG or Caddy from Community Apps all work; point them at the container's IP and port 8420.
 
 ## Versions, sharing and labels
 

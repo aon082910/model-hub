@@ -58,9 +58,11 @@ def login(payload: dict, request: Request, response: Response, session: Session 
             raise HTTPException(401, "Invalid username or password")
     clear_login_attempts(client_ip)
     token = make_session_token(username)
+    # behind an HTTPS reverse proxy the cookie must travel only over HTTPS
+    secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
     response.set_cookie(
         SESSION_COOKIE, token, max_age=SESSION_TTL_SECONDS,
-        httponly=True, samesite="lax",
+        httponly=True, samesite="lax", secure=secure,
     )
     return {"status": "ok"}
 

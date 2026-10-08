@@ -30,10 +30,12 @@
       <button data-tab="supplies">Supplies</button>
       <button data-tab="matches">Matches</button>
       <button data-tab="filament">Filament</button>
+      <button data-tab="stats">Stats</button>
       <button data-tab="queue">Print Queue</button>
       <button data-tab="settings">Settings</button>
     </nav>
     <div id="whoami" class="whoami hidden">
+      <a id="update-badge" class="update-badge hidden" href="#/settings" title="A newer release is out">Update</a>
       <span id="whoami-name"></span>
       <button id="whoami-password" class="hidden">Password</button>
       <button id="whoami-logout">Sign out</button>
@@ -385,6 +387,13 @@
     </div>
   </section>
 
+  <section id="tab-stats" class="tab">
+    <h2>Stats</h2>
+    <div class="row"><label>Show the last
+      <select id="stats-months"><option value="6">6 months</option><option value="12" selected>12 months</option><option value="24">24 months</option></select></label></div>
+    <div id="stats-body"></div>
+  </section>
+
   <section id="tab-queue" class="tab">
     <div id="printers-panel" class="panel admin-only">
       <h3>Printers</h3>
@@ -543,6 +552,28 @@
         <input id="backup-file" type="file" accept=".zip,application/zip">
       </label>
       <button id="backup-restore-btn" class="danger">Restore from this file</button>
+    </div>
+
+    <h2>Updates</h2>
+    <div class="settings-form">
+      <p id="version-line" class="muted"></p>
+      <label class="inline-check"><input type="checkbox" id="update-check-on"> Look for a newer Model Hub release once a day <small>(only asks GitHub for the public release information; nothing about your server is sent)</small></label>
+      <div class="row"><button id="update-check-now">Check now</button><span id="update-status" class="muted"></span></div>
+    </div>
+
+    <h2>API tokens</h2>
+    <div class="settings-form">
+      <p class="muted">Keys for scripts and other programs (Home Assistant, a slicer plugin, your own tools). Send one as <code>Authorization: Bearer mh_...</code>.
+        <b>read</b> can look at everything a viewer can, <b>write</b> can do what a member can (never settings, backups, users or tokens), <b>import</b> can only add models.
+        A key is shown once, when you make it; only a fingerprint is kept.</p>
+      <div id="tokens-list"></div>
+      <div id="token-new" class="notice ok hidden"></div>
+      <div class="row">
+        <input id="token-name" placeholder="What is it for?">
+        <select id="token-scope"><option value="read">read</option><option value="write">write</option><option value="import">import</option></select>
+        <select id="token-expiry"><option value="">never expires</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">a year</option></select>
+        <button id="token-add">Make a token</button><span id="token-status" class="muted"></span>
+      </div>
     </div>
 
     <h2>People</h2>
