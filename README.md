@@ -408,6 +408,37 @@ the administrator login protects everything except share links (`/share/...`), w
   Filter choices and bulk edits are for members and the administrator; viewers are read-only.
 - **What worked**: per-model print settings (free text fields, nothing is interpreted), kept in backups. **Print again** adds a queue entry copying the filament, grams and minutes of the most recent print.
 
+## Filing rules
+
+**Collections → Filing rules** files a model for you when it is linked to an online listing. A rule says: when the listing's *category*, *tags*, *title* or *designer* contains some text (at least 2 letters, any case),
+add a tag, or put the model in a collection (created by that name if it does not exist). Rules run when a model is linked or its link is refreshed, and **Run on all linked models** applies them to the whole library
+(**Preview** only counts). Rules only ever add. The run is recorded in Recent changes and can be undone there or right after. The listing's category is known for models linked from now on.
+
+## Print queue for several printers
+
+In the Print Queue, an entry can be assigned to a printer (the printers set up under Settings → Printers; only the administrator sees the printer choice). The top of the queue shows each printer's waiting jobs and total estimated time
+(entries without an estimate are counted separately). **Send** (administrator only) uploads the model's newest kept G-code file to that printer, after asking whether to start it; it refuses a printer that is offline or busy
+and an entry that is already printing or done. When that printer finishes, the entry assigned to it is the one completed. Model Hub never starts a print you did not ask for.
+
+## Library information, export and import
+
+**Settings → Library information** exports what Model Hub knows about your models (tags, collections, projects, designer, license, notes, the listing each came from, print count; not the files) as JSON or a CSV spreadsheet,
+and imports either back, or a spreadsheet made elsewhere. Rows match your models by content hash, then path, then a file name that is unique. Import only fills what is empty (tick *Replace* to overwrite designer, license
+and notes), creates missing tags and collections but never projects, and links a listing only for a known provider and id. **Preview** shows what would change. The file may be up to 100 MB; spreadsheet cells that begin with
+`=`, `+`, `-` or `@` are stored with a leading `'` so they can never run as a formula. An import is recorded in Recent changes.
+
+## Home Assistant and MQTT
+
+**Settings → Home Assistant and MQTT** publishes to an MQTT broker (host, port, optional user and password, optional TLS, topic prefix `modelhub`). Leave the address empty to keep it off.
+Every 30 seconds it publishes, retained: `<prefix>/printer/<id>/state` (name, online, state, progress, file, nozzle and bed temperature, taken from the printer check that already runs) and `<prefix>/stats`
+(models, never printed, prints this month, low stock, filament remaining in grams, queued jobs, update available). With *Home Assistant discovery* on, matching entities appear by themselves (hourly and whenever printers change).
+Model Hub only publishes: it listens to nothing and cannot be controlled over MQTT. The password is hidden in Settings and left out of backups. *Send a test message* checks the connection; the last error is shown there.
+
+## Pictures for STEP files
+
+The server cannot draw STEP files, so the browser does: **Library → Make STEP pictures** renders each STEP model that has no picture (using the same viewer engine) and sends a small PNG to the server. It works on this
+computer's browser while the page stays open; models the browser cannot read are skipped and counted.
+
 ## Things Model Hub does by itself
 
 One timer runs in the background (it wakes every half minute and runs whatever is due; a failing job never stops the others):
@@ -419,6 +450,7 @@ One timer runs in the background (it wakes every half minute and runs whatever i
 | Low filament and supplies | every 6 hours | Settings → Notifications: warn at this many grams (default 100, 0 = off). Supplies use the minimum you set on each. You are told once per item, again only after it was restocked and ran low again |
 | Listing changes | about daily, **off by default** | Settings → Notifications: check linked listings by itself |
 | Printers | every 30 seconds | see below |
+| MQTT / Home Assistant | every 30 seconds, only if a broker is set | Settings → Home Assistant and MQTT |
 
 **Printer finished:** when a printer that was printing stops, Model Hub notices (Klipper reports *complete*; for OctoPrint a print that ended at 100% counts as finished).
 If the file was one Model Hub sent for a model, the print is recorded for that model: the waiting print-queue entry is completed (which takes the filament off the spool) or, with no

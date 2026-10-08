@@ -21,10 +21,12 @@ from app.notify import notify_event
 logger = logging.getLogger("modelhub.printwatch")
 
 _last: dict = {}          # printer id -> {"state", "file"}
+latest: dict = {}         # printer id -> the full status from the most recent poll
 
 
 def reset() -> None:
     _last.clear()
+    latest.clear()
 
 
 def finished(kind: str, state: str, progress) -> bool:
@@ -40,6 +42,7 @@ def poll(session: Session) -> list:
     printers = session.exec(select(Printer)).all()
     for printer in printers:
         st = printing.status(printer.kind, printer.url, printer.api_key)
+        latest[printer.id] = {**st, "name": printer.name}
         previous = _last.get(printer.id)
         if st["online"]:
             _last[printer.id] = {"state": st["state"], "file": st["file"] or (previous or {}).get("file")}
@@ -48,8 +51,9 @@ def poll(session: Session) -> list:
         outcome = "done" if finished(printer.kind, st["state"], st["progress"]) else "stopped"
         _record(session, printer, previous.get("file"), outcome, st.get("duration"))
         ended.append((printer.name, outcome))
-    for gone in set(_last) - {p.id for p in printers}:
+    for gone in (set(_last) | set(latest)) - {p.id for p in printers}:
         _last.pop(gone, None)
+        latest.pop(gone, None)
     return ended
 
 
@@ -68,8 +72,10 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
         from app.routers.prints import log_print
         from app.routers.queue import complete_item
         minutes = duration / 60 if duration else None
-        waiting = session.exec(select(QueueItem).where(QueueItem.model_id == model.id, QueueItem.status.in_(["queued", "printing"]))
-                               .order_by(QueueItem.position)).first()
+        candidates = session.exec(select(QueueItem).where(QueueItem.model_id == model.id, QueueItem.status.in_(["queued", "printing"]))
+                                  .order_by(QueueItem.position)).all()
+        # the entry meant for this printer first (a model may be queued for several), else the next in line
+        waiting = next((c for c in candidates if c.printer_id == printer.id), None) or (candidates[0] if candidates else None)
         if waiting:
             complete_item(session, waiting, minutes)
         else:

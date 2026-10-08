@@ -68,6 +68,7 @@ class Model3D(SQLModel, table=True):
     source_title: Optional[str] = None
     source_description: Optional[str] = None
     source_tags: Optional[str] = None      # JSON list
+    source_category: Optional[str] = None  # the site's category for the listing
     source_images: Optional[str] = None    # JSON list of file names in CONFIG_PATH/source_images/<model id>/
     source_synced_at: Optional[datetime] = None
     source_filaments: Optional[str] = None  # JSON list: filament the listing suggests (MakerWorld)
@@ -113,6 +114,7 @@ class QueueItem(SQLModel, table=True):
     model_id: int = Field(foreign_key="model3d.id")
     position: int = 0
     status: str = "queued"  # queued, printing, done, failed
+    printer_id: Optional[int] = None   # the printer this job is meant for
     filament_id: Optional[int] = Field(default=None, foreign_key="filament.id")
     notes: Optional[str] = None
     estimated_grams: Optional[float] = None
@@ -363,6 +365,17 @@ class ActivityLog(SQLModel, table=True):
     undone: bool = False
     undone_at: Optional[datetime] = None
     undone_by: Optional[str] = None
+
+
+class FilingRule(SQLModel, table=True):
+    """When a linked listing's category, tags, title or designer contains some text, add a tag or file the model in a collection."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    field: str                                  # category, tag, title, designer
+    match: str                                  # text to look for (not case sensitive)
+    action: str                                 # add_tag, add_collection
+    value: str                                  # the tag, or the collection's name (created when missing)
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AppUser(SQLModel, table=True):

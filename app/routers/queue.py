@@ -1,9 +1,9 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, select
 from app.db import get_session
-from app.models import Model3D, QueueItem, Filament, PrintLog
+from app.models import Model3D, Printer, PrinterJob, PrintFile, QueueItem, Filament, PrintLog
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
 
@@ -18,7 +18,11 @@ def list_queue(session: Session = Depends(get_session)):
 def add_to_queue(payload: dict, session: Session = Depends(get_session)):
     max_pos = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
     position = (max_pos.position + 1) if max_pos else 0
+    printer_id = payload.get("printer_id")
+    if printer_id is not None and not session.get(Printer, printer_id):
+        raise HTTPException(400, "That printer does not exist")
     item = QueueItem(
+        printer_id=printer_id,
         model_id=payload["model_id"],
         filament_id=payload.get("filament_id"),
         notes=payload.get("notes"),
@@ -57,6 +61,64 @@ def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = 
     _on_done(session, item)
 
 
+@router.get("/summary")
+def summary(session: Session = Depends(get_session)):
+    """Per printer: how many jobs are waiting or running for it and how long they will take (from the estimates)."""
+    items = session.exec(select(QueueItem).where(QueueItem.status.in_(["queued", "printing"]))).all()
+    names = {p.id: p.name for p in session.exec(select(Printer)).all()}
+    rows = {}
+    for i in items:
+        key = i.printer_id if i.printer_id in names else None
+        row = rows.setdefault(key, {"printer_id": key, "printer": names.get(key) if key else "Not assigned", "jobs": 0, "printing": 0,
+                                    "minutes": 0.0, "without_estimate": 0})
+        row["jobs"] += 1
+        row["printing"] += 1 if i.status == "printing" else 0
+        if i.estimated_minutes:
+            row["minutes"] += i.estimated_minutes
+        else:
+            row["without_estimate"] += 1
+    ordered = sorted(rows.values(), key=lambda r: (r["printer_id"] is None, r["printer"]))
+    return {"printers": [{**r, "minutes": round(r["minutes"])} for r in ordered]}
+
+
+@router.post("/{item_id}/send")
+def send_item(item_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Send this queue entry to its printer: the model's newest kept G-code file. start=true also starts the print.
+    (Administrator only; see app.auth.)"""
+    from app import print_files, printers as printing
+    item = session.get(QueueItem, item_id)
+    if not item:
+        raise HTTPException(404, "Not found")
+    printer = session.get(Printer, item.printer_id) if item.printer_id else None
+    if not printer:
+        raise HTTPException(400, "Choose a printer for this job first")
+    if item.status not in ("queued", "failed"):
+        raise HTTPException(409, f"This job is already {item.status}")
+    kept = [f for f in session.exec(select(PrintFile).where(PrintFile.model_id == item.model_id)
+                                    .order_by(PrintFile.created_at.desc(), PrintFile.id.desc())).all() if f.kind in print_files.GCODE_KINDS]
+    path = print_files.stored_path(kept[0].stored_name) if kept else None
+    if not kept or not path.is_file():
+        raise HTTPException(400, "Keep a sliced G-code file with this model first (its page, Sliced files)")
+    start = payload.get("start") is True
+    state = printing.status(printer.kind, printer.url, printer.api_key)
+    if not state["online"]:
+        raise HTTPException(502, state.get("message") or "The printer cannot be reached")
+    if state["state"] == "printing":
+        raise HTTPException(409, f"{printer.name} is busy printing {state.get('file') or 'something'}")
+    name = printing.safe_gcode_name(kept[0].filename)
+    try:
+        result = printing.send_file(printer.kind, printer.url, printer.api_key, path, name, start)
+    except printing.PrinterError as e:
+        raise HTTPException(502, str(e))
+    session.add(PrinterJob(printer_id=printer.id, filename=result["filename"], model_id=item.model_id, print_file_id=kept[0].id,
+                           started=bool(result["started"])))
+    if result["started"]:
+        item.status = "printing"
+        session.add(item)
+    session.commit()
+    return {**result, "status": item.status}
+
+
 @router.post("/again/{model_id}")
 def print_again(model_id: int, session: Session = Depends(get_session)):
     """Queue the model again with the filament, grams and time of its most recent print."""
@@ -82,7 +144,9 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         raise HTTPException(404, "Not found")
 
     was_done = item.status == "done"
-    for field in ("status", "position", "filament_id", "notes", "estimated_grams", "estimated_minutes"):
+    if "printer_id" in payload and payload["printer_id"] is not None and not session.get(Printer, payload["printer_id"]):
+        raise HTTPException(400, "That printer does not exist")
+    for field in ("status", "position", "filament_id", "notes", "estimated_grams", "estimated_minutes", "printer_id"):
         if field in payload:
             setattr(item, field, payload[field])
 

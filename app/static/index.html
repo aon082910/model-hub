@@ -56,6 +56,8 @@
       </select>
       <a href="#/duplicates" class="button-link">Review duplicates</a>
       <a href="#/activity" class="button-link">Recent changes</a>
+      <button id="step-thumbs-btn" type="button" title="STEP files have no picture until your browser renders one">Make STEP pictures</button>
+      <span id="step-thumbs-status" class="muted"></span>
       <button id="select-mode-btn" type="button">Select</button>
       <span id="tag-progress"></span>
     </div>
@@ -249,6 +251,20 @@
       <button id="add-smart-btn">Add Smart Collection</button>
     </div>
     <ul id="smart-collections-list"></ul>
+
+    <h2>Filing rules <small>(from a linked listing)</small></h2>
+    <p class="muted">When a model is linked to an online listing, add a tag or file it in a collection if the listing's category, tags, title or designer contains some text. Rules only ever add;
+      the whole run can be undone from Recent changes. The listing's category is known for models linked or refreshed from now on.</p>
+    <div class="row">
+      <select id="rule-field"><option value="category">category</option><option value="tag">tag</option><option value="title">title</option><option value="designer">designer</option></select>
+      <span>contains</span>
+      <input id="rule-match" placeholder="text (2+ letters)">
+      <select id="rule-action"><option value="add_tag">add the tag</option><option value="add_collection">file in the collection</option></select>
+      <input id="rule-value" placeholder="tag or collection name">
+      <button id="rule-add">Add rule</button>
+    </div>
+    <div id="rules-list"></div>
+    <div class="row"><button id="rules-preview">Preview on all linked models</button><button id="rules-run" class="primary">Run on all linked models</button><span id="rules-status" class="muted"></span></div>
   </section>
 
   <section id="tab-projects" class="tab">
@@ -440,6 +456,7 @@
       <span id="printers-status" class="muted"></span>
     </div>
     <h2>Print Queue</h2>
+    <div id="queue-summary" class="muted"></div>
     <ul id="queue-list"></ul>
   </section>
 
@@ -568,6 +585,41 @@
         <input id="backup-file" type="file" accept=".zip,application/zip">
       </label>
       <button id="backup-restore-btn" class="danger">Restore from this file</button>
+    </div>
+
+    <h2>Library information</h2>
+    <div class="settings-form">
+      <p class="muted">Export what Model Hub knows about your models (tags, collections, projects, designer, license, notes, the listing each came from, print counts; not the files), or
+        import it back or a spreadsheet from another tool. Rows are matched to your models by content hash, then path, then a file name that is unique.</p>
+      <div class="row">
+        <a class="button-link" href="/api/library-io/export.json" download>Export JSON</a>
+        <a class="button-link" href="/api/library-io/export.csv" download>Export CSV</a>
+      </div>
+      <label>Import a JSON export or a CSV <small>(columns such as path or filename, tags, collections, projects, designer, license, notes, source_url)</small>
+        <input id="io-file" type="file" accept=".json,.csv,text/csv,application/json">
+      </label>
+      <div class="row">
+        <label class="inline-check"><input type="checkbox" id="io-overwrite"> Replace designer, license and notes that are already set</label>
+        <button id="io-preview">Preview</button><button id="io-import" class="primary">Import</button>
+      </div>
+      <div id="io-result" class="muted"></div>
+    </div>
+
+    <h2>Home Assistant and MQTT</h2>
+    <div class="settings-form">
+      <p class="muted">Publish printer state and library numbers to an MQTT broker, with Home Assistant auto-discovery. Leave the address empty to keep it off. Model Hub only publishes; nothing can be controlled this way.</p>
+      <div class="row">
+        <input id="mqtt-host" placeholder="Broker address (e.g. 192.168.1.5)">
+        <input id="mqtt-port" type="number" min="1" max="65535" placeholder="1883">
+        <input id="mqtt-prefix" placeholder="Topic prefix (modelhub)">
+      </div>
+      <div class="row">
+        <input id="mqtt-user" placeholder="User (optional)" autocomplete="off">
+        <input id="mqtt-password" type="password" placeholder="Password (optional)" autocomplete="new-password">
+        <label class="inline-check"><input type="checkbox" id="mqtt-tls"> TLS</label>
+        <label class="inline-check"><input type="checkbox" id="mqtt-discovery" checked> Home Assistant discovery</label>
+      </div>
+      <div class="row"><button id="mqtt-save">Save</button><button id="mqtt-test">Send a test message</button><span id="mqtt-status" class="muted"></span></div>
     </div>
 
     <h2>Updates</h2>

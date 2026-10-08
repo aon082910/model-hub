@@ -47,10 +47,13 @@ def undo(session: Session, entry: ActivityLog, actor: str) -> int:
     if not entry.undo_json:
         raise ValueError("That change cannot be undone from here")
     spec = json.loads(entry.undo_json)
-    if spec.get("kind") != "bulk":
-        raise ValueError("That change cannot be undone from here")
     from app.routers import bulk
-    restored = bulk.undo(session, spec)
+    if spec.get("kind") == "bulk":
+        restored = bulk.undo(session, spec)
+    elif spec.get("kind") == "multi":
+        restored = sum(bulk.undo(session, one) for one in spec.get("specs", []) if isinstance(one, dict) and one.get("kind") == "bulk")
+    else:
+        raise ValueError("That change cannot be undone from here")
     entry.undone, entry.undone_at, entry.undone_by = True, datetime.utcnow(), actor
     session.add(entry)
     session.commit()

@@ -14,7 +14,7 @@ from app.db import get_session
 from app.models import (
     Collection, Model3D, ModelCollectionLink, ModelTagLink, PrintLog, Project, ProjectModelLink, QueueItem, Tag,
 )
-from app.config import ARCHIVE_EXTENSIONS, LIBRARY_PATH, MODEL_EXTENSIONS, THUMB_DIR
+from app.config import ARCHIVE_EXTENSIONS, LIBRARY_PATH, MESH_EXTENSIONS, MODEL_EXTENSIONS, THUMB_DIR
 from app.library_maintenance import LibraryMaintenanceBusy
 from app.scanner import (
     ScanAlreadyRunning, import_uploaded_archive, import_uploaded_file, model_types_text, scan_library,
@@ -327,6 +327,41 @@ def get_thumbnail(filename: str):
     if not path.exists():
         raise HTTPException(404, "Thumbnail not found")
     return FileResponse(path)
+
+
+MAX_THUMBNAIL_UPLOAD = 2 * 1024 * 1024
+
+
+@router.post("/models/{model_id}/thumbnail")
+def upload_thumbnail(model_id: int, file: UploadFile = File(...), session: Session = Depends(get_session)):
+    """A picture for a model the server cannot render itself (STEP files): the browser renders it and sends it here."""
+    import io
+    from PIL import Image
+    model = session.get(Model3D, model_id)
+    if not model:
+        raise HTTPException(404, "Model not found")
+    if model.extension in MESH_EXTENSIONS:
+        raise HTTPException(400, "The server makes this model's thumbnail itself")
+    data = file.file.read(MAX_THUMBNAIL_UPLOAD + 1)
+    if len(data) > MAX_THUMBNAIL_UPLOAD:
+        raise HTTPException(413, "That picture is larger than 2 MB")
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            if img.format not in ("PNG", "JPEG", "WEBP") or img.width * img.height > 25_000_000:
+                raise ValueError("unsupported")
+            picture = img.convert("RGB")
+    except Exception:
+        raise HTTPException(400, "That is not a usable picture (PNG, JPEG or WebP)")
+    picture.thumbnail((480, 480))
+    name = f"client-{model.content_hash[:24]}.png"
+    out = io.BytesIO()
+    picture.save(out, "PNG", optimize=True)
+    (THUMB_DIR / name).write_bytes(out.getvalue())
+    model.thumbnail_path = name
+    model.updated_at = datetime.utcnow()
+    session.add(model)
+    session.commit()
+    return {"thumbnail_path": name}
 
 
 @router.delete("/models/{model_id}")

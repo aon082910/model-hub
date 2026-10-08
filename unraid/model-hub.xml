@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.11.0
+Library information can be exported (JSON or CSV) and imported back or from a
+spreadsheet made elsewhere. New filing rules file a model by itself (a tag or
+a collection) from its online listing's category, tags, title or designer, and
+can be undone. The Print Queue can assign jobs to printers, shows each
+printer's waiting time and can send the next job to it. Optional Home
+Assistant / MQTT publishing of printer state and library numbers (Settings;
+off until a broker is set). STEP models can get pictures from the browser
+(Library > Make STEP pictures). No new settings are required; new tables are
+added automatically on first start.
+
 ### 2.10.0
 Each model's page can keep sliced files (G-code or a sliced 3MF) and reads the
 estimated time, filament weight and layer height from the slicer's comments;

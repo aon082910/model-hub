@@ -41,6 +41,7 @@ def link_model_to_listing(
     model.source_title = details["title"]
     model.source_description = details["description"] or None
     model.source_tags = json.dumps(details["tags"])
+    model.source_category = (details.get("category") or None)
     model.source_filaments = json.dumps(details.get("filaments") or [])
     model.source_linked_by = linked_by if linked_by in LINKED_BY else "manual"
     model.source_synced_at = datetime.utcnow()
@@ -70,6 +71,12 @@ def link_model_to_listing(
     session.add(model)
     session.commit()
     session.refresh(model)
+    try:
+        from app import filing
+        filing.on_linked(session, model)
+    except Exception:                         # filing is a convenience; it must never undo a link
+        logger.exception("Filing rules failed for %s", model.filename)
+        session.rollback()
     return model
 
 
@@ -77,7 +84,7 @@ def unlink_model(session: Session, model: Model3D) -> Model3D:
     sources.delete_images(model.id)
     for field in ("source_provider", "source_id", "source_title", "source_description", "source_tags",
                   "source_images", "source_synced_at", "source_url", "source_filaments", "source_linked_by",
-                  "source_fingerprint", "source_checked_at", "source_change", "source_changed_at"):
+                  "source_fingerprint", "source_checked_at", "source_change", "source_changed_at", "source_category"):
         setattr(model, field, None)
     session.add(model)
     session.commit()

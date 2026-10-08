@@ -66,7 +66,7 @@ function ensureViewerColorControl() {
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
   library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(), activity: () => loadActivity(),
-  collections: () => loadCollections(), projects: () => loadProjects(),
+  collections: () => { loadRules(); return loadCollections(); }, projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
 };
@@ -1269,7 +1269,7 @@ function frameCameraOn(object3d) {
   object3d.position.sub(center);
   const size = box.getSize(new THREE.Vector3());
   const radius = Math.max(size.x, size.y, size.z, 1) / 2;
-  camera.position.set(radius * 2, radius * 2, radius * 3);
+  camera.position.set(1, 0.8, 1.2).normalize().multiplyScalar(radius * 1.9);
   camera.near = radius / 100;
   camera.far = radius * 100;
   camera.updateProjectionMatrix();
@@ -3088,11 +3088,17 @@ async function renderModelPrinter(model) {
 // ---------- Queue ----------
 async function loadQueue() {
   loadPrinters();
-  const [items, models] = await Promise.all([
+  const [items, models, printerData, summary] = await Promise.all([
     (await fetch('/api/queue')).json(),
     (await fetch('/api/library/models?limit=1000')).json(),
+    currentUser.role === 'admin' ? fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] })) : Promise.resolve({ printers: [] }),
+    fetch('/api/queue/summary').then(r => (r.ok ? r.json() : { printers: [] })),
   ]);
+  const printers = printerData.printers || [];
   const modelById = Object.fromEntries(models.map(m => [m.id, m]));
+  $('#queue-summary').innerHTML = summary.printers.length
+    ? summary.printers.map(r => `<span class="queue-total"><b>${esc(r.printer)}</b>: ${r.jobs} job${r.jobs === 1 ? '' : 's'}, about ${formatMinutes(r.minutes) || '0 min'}${r.without_estimate ? ` (+${r.without_estimate} without an estimate)` : ''}</span>`).join(' ')
+    : '';
   $('#queue-list').innerHTML = items.map(i => {
     const m = modelById[i.model_id];
     const est = [i.estimated_grams != null ? `${i.estimated_grams}g` : null,
@@ -3102,6 +3108,9 @@ async function loadQueue() {
     <li>
       <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}</span>
       <span>
+        ${printers.length ? `<select data-id="${i.id}" class="queue-printer" aria-label="Printer">
+          <option value="">any printer</option>${printers.map(p => `<option value="${p.id}" ${p.id === i.printer_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+          ${i.printer_id && ['queued', 'failed'].includes(i.status) ? `<button data-id="${i.id}" class="queue-send" title="Send the model's newest kept G-code file to this printer">Send</button>` : ''}` : ''}
         <select data-id="${i.id}" class="queue-status">
           ${['queued', 'printing', 'done', 'failed'].map(s => `<option value="${s}" ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
@@ -3109,6 +3118,17 @@ async function loadQueue() {
       </span>
     </li>`;
   }).join('');
+  $$('.queue-printer').forEach(sel => sel.onchange = async () => {
+    await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { printer_id: sel.value ? parseInt(sel.value) : null });
+    loadQueue();
+  });
+  $$('.queue-send').forEach(b => b.onclick = async () => {
+    const start = confirm('Start printing as soon as the file arrives? (Cancel sends it without starting.) Check that the bed is clear.');
+    b.disabled = true;
+    const res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start });
+    showNotice(res.ok ? (start ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.') : await sourceErrorText(res));
+    loadQueue();
+  });
   $$('.del-queue').forEach(b => b.onclick = async () => { await fetch(`/api/queue/${b.dataset.id}`, { method: 'DELETE' }); loadQueue(); });
   $$('.queue-status').forEach(sel => sel.onchange = async () => {
     await fetch(`/api/queue/${sel.dataset.id}`, {
@@ -3507,6 +3527,153 @@ $('#tokens-list').addEventListener('click', async (e) => {
   loadTokens();
 });
 
+// ---------- Filing rules (Collections tab) ----------
+async function loadRules() {
+  const res = await fetch('/api/filing-rules');
+  if (!res.ok) return;
+  const rules = (await res.json()).rules;
+  $('#rules-list').innerHTML = rules.length ? rules.map(r => `
+    <div class="user-row" data-id="${r.id}">
+      <label class="inline-check"><input type="checkbox" class="rule-enabled" ${r.enabled ? 'checked' : ''} aria-label="Enabled"></label>
+      <span>When the <b>${esc(r.field)}</b> contains <b>${esc(r.match)}</b>, ${r.action === 'add_tag' ? 'add the tag' : 'file in the collection'} <b>${esc(r.value)}</b></span>
+      <button class="rule-delete danger">Delete</button></div>`).join('') : '<p class="muted">No rules yet.</p>';
+}
+$('#rule-add').addEventListener('click', async () => {
+  const res = await jsonRequest('POST', '/api/filing-rules', { field: $('#rule-field').value, match: $('#rule-match').value, action: $('#rule-action').value, value: $('#rule-value').value });
+  $('#rules-status').textContent = res.ok ? 'Rule added.' : await sourceErrorText(res);
+  if (res.ok) { $('#rule-match').value = ''; $('#rule-value').value = ''; loadRules(); }
+});
+$('#rules-list').addEventListener('change', async (e) => {
+  if (!e.target.classList.contains('rule-enabled')) return;
+  await jsonRequest('PATCH', `/api/filing-rules/${e.target.closest('.user-row').dataset.id}`, { enabled: e.target.checked });
+});
+$('#rules-list').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('rule-delete')) return;
+  await fetch(`/api/filing-rules/${e.target.closest('.user-row').dataset.id}`, { method: 'DELETE' });
+  loadRules();
+});
+async function runRules(dry) {
+  $('#rules-status').textContent = dry ? 'Checking...' : 'Running...';
+  const res = await jsonRequest('POST', '/api/filing-rules/apply', { dry_run: dry });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $('#rules-status').textContent = data.detail || 'Could not run the rules.'; return; }
+  $('#rules-status').innerHTML = `${dry ? 'Would change' : 'Changed'} ${data.changed} (${data.rules} rule${data.rules === 1 ? '' : 's'} over ${data.models_checked} linked models).` +
+    (data.activity_id ? ` <button id="rules-undo" data-id="${data.activity_id}">Undo</button>` : '');
+}
+$('#rules-preview').addEventListener('click', () => runRules(true));
+$('#rules-run').addEventListener('click', () => runRules(false));
+$('#rules-status').addEventListener('click', async (e) => {
+  if (e.target.id !== 'rules-undo') return;
+  if (await undoActivity(e.target.dataset.id)) $('#rules-status').textContent = 'Undone.';
+});
+
+// ---------- Library information and MQTT (Settings) ----------
+async function importLibraryInfo(dry) {
+  const file = $('#io-file').files[0];
+  if (!file) { $('#io-result').textContent = 'Choose a file first.'; return; }
+  const form = new FormData();
+  form.append('file', file);
+  form.append('overwrite', $('#io-overwrite').checked ? 'true' : 'false');
+  form.append('dry_run', dry ? 'true' : 'false');
+  $('#io-result').textContent = dry ? 'Checking...' : 'Importing...';
+  const res = await fetch('/api/library-io/import', { method: 'POST', body: form });
+  if (!res.ok) { $('#io-result').textContent = await sourceErrorText(res); return; }
+  const r = await res.json();
+  $('#io-result').innerHTML = `${dry ? '<b>Preview (nothing changed):</b> ' : '<b>Done:</b> '}${r.rows} rows, ${r.matched} matched, ${r.unmatched} not found. `
+    + `${r.models_changed} models changed: ${r.tags_added} tags, ${r.collections_added} collection links, ${r.projects_added} project links, ${r.fields_set} fields, ${r.sources_set} listing links.`
+    + (r.problems.length ? `<br>${r.problems.map(esc).join('<br>')}` : '');
+}
+$('#io-preview').addEventListener('click', () => importLibraryInfo(true));
+$('#io-import').addEventListener('click', () => importLibraryInfo(false));
+
+function loadMqttSettings(s) {
+  $('#mqtt-host').value = s.mqtt_host || '';
+  $('#mqtt-port').value = s.mqtt_port || '';
+  $('#mqtt-prefix').value = s.mqtt_prefix || '';
+  $('#mqtt-user').value = s.mqtt_user || '';
+  $('#mqtt-password').value = s.mqtt_password || '';
+  $('#mqtt-tls').checked = s.mqtt_tls === 'true';
+  $('#mqtt-discovery').checked = s.mqtt_discovery !== 'false';
+  $('#mqtt-status').innerHTML = s.mqtt_last_error ? `<span class="error-text">Last problem: ${esc(s.mqtt_last_error)}</span>` : '';
+}
+async function saveMqtt() {
+  return saveSetting({
+    mqtt_host: $('#mqtt-host').value.trim(), mqtt_port: $('#mqtt-port').value, mqtt_prefix: $('#mqtt-prefix').value.trim(),
+    mqtt_user: $('#mqtt-user').value.trim(), mqtt_password: $('#mqtt-password').value,
+    mqtt_tls: $('#mqtt-tls').checked ? 'true' : 'false', mqtt_discovery: $('#mqtt-discovery').checked ? 'true' : 'false',
+  });
+}
+$('#mqtt-save').addEventListener('click', async () => { $('#mqtt-status').textContent = (await saveMqtt()) ? 'Saved.' : 'Could not save.'; });
+$('#mqtt-test').addEventListener('click', async () => {
+  await saveMqtt();
+  $('#mqtt-status').textContent = 'Sending...';
+  const res = await fetch('/api/settings/mqtt-test', { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  $('#mqtt-status').textContent = res.ok ? data.message : (data.detail || 'Could not send.');
+});
+
+// ---------- Pictures for STEP files, rendered here and sent to the server ----------
+async function stepThumbnailBlob(file, size) {
+  const buffer = new Uint8Array(await (await fetch(file)).arrayBuffer());
+  const occt = await getOcctModule();
+  const result = occt.ReadStepFile(buffer, null);
+  if (!result.success || !result.meshes.length) throw new Error('no geometry');
+  const group = new THREE.Group();
+  const fallback = new THREE.MeshStandardMaterial({ color: viewerModelColor });
+  for (const m of result.meshes) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(m.attributes.position.array, 3));
+    if (m.attributes.normal) geometry.setAttribute('normal', new THREE.Float32BufferAttribute(m.attributes.normal.array, 3));
+    geometry.setIndex(m.index.array);
+    if (!m.attributes.normal) geometry.computeVertexNormals();
+    group.add(new THREE.Mesh(geometry, m.color ? new THREE.MeshStandardMaterial({ color: new THREE.Color(m.color[0], m.color[1], m.color[2]) }) : fallback));
+  }
+  const box = new THREE.Box3().setFromObject(group);
+  group.position.sub(box.getCenter(new THREE.Vector3()));
+  const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = Math.round(size * 0.75);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(canvas.width, canvas.height, false);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0d0f12);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+  const light = new THREE.DirectionalLight(0xffffff, 1.5);
+  light.position.set(1, 1, 1);
+  scene.add(light, group);
+  const camera = new THREE.PerspectiveCamera(45, canvas.width / canvas.height, radius / 100, radius * 100);
+  camera.position.set(radius * 2, radius * 2, radius * 3);
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+  renderer.dispose();
+  renderer.forceContextLoss();
+  return blob;
+}
+
+async function makeStepThumbnails() {
+  const status = $('#step-thumbs-status');
+  const res = await fetch('/api/library/models?limit=5000');
+  if (!res.ok) return;
+  const todo = (await res.json()).filter(m => ['.step', '.stp'].includes(m.extension) && !m.thumbnail_path);
+  if (!todo.length) { status.textContent = 'Every STEP file already has a picture.'; return; }
+  let done = 0, failed = 0;
+  for (const m of todo) {
+    status.textContent = `Making pictures for STEP files: ${done + failed + 1} of ${todo.length}...`;
+    try {
+      const blob = await stepThumbnailBlob(`/api/library/models/${m.id}/file`, 320);
+      const form = new FormData();
+      form.append('file', blob, 'thumb.png');
+      const up = await fetch(`/api/library/models/${m.id}/thumbnail`, { method: 'POST', body: form });
+      if (up.ok) done++; else failed++;
+    } catch (e) { failed++; }
+  }
+  status.textContent = `Made ${done} picture${done === 1 ? '' : 's'}${failed ? `, ${failed} could not be made` : ''}.`;
+  loadModels();
+}
+$('#step-thumbs-btn').addEventListener('click', makeStepThumbnails);
+
 async function loadSettings() {
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
@@ -3531,6 +3698,7 @@ async function loadSettings() {
   await renderSiteSettings(s);
   refreshBackups();
   loadUsers();
+  loadMqttSettings(s);
   loadVersion();
   loadTokens();
   $('#auto-backup').value = s.auto_backup || 'weekly';

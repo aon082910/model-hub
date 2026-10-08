@@ -184,7 +184,9 @@ def forbidden_reason(user: dict, method: str, path: str):
     if role in ("admin", "importer") or path == "/api/auth/logout":
         return None
     writing = method not in ("GET", "HEAD")
-    if path.startswith(ADMIN_ONLY_PREFIXES) or path in ADMIN_ONLY_PATHS or (writing and path.startswith(ADMIN_ONLY_WRITE_PREFIXES)):
+    sends_to_printer = path.startswith("/api/queue/") and path.endswith("/send")      # starting a job on a real printer
+    if (path.startswith(ADMIN_ONLY_PREFIXES) or path in ADMIN_ONLY_PATHS or sends_to_printer
+            or (writing and path.startswith(ADMIN_ONLY_WRITE_PREFIXES))):
         return "Only the administrator can do that."
     if role == "viewer" and path.startswith(NO_VIEWER_PREFIXES):
         return "Your account is read-only."

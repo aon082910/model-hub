@@ -13,7 +13,7 @@ import secrets
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Keys never echoed back in plaintext to the frontend after being set
-SECRET_KEYS = {"ai_api_key"} | secret_setting_keys()   # site tokens / API keys
+SECRET_KEYS = {"ai_api_key", "mqtt_password"} | secret_setting_keys()   # site tokens / API keys
 
 
 @router.get("")
@@ -61,6 +61,16 @@ def notify_test(session: Session = Depends(get_session)):
     if not notify(session, "Model Hub: test", "If you can read this, notifications work."):
         raise HTTPException(502, "The webhook did not accept the message (check the address)")
     return {"status": "sent"}
+
+
+@router.post("/mqtt-test")
+def mqtt_test(session: Session = Depends(get_session)):
+    """Send one test message to the MQTT broker, to check the settings."""
+    from app import mqtt_publish
+    try:
+        return {"status": "sent", "message": mqtt_publish.send_test(session)}
+    except mqtt_publish.MqttError as e:
+        raise HTTPException(502, str(e))
 
 
 @router.get("/extension-key")
