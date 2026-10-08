@@ -126,6 +126,10 @@ def saved_path(name: str) -> Path:
 
 def save_backup(prefix: str = "modelhub-backup") -> dict:
     path = BACKUP_DIR / f"{prefix}-{_stamp()}.zip"
+    extra = 1
+    while path.exists():                      # two copies in the same second must not replace each other
+        extra += 1
+        path = BACKUP_DIR / f"{prefix}-{_stamp()}-{extra}.zip"
     manifest = make_backup(path)
     if prefix == "before-restore":
         prune(prefix, KEEP_SAFETY_COPIES)

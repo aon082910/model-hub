@@ -214,3 +214,15 @@ def test_backup_needs_a_login(authed):
     finally:
         from conftest import ensure_authenticated
         ensure_authenticated(authed)
+
+
+def test_two_saved_copies_in_the_same_second_never_replace_each_other(authed, monkeypatch):
+    monkeypatch.setattr(backup, "_stamp", lambda: "20300101-000000")
+    a = backup.save_backup("modelhub-backup")
+    b = backup.save_backup("modelhub-backup")
+    c = backup.save_backup("modelhub-backup")
+    assert len({a["name"], b["name"], c["name"]}) == 3
+    names = {x["name"] for x in backup.saved_backups()}
+    assert {a["name"], b["name"], c["name"]} <= names
+    for n in (a["name"], b["name"], c["name"]):
+        assert backup.saved_path(n).is_file()
