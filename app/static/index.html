@@ -37,9 +37,30 @@
       <button id="scan-btn">Rescan Library</button>
       <button id="tag-all-btn">Tag All (AI)</button>
       <label><input type="checkbox" id="dup-only"> Duplicates only</label>
+      <select id="printed-filter" aria-label="Filter by printed">
+        <option value="">All models</option><option value="true">Printed</option><option value="false">Never printed</option>
+      </select>
+      <a href="#/duplicates" class="button-link">Review duplicates</a>
       <span id="tag-progress"></span>
     </div>
     <div id="grid" class="grid"></div>
+  </section>
+
+  <section id="tab-duplicates" class="tab">
+    <p><a href="#/library" class="back-link">&larr; Library</a></p>
+    <h2>Duplicates</h2>
+    <p class="muted">Files that are exactly the same. Pick the one to keep in each group: it receives the tags, collections,
+      projects, notes, print history and listing link of the others. <b>Combine info</b> only shares that information and leaves every
+      file where it is. <b>Keep this, delete the others</b> also deletes the other files from your library folder
+      (each file is checked again first, and only a true copy of the one you keep can be deleted).</p>
+    <div id="dup-summary" class="bulk-bar"></div>
+    <div id="dup-groups"></div>
+    <div id="dup-more" class="pagination hidden"><button id="dup-more-btn" type="button">Show more groups</button></div>
+    <details id="dup-similar-box">
+      <summary>Same shape, different file</summary>
+      <p class="muted">These files have the same geometry but are not identical (a re-export, a different slicer, a repaired copy...). They are only listed here.</p>
+      <div id="dup-similar"></div>
+    </details>
   </section>
 
   <section id="tab-search" class="tab">
@@ -353,6 +374,23 @@
       <button id="regen-key-btn">Regenerate Key</button>
     </div>
 
+    <h2>Backup</h2>
+    <div class="settings-form">
+      <p class="muted">A backup holds everything Model Hub knows apart from the model files themselves: tags, collections, projects, supplies,
+        filament, links to listings, notes, the wishlist, the print log and the saved pictures. Thumbnails can be rebuilt (see above), and
+        passwords, the extension key and every site key are left out, so restoring never replaces your current logins.</p>
+      <div class="row">
+        <a class="button-link" href="/api/backup" download>Download a backup</a>
+        <button id="backup-save-btn">Save a copy on the server</button>
+        <span id="backup-status" class="muted"></span>
+      </div>
+      <div id="backup-saved"></div>
+      <label>Restore from a backup file <small>(replaces your current tags, projects, notes and so on; a copy of the current data is saved first)</small>
+        <input id="backup-file" type="file" accept=".zip,application/zip">
+      </label>
+      <button id="backup-restore-btn" class="danger">Restore from this file</button>
+    </div>
+
     <h2>Account</h2>
     <div class="settings-form">
       <label>Current password <input id="cur-password" type="password"></label>
@@ -373,6 +411,7 @@
         <div id="viewer-canvas-wrap"><canvas id="viewer-canvas"></canvas></div>
         <div id="viewer-info"></div>
         <div class="panel" id="model-links-panel"></div>
+        <div class="panel" id="model-prints-panel"></div>
       </div>
       <aside class="page-side">
         <div class="panel" id="model-facts"></div>

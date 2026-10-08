@@ -24,7 +24,7 @@ weight estimates, projects that track the electronics/parts/supplies each
 build needs (with an exportable shopping list and a Supplies page for what you
 already own) and subtract the filament used when a project is marked printed,
 matching of your models (one by one or your whole library) to their Printables/MakerWorld
-listings (pictures, designer, license, tags, parts lists), a Search page across sites with a wishlist, a page for every model and project with
+listings (pictures, designer, license, tags, parts lists), a Search page across sites with a wishlist, a print log, duplicate cleanup, backup and restore, a page for every model and project with
 PDF export, a browser extension for one-click import, and optional webhook notifications (ntfy/Discord/Slack).
   </Overview>
   <Category>Tools:Utilities Productivity:</Category>
@@ -40,6 +40,19 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.3.0
+New Backup section in Settings: download or save on the server a copy of
+everything Model Hub knows (tags, collections, projects, supplies, links to
+listings, notes, wishlist, print log and pictures; passwords and site keys are
+left out), and restore it later; a restore first saves the current data so it
+can be undone. Every model's page now has a print history (date, rating,
+filament used, notes, photo), finishing a print-queue job logs it, and the
+Library can show only printed or never-printed models. New duplicates page
+(Library, Review duplicates): identical files are grouped, one is kept with
+the tags, collections, projects, notes and print history of the others, and
+the extra files can optionally be deleted (each is checked first). No new
+settings are required; new tables are added automatically on first start.
+
 ### 2.2.0
 New Wishlist tab: save listings from the Search tab or a listing page (with a
 note), see which are already in your library, and add the whole list in one go.

@@ -263,3 +263,22 @@ button.danger { color: #e0645a; border-color: #e0645a; }
 .wishlist-note { width: 100%; max-width: 420px; font-size: 12px; }
 .file-list li { display: flex; justify-content: space-between; gap: 8px; }
 .file-list .file-off { opacity: .55; }
+
+/* ---------- Print history, duplicates, backup ---------- */
+.printed-badge { font-size: 11px; color: #5cc08a; margin-top: 2px; }
+.print-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.print-main { flex: 1 1 200px; min-width: 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.print-main > div { flex-basis: 100%; }
+.stars { color: #e6b800; letter-spacing: 1px; }
+.print-photo { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; display: block; }
+.print-actions { display: flex; gap: 6px; align-items: center; }
+.print-photo-btn { cursor: pointer; font-size: 12px; padding: 3px 8px; }
+.dup-group { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 10px 0; }
+.dup-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; margin-bottom: 8px; }
+.dup-card { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--border); border-radius: 6px; padding: 6px; cursor: pointer; font-size: 12px; }
+.dup-card.keep { border-color: #5cc08a; }
+.dup-card img, .dup-nothumb { width: 72px; height: 72px; flex: 0 0 72px; object-fit: cover; border-radius: 4px; background: #0d0f12; }
+.dup-info { min-width: 0; overflow-wrap: anywhere; }
+.dup-info a { color: var(--accent); text-decoration: none; }
+#backup-saved .link-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inline-check { display: flex !important; flex-direction: row !important; align-items: center; gap: 6px; }

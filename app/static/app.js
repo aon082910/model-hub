@@ -65,7 +65,7 @@ function ensureViewerColorControl() {
 // Hash routing, so every page has an address that survives a reload and works with
 // the back button: #/library, #/projects, #/supplies ... and #/model/12, #/project/3
 const TAB_LOADERS = {
-  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(),
+  library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(),
   collections: () => loadCollections(), projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
   queue: () => loadQueue(), settings: () => loadSettings(),
@@ -120,6 +120,7 @@ async function loadModels() {
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (dupOnly) params.set('duplicates_only', 'true');
+  if ($('#printed-filter').value) params.set('printed', $('#printed-filter').value);
   const res = await fetch(`/api/library/models?${params}`);
   const models = await res.json();
   renderGrid(models);
@@ -139,6 +140,7 @@ function libraryCard(m) {
     <div class="meta">
       <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
       <div class="tags">${esc((m.tags || []).map(t => t.name).join(', '))}</div>
+      ${m.print_count ? `<div class="printed-badge" title="Last printed ${esc(String(m.last_printed_at || '').slice(0, 10))}">&#10003; printed${m.print_count > 1 ? ` x${m.print_count}` : ''}</div>` : ''}
     </div>`;
   return card;
 }
@@ -151,6 +153,7 @@ function renderGrid(models) {
 
 $('#search-box').addEventListener('input', debounce(loadModels, 300));
 $('#dup-only').addEventListener('change', loadModels);
+$('#printed-filter').addEventListener('change', loadModels);
 $('#scan-btn').addEventListener('click', async () => {
   $('#scan-btn').textContent = 'Scanning...';
   const res = await fetch('/api/library/scan', { method: 'POST' });
@@ -262,6 +265,79 @@ function renderModelPage(model) {
   renderModelDetails(model);
   renderViewerSource(model);
   renderModelLinks(model);
+  renderModelPrints(model);
+}
+
+// ---------- Print history on a model's page ----------
+function ratingText(n) { return n ? '\u2605'.repeat(n) + '\u2606'.repeat(5 - n) : ''; }
+
+async function renderModelPrints(model) {
+  const panel = $('#model-prints-panel');
+  const [logs, spools] = await Promise.all([
+    fetch(`/api/prints?model_id=${model.id}`).then(r => (r.ok ? r.json() : { total: 0, items: [] })),
+    fetch('/api/filament').then(r => (r.ok ? r.json() : [])),
+  ]);
+  if (!currentModel || currentModel.id !== model.id) return;
+  const spoolText = f => [f.material, f.brand, f.color].filter(Boolean).join(' ');
+  const spoolById = new Map(spools.map(f => [f.id, f]));
+  const today = new Date().toISOString().slice(0, 10);
+  panel.innerHTML = `
+    <h3>Print history${logs.total ? ` (${logs.total})` : ''}</h3>
+    ${logs.items.length ? logs.items.map(l => `
+      <div class="print-row" data-id="${l.id}">
+        <div class="print-main">
+          <b>${esc(String(l.printed_at).slice(0, 10))}</b>
+          ${l.rating ? `<span class="stars" title="${l.rating} of 5">${ratingText(l.rating)}</span>` : ''}
+          ${l.grams != null ? `<span class="muted">${l.grams} g${l.filament_id && spoolById.get(l.filament_id) ? ' of ' + esc(spoolText(spoolById.get(l.filament_id))) : ''}</span>` : ''}
+          ${l.minutes != null ? `<span class="muted">${Math.round(l.minutes)} min</span>` : ''}
+          ${l.source === 'queue' ? '<span class="muted">from the print queue</span>' : ''}
+          ${l.notes ? `<div>${esc(l.notes)}</div>` : ''}
+        </div>
+        ${l.has_photo ? `<a href="/api/prints/${l.id}/photo" target="_blank" rel="noopener"><img class="print-photo" src="/api/prints/${l.id}/photo?v=${Date.now()}" loading="lazy" alt="Photo of the print"></a>` : ''}
+        <div class="print-actions">
+          <label class="button-link print-photo-btn">${l.has_photo ? 'Replace photo' : 'Add photo'}<input type="file" accept="image/*" class="print-photo-input" hidden></label>
+          <button class="print-delete">Delete</button>
+        </div>
+      </div>`).join('') : '<p class="muted">Not printed yet.</p>'}
+    <h3>Log a print</h3>
+    <div class="stack">
+      <div class="row">
+        <label>Date <input id="print-date" type="date" value="${today}"></label>
+        <label>Rating <select id="print-rating"><option value="">-</option>${[5, 4, 3, 2, 1].map(n => `<option value="${n}">${ratingText(n)}</option>`).join('')}</select></label>
+      </div>
+      <div class="row">
+        <select id="print-spool"><option value="">(no filament)</option>${spools.map(f =>
+          `<option value="${f.id}">${esc(spoolText(f))} (${f.remaining_g} g left)</option>`).join('')}</select>
+        <input id="print-grams" type="number" min="0" step="0.1" placeholder="grams used">
+        <input id="print-minutes" type="number" min="0" step="1" placeholder="minutes">
+      </div>
+      <label class="inline-check"><input type="checkbox" id="print-deduct" checked> Take the grams from the spool</label>
+      <textarea id="print-notes" rows="2" placeholder="How it went, settings, changes..."></textarea>
+      <div class="row"><button id="print-add" class="primary">Log this print</button><span id="print-status" class="muted"></span></div>
+    </div>`;
+
+  $('#print-add').onclick = async () => {
+    const body = { model_id: model.id, printed_at: $('#print-date').value, notes: $('#print-notes').value,
+      deduct: $('#print-deduct').checked };
+    if ($('#print-rating').value) body.rating = parseInt($('#print-rating').value);
+    if ($('#print-spool').value) body.filament_id = parseInt($('#print-spool').value);
+    if ($('#print-grams').value) body.grams = parseFloat($('#print-grams').value);
+    if ($('#print-minutes').value) body.minutes = parseFloat($('#print-minutes').value);
+    const res = await jsonRequest('POST', '/api/prints', body);
+    if (res.ok) refreshModelPage(); else $('#print-status').textContent = await sourceErrorText(res);
+  };
+  $$('#model-prints-panel .print-delete').forEach(btn => btn.onclick = async () => {
+    if (!confirm('Delete this print entry? Filament it took from a spool is put back.')) return;
+    await fetch(`/api/prints/${btn.closest('.print-row').dataset.id}`, { method: 'DELETE' });
+    refreshModelPage();
+  });
+  $$('#model-prints-panel .print-photo-input').forEach(input => input.onchange = async () => {
+    if (!input.files.length) return;
+    const form = new FormData();
+    form.append('file', input.files[0]);
+    const res = await fetch(`/api/prints/${input.closest('.print-row').dataset.id}/photo`, { method: 'POST', body: form });
+    if (res.ok) refreshModelPage(); else alert(await sourceErrorText(res));
+  });
 }
 
 function renderModelFacts(m) {
@@ -2218,6 +2294,153 @@ async function loadQueue() {
 }
 
 // ---------- Settings ----------
+// ---------- Duplicates ----------
+const dupState = { shown: 0, total: 0 };
+
+function dupGroupHtml(g) {
+  const keep = g.suggested_keep;
+  return `
+    <div class="dup-group" data-hash="${esc(g.hash)}">
+      <div class="dup-cards">${g.models.map(m => `
+        <label class="dup-card ${m.id === keep ? 'keep' : ''}">
+          <input type="radio" name="keep-${esc(g.hash)}" value="${m.id}" ${m.id === keep ? 'checked' : ''}>
+          ${m.thumbnail_path ? `<img src="/api/library/thumbnails/${esc(m.thumbnail_path)}" loading="lazy" alt="">` : '<div class="dup-nothumb"></div>'}
+          <div class="dup-info">
+            <a href="#/model/${m.id}"><b>${esc(m.filename)}</b></a>
+            <div class="muted" title="${esc(m.path)}">${esc(m.path)}</div>
+            <div class="muted">${formatBytes(m.size_bytes)}${m.file_exists ? '' : ' &middot; <span class="warn-text">file missing</span>'}</div>
+            <div class="muted">${[m.tags && plural(m.tags, 'tag'), m.collections && plural(m.collections, 'collection'), m.projects && plural(m.projects, 'project'),
+              m.prints && plural(m.prints, 'print'), m.source_provider && 'linked to ' + (PROVIDER_LABELS[m.source_provider] || m.source_provider), m.has_notes && 'notes'].filter(Boolean).join(' · ') || 'nothing attached'}</div>
+          </div>
+        </label>`).join('')}</div>
+      <div class="row">
+        <button class="dup-combine">Combine info</button>
+        <button class="dup-delete danger">Keep this, delete the others</button>
+        <span class="muted">frees ${formatBytes(g.reclaimable_bytes)}</span><span class="dup-status muted"></span>
+      </div>
+    </div>`;
+}
+
+async function loadDuplicates(append) {
+  if (!append) { dupState.shown = 0; $('#dup-groups').innerHTML = ''; }
+  const res = await fetch(`/api/duplicates?offset=${dupState.shown}&limit=25`);
+  if (!res.ok) return;
+  const data = await res.json();
+  dupState.total = data.total;
+  $('#dup-groups').insertAdjacentHTML('beforeend', data.groups.map(dupGroupHtml).join(''));
+  dupState.shown += data.groups.length;
+  $('#dup-summary').innerHTML = data.total
+    ? `<span><b>${data.total}</b> group${data.total === 1 ? '' : 's'} of identical files, ${formatBytes(data.bytes_in_duplicate_files)} in all.</span>
+       <button id="dup-all-combine">Combine info in every group</button>
+       <button id="dup-all-delete" class="danger">Clean up every group (keep the suggested file, delete the rest)</button>
+       <span id="dup-all-status" class="muted"></span>`
+    : '<span>No identical files in your library.</span>';
+  $('#dup-more').classList.toggle('hidden', dupState.shown >= data.total);
+  if (!append) loadSimilar();
+}
+
+async function loadSimilar() {
+  const res = await fetch('/api/duplicates/similar');
+  if (!res.ok) return;
+  const groups = (await res.json()).groups;
+  $('#dup-similar-box summary').textContent = `Same shape, different file (${groups.length})`;
+  $('#dup-similar').innerHTML = groups.length ? groups.map(g => `<ul class="link-list">${g.map(m =>
+    `<li><a href="#/model/${m.id}">${esc(m.filename)}</a><span class="muted">${esc(m.path)} &middot; ${formatBytes(m.size_bytes)}</span></li>`).join('')}</ul>`).join('')
+    : '<p class="muted">None.</p>';
+}
+
+function dupResultText(r) {
+  const bits = [];
+  if (r.deleted_files) bits.push(`deleted ${plural(r.deleted_files, 'file')} (${formatBytes(r.freed_bytes)} freed)`);
+  else if (r.merged) bits.push(`shared the information of ${plural(r.merged, 'copy')}`);
+  if (r.skipped && r.skipped.length) bits.push(`left ${r.skipped.length} alone: ${r.skipped[0].filename} (${r.skipped[0].reason})`);
+  return bits.join('; ') || 'nothing to do';
+}
+
+$('#dup-groups').addEventListener('click', async (e) => {
+  const combine = e.target.classList.contains('dup-combine');
+  if (!combine && !e.target.classList.contains('dup-delete')) return;
+  const group = e.target.closest('.dup-group');
+  const keep = parseInt(group.querySelector('input[type=radio]:checked').value);
+  const others = [...group.querySelectorAll('input[type=radio]')].map(r => parseInt(r.value)).filter(id => id !== keep);
+  if (!combine && !confirm(`Delete ${plural(others.length, 'file')} from your library folder and keep the selected one? This cannot be undone.`)) return;
+  const status = group.querySelector('.dup-status');
+  status.textContent = 'Working...';
+  const res = await jsonRequest('POST', '/api/duplicates/merge', { keep_id: keep, remove_ids: others, delete_files: !combine });
+  if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
+  const result = await res.json();
+  if (combine) status.textContent = dupResultText(result);
+  else { await loadDuplicates(); $('#dup-summary').insertAdjacentHTML('beforeend', `<span class="muted">Last cleanup: ${esc(dupResultText(result))}</span>`); }
+});
+$('#dup-groups').addEventListener('change', (e) => {
+  if (e.target.type !== 'radio') return;
+  e.target.closest('.dup-group').querySelectorAll('.dup-card').forEach(c => c.classList.toggle('keep', c.contains(e.target)));
+});
+$('#dup-summary').addEventListener('click', async (e) => {
+  const del = e.target.id === 'dup-all-delete';
+  if (!del && e.target.id !== 'dup-all-combine') return;
+  if (del && !confirm('Delete every extra copy in every group from your library folder, keeping the suggested file of each? This cannot be undone.')) return;
+  const status = $('#dup-all-status');
+  status.textContent = 'Working...';
+  const res = await jsonRequest('POST', '/api/duplicates/merge-all', del ? { delete_files: true, confirm: 'delete' } : {});
+  if (!res.ok) { status.textContent = await sourceErrorText(res); return; }
+  const result = await res.json();
+  await loadDuplicates();
+  $('#dup-summary').insertAdjacentHTML('beforeend', `<span class="muted">${esc(dupResultText(result))}</span>`);
+});
+$('#dup-more-btn').addEventListener('click', () => loadDuplicates(true));
+
+// ---------- Backup (Settings) ----------
+async function refreshBackups() {
+  const res = await fetch('/api/backup/saved');
+  if (!res.ok) return;
+  const list = (await res.json()).backups;
+  $('#backup-saved').innerHTML = list.length ? `<ul class="link-list">${list.map(b => `
+    <li data-name="${esc(b.name)}"><a href="/api/backup/saved/${encodeURIComponent(b.name)}" download>${esc(b.name)}</a>
+      <span class="muted">${formatBytes(b.size)} &middot; ${esc(b.created.slice(0, 16).replace('T', ' '))}</span>
+      <button class="backup-restore-saved">Restore</button> <button class="backup-delete-saved">Delete</button></li>`).join('')}</ul>`
+    : '<p class="muted">No copies saved on the server yet.</p>';
+}
+
+function restoreText(r) {
+  const missing = r.missing_files ? ` ${plural(r.missing_files, 'model')} in the backup ${r.missing_files === 1 ? 'is' : 'are'} not in this library folder and will be dropped by the next scan.` : '';
+  return `Restored (backup from ${String(r.created || '?').slice(0, 10)}, ${r.pictures} pictures). Your previous data was saved as ${r.safety_copy}.${missing}`;
+}
+
+$('#backup-save-btn').addEventListener('click', async () => {
+  $('#backup-status').textContent = 'Saving...';
+  const res = await fetch('/api/backup/save', { method: 'POST' });
+  $('#backup-status').textContent = res.ok ? 'Saved on the server.' : await sourceErrorText(res);
+  refreshBackups();
+});
+$('#backup-saved').addEventListener('click', async (e) => {
+  const row = e.target.closest('li');
+  if (!row) return;
+  const name = encodeURIComponent(row.dataset.name);
+  if (e.target.classList.contains('backup-delete-saved')) {
+    await fetch(`/api/backup/saved/${name}`, { method: 'DELETE' });
+    refreshBackups();
+  } else if (e.target.classList.contains('backup-restore-saved')) {
+    if (!confirm('Replace your current tags, projects, notes and so on with this copy? A copy of the current data is saved first.')) return;
+    $('#backup-status').textContent = 'Restoring...';
+    const res = await jsonRequest('POST', `/api/backup/saved/${name}/restore`, { confirm: 'replace' });
+    $('#backup-status').textContent = res.ok ? restoreText(await res.json()) : await sourceErrorText(res);
+    refreshBackups();
+  }
+});
+$('#backup-restore-btn').addEventListener('click', async () => {
+  const file = $('#backup-file').files[0];
+  if (!file) { $('#backup-status').textContent = 'Choose a backup file first.'; return; }
+  if (!confirm('Replace your current tags, projects, notes and so on with this backup? A copy of the current data is saved first.')) return;
+  $('#backup-status').textContent = 'Restoring...';
+  const form = new FormData();
+  form.append('file', file);
+  form.append('confirm', 'replace');
+  const res = await fetch('/api/backup/restore', { method: 'POST', body: form });
+  $('#backup-status').textContent = res.ok ? restoreText(await res.json()) : await sourceErrorText(res);
+  refreshBackups();
+});
+
 async function loadSettings() {
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
@@ -2235,6 +2458,7 @@ async function loadSettings() {
   $('#est-infill').value = s.est_infill || '15';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
   await renderSiteSettings(s);
+  refreshBackups();
   const keyRes = await fetch('/api/settings/extension-key');
   $('#ext-api-key').value = keyRes.ok ? (await keyRes.json()).extension_api_key : '';
 }

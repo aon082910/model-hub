@@ -80,6 +80,9 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Supplies on hand | Done — a **Supplies** tab for the electronics, parts and supplies you own: quantity, a low-stock threshold (flagged and filterable), location (bin/drawer), unit cost, search, and CSV export. Typing a project part name suggests items from here and pre-fills its type and cost |
 | Match models to online listings | Done — Printables, MakerWorld and Sketchfab (no account) plus Thingiverse, MyMiniFactory and Cults3D (keys entered in Settings); see [Matching models to site listings](#matching-models-to-site-listings) below |
 | Search and add to library | Done — a **Search** page searches your library and every connected site at once; open a result for a full preview page, add one with a button, or tick several and add them together. See [Search and add to library](#search-and-add-to-library) |
+| Backup and restore | Done — **Settings → Backup** downloads (or saves on the server) a zip with everything Model Hub knows apart from the model files, and restores from one. See [Backup and restore](#backup-and-restore) |
+| Print log | Done — every model's page has a print history (date, rating, filament and grams, minutes, notes, a photo); the Library can filter to printed or never-printed models and shows a printed badge; finishing a job in the print queue logs it automatically. See [Print log](#print-log) |
+| Duplicate cleanup | Done — **Library → Review duplicates** lists groups of identical files, keeps the one you pick (carrying tags, collections, projects, notes, print history and listing link over), and can delete the other files after checking them again. See [Duplicates](#duplicates) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -196,6 +199,44 @@ carry a note. The tab shows which items are already in your library, lets you ad
 queues every item the server can download (those already in your library are skipped; sites that need the browser extension
 are reported with the reason). **Remove the ones already in my library** tidies the list afterwards. Downloads from the
 wishlist use the same background queue as the Search page.
+
+## Backup and restore
+
+**Settings → Backup** has three things:
+
+- **Download a backup** makes a zip of everything Model Hub knows apart from the model files: tags, collections, projects, supplies,
+  filament, links to listings, notes, the wishlist, the print log, and the saved listing and print pictures. It is a consistent
+  copy even while Model Hub is running. Passwords, the extension key and every site key or token are left out, so a backup is
+  safe to keep around and restoring never replaces the logins you have now. Thumbnails are left out too (rebuild them from
+  Settings if you restore onto a fresh install).
+- **Save a copy on the server** keeps the same zip in `/config/backups`, which an Unraid appdata backup already covers.
+- **Restore** from a downloaded file or a saved copy replaces the data tables in one transaction (so a bad file changes nothing),
+  merges the non-secret settings, and first saves a copy of the current data as `before-restore-*.zip` (the newest three are kept), so
+  a restore can be undone from the same list. Restores are refused while downloads or the matching job are running, and the file
+  is checked first: it must be a Model Hub backup, nothing may be outside the expected folders, and a backup from a newer
+  version is refused. Models in the backup whose file is not in this library folder are dropped by the next scan; the restore tells
+  you how many.
+
+## Print log
+
+Every model's page has **Print history** and **Log a print**: date, rating (1–5), notes, optionally a spool and grams (which are taken
+from the spool, never below zero; deleting the entry puts back exactly what it took), minutes, and a photo (shrunk like listing
+pictures). Finishing a job in the **Print Queue** writes the entry for you, once per queue item. The Library can filter to **Printed** or
+**Never printed**, and printed models show a badge with how many times. Print entries and photos go in backups, and are removed with the
+model.
+
+## Duplicates
+
+Files are duplicates when their contents are identical (same hash). **Library → Review duplicates** shows each group with what is attached
+to every copy (tags, collections, projects, prints, listing link, notes) and suggests the copy with the most of your own work on it.
+
+- **Combine info** shares the tags, collections, projects, notes, designer/license and listing link with the kept copy, and leaves every file alone.
+- **Keep this, delete the others** does that and also deletes the other files from your library folder and their records. Before any
+  file is deleted both files are hashed again; a file that has changed since the scan, lies outside the library folder, or is the file
+  you are keeping is never deleted, and nothing is deleted if the file you keep is missing. Queue entries, print history and project
+  filament lines move to the kept model.
+- **Clean up every group** does the suggested clean-up for all groups at once (with a confirmation).
+- *Same shape, different file* lists files with the same geometry but different contents (re-exports and the like); these are only shown, never merged.
 
 ## Auth
 

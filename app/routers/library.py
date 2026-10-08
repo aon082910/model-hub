@@ -9,7 +9,7 @@ from typing import Optional
 
 from app.db import get_session
 from app.models import (
-    Collection, Model3D, ModelCollectionLink, ModelTagLink, Project, ProjectModelLink, QueueItem, Tag,
+    Collection, Model3D, ModelCollectionLink, ModelTagLink, PrintLog, Project, ProjectModelLink, QueueItem, Tag,
 )
 from app.config import ARCHIVE_EXTENSIONS, LIBRARY_PATH, MODEL_EXTENSIONS, THUMB_DIR
 from app.library_maintenance import LibraryMaintenanceBusy
@@ -53,6 +53,7 @@ def list_models(
     tag: Optional[str] = None,
     extension: Optional[str] = None,
     duplicates_only: bool = False,
+    printed: Optional[bool] = None,
     limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
@@ -69,6 +70,10 @@ def list_models(
         conditions.append(Model3D.extension == extension)
     if duplicates_only:
         conditions.append(Model3D.is_duplicate_of.is_not(None))
+    if printed is True:
+        conditions.append(Model3D.id.in_(select(PrintLog.model_id)))
+    elif printed is False:
+        conditions.append(Model3D.id.not_in(select(PrintLog.model_id)))
     if q and q.strip():
         pattern = f"%{q.strip()}%"
         conditions.append(or_(
@@ -117,7 +122,14 @@ def _with_tags(session: Session, models: list) -> list:
         for model_id, tag in rows:
             tags_by_model.setdefault(model_id, []).append(
                 {"id": tag.id, "name": tag.name, "ai_generated": tag.ai_generated})
-    return [{**m.model_dump(exclude={"embedding"}), "tags": tags_by_model.get(m.id, [])} for m in models]
+    prints = {}
+    if ids:
+        for model_id, count, last in session.exec(
+                select(PrintLog.model_id, func.count(PrintLog.id), func.max(PrintLog.printed_at))
+                .where(PrintLog.model_id.in_(ids)).group_by(PrintLog.model_id)).all():
+            prints[model_id] = (count, last)
+    return [{**m.model_dump(exclude={"embedding"}), "tags": tags_by_model.get(m.id, []),
+             "print_count": prints.get(m.id, (0, None))[0], "last_printed_at": prints.get(m.id, (0, None))[1]} for m in models]
 
 
 @router.post("/import")

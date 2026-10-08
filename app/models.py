@@ -204,6 +204,24 @@ class WishlistItem(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class PrintLog(SQLModel, table=True):
+    """One print of a model: when, with which spool and how much, how it turned out.
+    deducted_g is what was actually taken from the spool, so deleting the entry
+    puts back exactly that."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model_id: int = Field(foreign_key="model3d.id", index=True)
+    printed_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    filament_id: Optional[int] = Field(default=None, foreign_key="filament.id")
+    grams: Optional[float] = None
+    deducted_g: float = 0
+    minutes: Optional[float] = None
+    rating: Optional[int] = None            # 1-5
+    notes: Optional[str] = None
+    source: str = "manual"                  # manual, queue
+    queue_item_id: Optional[int] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class AppSettings(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str = Field(index=True, unique=True)
