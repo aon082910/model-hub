@@ -16,6 +16,49 @@ def list_slots(session: Session = Depends(get_session)):
     return {"printers": slots.overview(session)}
 
 
+@router.post("/{printer_id}/apply-suggestions")
+def apply_suggestions(printer_id: int, request: Request, session: Session = Depends(get_session)):
+    """Load the spools the printer's own report points at into the empty slots (never replacing one you chose)."""
+    printer = session.get(Printer, printer_id)
+    if not printer:
+        raise HTTPException(404, "That printer was not found")
+    entry = next((p for p in slots.overview(session) if p["id"] == printer_id), None)
+    done = []
+    for slot in (entry["slots"] if entry else []):
+        if slot["suggested_filament_id"]:
+            slots.load(session, printer, slot["slot"], slot["suggested_filament_id"])
+            done.append(slot["slot"])
+            entry = next((p for p in slots.overview(session) if p["id"] == printer_id), entry)      # a spool can only be suggested once
+    if done:
+        activity.record(session, activity.actor_of(request), "slot", f"{printer.name}: loaded spools into slots {', '.join(map(str, done))} from the printer's report")
+    return {"loaded": done}
+
+
+@router.post("/{printer_id}/sync-remaining")
+def sync_remaining(printer_id: int, request: Request, session: Session = Depends(get_session)):
+    """Set each loaded spool's remaining weight from the percentage the printer reports for its slot (Bambu spools with a tag
+    report this; others report nothing, and those are left alone)."""
+    from app.models import Filament
+    printer = session.get(Printer, printer_id)
+    if not printer:
+        raise HTTPException(404, "That printer was not found")
+    entry = next((p for p in slots.overview(session) if p["id"] == printer_id), None)
+    changed = []
+    for slot in (entry["slots"] if entry else []):
+        tray, spool = slot["reported"], slot["spool"]
+        if spool and tray and tray.get("remain") is not None:
+            row = session.get(Filament, spool["id"])
+            weight = round((row.spool_weight_g or 1000) * tray["remain"] / 100, 1)
+            if row and abs(weight - row.remaining_g) >= 1:
+                changed.append({"slot": slot["slot"], "spool_id": row.id, "from": row.remaining_g, "to": weight})
+                row.remaining_g = weight
+                session.add(row)
+    session.commit()
+    if changed:
+        activity.record(session, activity.actor_of(request), "slot", f"{printer.name}: remaining weight of {len(changed)} spool(s) set from the printer's report")
+    return {"changed": changed}
+
+
 @router.put("/{printer_id}/{slot}")
 def load_slot(printer_id: int, slot: int, payload: dict, request: Request, session: Session = Depends(get_session)):
     """Put a spool in a slot (filament_id), or empty it (null). label names the slot ("AMS A1", "tool 2")."""

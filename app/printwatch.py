@@ -32,7 +32,7 @@ def reset() -> None:
 
 def finished(kind: str, state: str, progress) -> bool:
     """Did the print that just ended complete? (Moonraker says so; OctoPrint is judged by its progress.)"""
-    if kind == "moonraker":
+    if kind in ("moonraker", "bambu"):
         return state == "complete"
     return isinstance(progress, (int, float)) and progress >= 99.5
 
@@ -42,7 +42,7 @@ def poll(session: Session) -> list:
     ended = []
     printers = session.exec(select(Printer)).all()
     for printer in printers:
-        st = printing.status(printer.kind, printer.url, printer.api_key)
+        st = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
         latest[printer.id] = {**st, "name": printer.name}
         previous = _last.get(printer.id)
         if st["online"]:

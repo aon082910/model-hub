@@ -278,8 +278,22 @@ class Printer(SQLModel, table=True):
     kind: str                       # moonraker, octoprint
     url: str
     api_key: Optional[str] = None
+    serial: Optional[str] = None         # a Bambu Lab printer's serial number (its LAN access code is api_key)
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MaintenanceTask(SQLModel, table=True):
+    """Something a printer needs now and then (oil the rails, change the nozzle): due after so many print hours and/or days."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(index=True)
+    name: str
+    every_hours: Optional[float] = None           # of printing on that printer
+    every_days: Optional[int] = None
+    last_done_at: datetime = Field(default_factory=datetime.utcnow)
+    last_done_hours: float = 0                    # the printer's print hours when it was last done
+    note: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

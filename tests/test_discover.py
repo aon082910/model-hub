@@ -50,7 +50,7 @@ def test_search_covers_the_library_and_every_usable_site(authed, sites):
     assert {named["id"], tagged["id"], noted["id"]} <= library_ids               # found by name, tag and notes
     assert all("tags" in m for m in data["library"])
     assert {r["provider"] for r in data["online"]} == {"printables", "makerworld", "sketchfab", "commons"}
-    assert set(data["searched"]) == {"printables", "makerworld", "sketchfab", "commons", "nasa3d", "smithsonian"}
+    assert set(data["searched"]) == {"printables", "makerworld", "sketchfab", "commons", "nasa3d", "smithsonian", "archive"}
     assert data["errors"] == {}
     by_provider = {r["provider"]: r for r in data["online"]}
     assert by_provider["printables"]["can_download"] is True and by_provider["makerworld"]["can_download"] is False

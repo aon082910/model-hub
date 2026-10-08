@@ -247,6 +247,16 @@ def parse_print_settings(model: Model3D) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+@router.get("/models/{model_id}/suggested-settings")
+def suggested_settings(model_id: int, session: Session = Depends(get_session)):
+    """What probably works for this model, from how its prints went, next to what is saved now."""
+    from app import suggest_settings
+    model = session.get(Model3D, model_id)
+    if not model:
+        raise HTTPException(404, "Model not found")
+    return {"suggested": suggest_settings.suggest(session, model_id), "current": parse_print_settings(model)}
+
+
 @router.put("/models/{model_id}/print-settings")
 def set_print_settings(model_id: int, payload: dict, session: Session = Depends(get_session)):
     """What worked for this model. Unknown fields are refused; empty ones are dropped."""

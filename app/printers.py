@@ -1,8 +1,10 @@
 """Talking to your printers: see what they are doing and send them a sliced file.
 
-Two kinds of printer are supported, both over your own network:
+Three kinds of printer are supported, all over your own network:
   * Klipper / Moonraker (Mainsail, Fluidd, ...): the Moonraker HTTP API.
   * OctoPrint: its REST API (needs its API key).
+  * Bambu Lab in LAN mode (P1, X1, A1...): the printer's own MQTT broker, with its serial number and LAN access code. Status and the AMS
+    are read; files are not sent (use Bambu Studio for that).
 Printers print G-code, not models, so what is sent is either a G-code file you choose, or a model
 sliced here with a headless slicer (SLICER_CLI_PATH) and the printer profile you exported
 (SLICER_CONFIG_PATH). Without both, slicing is not offered: a default profile would not match your
@@ -24,7 +26,9 @@ import httpx
 
 logger = logging.getLogger("modelhub.printers")
 
-KINDS = ("moonraker", "octoprint")
+KINDS = ("moonraker", "octoprint", "bambu")
+BAMBU_PORT = 8883
+BAMBU_TIMEOUT = 8.0
 GCODE_EXTENSIONS = {".gcode", ".gco", ".g", ".bgcode"}
 SLICEABLE_EXTENSIONS = {".stl", ".3mf", ".obj", ".step", ".stp"}
 MAX_UPLOAD_BYTES = 1024 ** 3
@@ -64,6 +68,26 @@ def clean_url(value) -> str:
     if parsed.query or parsed.fragment:
         raise PrinterError("The address should just be the printer's own address")
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+
+_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+_SERIAL_RE = re.compile(r"^[A-Za-z0-9]{8,24}$")
+
+
+def clean_host(value) -> str:
+    """The address of a Bambu printer: a host name or IP address, nothing else (the port is fixed)."""
+    if not isinstance(value, str) or not value.strip():
+        raise PrinterError("Give the printer's address on your network, like 192.168.1.60")
+    host = re.sub(r"^[a-z]+://", "", value.strip()).split("/")[0].split(":")[0]
+    if re.search(r"\s", value.strip()) or ".." in value or not _HOST_RE.match(host):
+        raise PrinterError("The address must be a host name or an IP address like 192.168.1.60")
+    return host
+
+
+def clean_serial(value) -> str:
+    if not isinstance(value, str) or not _SERIAL_RE.match(value.strip()):
+        raise PrinterError("Give the printer's serial number (on its label, or in Bambu Studio's device page)")
+    return value.strip().upper()
 
 
 def clean_snapshot_url(value) -> Optional[str]:
@@ -115,6 +139,8 @@ def fetch_snapshot(url: str) -> bytes:
 def list_timelapses(kind: str, url: str, api_key: Optional[str]) -> list:
     """The time-lapse videos a printer keeps: [{name, size, modified (epoch seconds or None), url}]. Raises PrinterError.
     Klipper needs the moonraker-timelapse plugin, OctoPrint its timelapse feature; a printer with neither has none."""
+    if kind == "bambu":
+        raise PrinterError("Bambu printers do not keep time-lapse videos where Model Hub can list them")
     base = urlparse(url)
     root = f"{base.scheme}://{base.netloc}"
     with _client() as client:
@@ -176,11 +202,14 @@ def _number(value) -> Optional[float]:
 
 # ---------- status ----------
 
-def status(kind: str, url: str, api_key: Optional[str]) -> dict:
-    """{online, state, progress (0-100), file, nozzle, bed, message}. Never raises for an unreachable printer."""
+def status(kind: str, url: str, api_key: Optional[str], serial: Optional[str] = None) -> dict:
+    """{online, state, progress (0-100), file, nozzle, bed, message}. Never raises for an unreachable printer.
+    A Bambu printer's answer also has "ams": what it says is in each slot."""
     result = {"online": False, "state": "offline", "progress": None, "file": None, "nozzle": None, "bed": None, "message": None,
               "duration": None}
     try:
+        if kind == "bambu":
+            return _bambu_status(url, serial, api_key, result)
         with _client() as client:
             if kind == "moonraker":
                 return _moonraker_status(client, url, api_key, result)
@@ -188,6 +217,98 @@ def status(kind: str, url: str, api_key: Optional[str]) -> dict:
     except PrinterError as e:
         result["message"] = str(e)
         return result
+
+
+def _bambu_report(host: str, serial: str, code: str, timeout: float = BAMBU_TIMEOUT) -> dict:
+    """Ask a Bambu printer for its state over its LAN MQTT broker and return the "print" part of what it reports.
+    (This is the one function that talks to the printer; tests replace it.) The printer's certificate is its own, so it cannot be
+    checked against a public authority; the access code is what proves who we are."""
+    import json
+    import ssl
+    import threading
+    import paho.mqtt.client as mqtt
+
+    merged, problem, got = {}, [], threading.Event()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"modelhub-{serial[-6:]}")
+    client.username_pw_set("bblp", code)
+    client.tls_set(cert_reqs=ssl.CERT_NONE)
+    client.tls_insecure_set(True)
+
+    def on_connect(c, userdata, flags, reason_code, properties=None):
+        if getattr(reason_code, "is_failure", False):
+            problem.append("The printer refused the access code" if "uthoriz" in str(reason_code) else f"The printer refused the connection ({reason_code})")
+            got.set()
+            return
+        c.subscribe(f"device/{serial}/report")
+        c.publish(f"device/{serial}/request", json.dumps({"pushing": {"sequence_id": "1", "command": "pushall"}}))
+
+    def on_message(c, userdata, message):
+        try:
+            data = json.loads(message.payload.decode("utf-8", "replace"))
+        except ValueError:
+            return
+        part = data.get("print") if isinstance(data, dict) else None
+        if isinstance(part, dict):
+            merged.update(part)
+            if "gcode_state" in merged:
+                got.set()
+
+    client.on_connect, client.on_message = on_connect, on_message
+    try:
+        client.connect(host, BAMBU_PORT, keepalive=10)
+        client.loop_start()
+        got.wait(timeout)
+    except OSError as e:
+        raise PrinterError(f"Could not reach the printer ({e.__class__.__name__})")
+    finally:
+        try:
+            client.loop_stop()
+            client.disconnect()
+        except Exception:
+            pass
+    if problem:
+        raise PrinterError(problem[0])
+    if "gcode_state" not in merged:
+        raise PrinterError("The printer did not answer (is LAN mode on, and are the serial number and access code right?)")
+    return merged
+
+
+_BAMBU_STATES = {"IDLE": "standby", "RUNNING": "printing", "PREPARE": "printing", "SLICING": "printing", "PAUSE": "paused",
+                 "FINISH": "complete", "FAILED": "error"}
+
+
+def _bambu_ams(report: dict) -> list:
+    """The AMS trays as [{slot (1-based, four to a unit), material, color (#rrggbb), remain (percent or None), name, empty}]."""
+    out = []
+    for unit in ((report.get("ams") or {}).get("ams") or []):
+        try:
+            base = int(unit.get("id") or 0) * 4
+        except (TypeError, ValueError):
+            continue
+        for tray in unit.get("tray") or []:
+            try:
+                slot = base + int(tray.get("id") or 0) + 1
+            except (TypeError, ValueError):
+                continue
+            colour = str(tray.get("tray_color") or "")[:6]
+            remain = tray.get("remain")
+            out.append({"slot": slot, "material": (str(tray.get("tray_type") or "").strip() or None),
+                        "color": "#" + colour.lower() if re.fullmatch(r"[0-9A-Fa-f]{6}", colour) else None,
+                        "remain": remain if isinstance(remain, int) and not isinstance(remain, bool) and 0 <= remain <= 100 else None,
+                        "name": (str(tray.get("tray_sub_brands") or "").strip() or None), "empty": not tray.get("tray_type")})
+    return sorted(out, key=lambda t: t["slot"])
+
+
+def _bambu_status(host, serial, code, result):
+    if not host or not serial or not code:
+        raise PrinterError("This printer needs its address, serial number and LAN access code")
+    report = _bambu_report(host, serial, code)
+    state = _BAMBU_STATES.get(str(report.get("gcode_state") or "").upper(), str(report.get("gcode_state") or "unknown").lower())
+    percent = report.get("mc_percent")
+    result.update(online=True, state=state, progress=float(percent) if isinstance(percent, (int, float)) and not isinstance(percent, bool) else None,
+                  file=(report.get("subtask_name") or report.get("gcode_file") or None),
+                  nozzle=_number(report.get("nozzle_temper")), bed=_number(report.get("bed_temper")), ams=_bambu_ams(report))
+    return result
 
 
 def _moonraker_status(client, url, api_key, result):
@@ -244,6 +365,8 @@ def safe_gcode_name(name: str) -> str:
 
 def send_file(kind: str, url: str, api_key: Optional[str], path: Path, filename: str, start: bool) -> dict:
     """Upload a G-code file; start it only when start is true. Returns {"filename", "started"}."""
+    if kind == "bambu":
+        raise PrinterError("Files cannot be sent to a Bambu printer from here; send them from Bambu Studio")
     if path.suffix.lower() not in GCODE_EXTENSIONS and Path(filename).suffix.lower() not in GCODE_EXTENSIONS:
         raise PrinterError("That is not a G-code file (.gcode, .gco, .g or .bgcode)")
     size = path.stat().st_size

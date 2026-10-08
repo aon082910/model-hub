@@ -456,7 +456,10 @@
         <summary>Add a printer</summary>
         <div class="row">
           <input id="printer-name" placeholder="Name (e.g. Voron)">
-          <select id="printer-kind"><option value="moonraker">Klipper / Moonraker</option><option value="octoprint">OctoPrint</option></select>
+          <select id="printer-kind"><option value="moonraker">Klipper / Moonraker</option><option value="octoprint">OctoPrint</option><option value="bambu">Bambu Lab (LAN mode)</option></select>
+        </div>
+        <div class="row hidden" id="printer-serial-row">
+          <input id="printer-serial" placeholder="Serial number (on the printer's label)" autocomplete="off">
         </div>
         <div class="row">
           <input id="printer-snapshot" placeholder="Camera picture address (optional), e.g. http://192.168.1.60/webcam/?action=snapshot">
@@ -479,6 +482,7 @@
       <span id="printers-status" class="muted"></span>
     </div>
     <div id="slots-panel" class="panel hidden"></div>
+    <div id="maintenance-panel" class="panel"></div>
     <h2>Print Queue</h2>
     <div id="queue-summary" class="muted"></div>
     <ul id="queue-list"></ul>
@@ -567,6 +571,8 @@
       <span id="notify-test-status" class="muted"></span>
       <p class="muted">Tell me about:</p>
       <div id="notify-events"></div>
+      <label class="inline-check"><input type="checkbox" id="weekly-summary"> Send me a summary of the week, every seven days</label>
+      <button id="weekly-test-btn">Send one now</button> <span id="weekly-test-status" class="muted"></span>
       <label>Low filament warning at <small>(grams left on a spool; 0 switches spool warnings off. Supplies warn at the minimum you set for them.)</small>
         <input id="low-filament-g" type="number" min="0" step="10" placeholder="100">
       </label>
@@ -716,6 +722,7 @@
         <div id="viewer-canvas-wrap"><canvas id="viewer-canvas"></canvas></div>
         <div id="viewer-info"></div>
         <div class="panel" id="model-links-panel"></div>
+        <div class="panel" id="model-slicer-panel"></div>
         <div class="panel" id="model-prints-panel"></div>
         <div class="panel admin-only hidden" id="model-printer-panel"></div>
       </div>

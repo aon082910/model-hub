@@ -16,7 +16,7 @@ GitHub repository, indexed from its file tree) and the Smithsonian's 3D
 Digitization models that come as print-ready STL (its public 3D API).
 
 Which sites let a server download the model files themselves: Printables (no
-login), Thingiverse (with the token), Wikimedia Commons, NASA 3D Resources and the Smithsonian. MakerWorld, Sketchfab and MyMiniFactory
+login), Thingiverse (with the token), Wikimedia Commons, NASA 3D Resources, the Smithsonian and the Internet Archive's copy of Thingiverse. MakerWorld, Sketchfab and MyMiniFactory
 only hand files to a logged-in user, and Cults3D's API never serves files; for
 those the browser extension, which runs in your logged-in browser, is the way in.
 
@@ -67,11 +67,12 @@ NASA_TREE_API = f"https://api.github.com/repos/{NASA_REPO}/git/trees/master?recu
 NASA_RAW = f"https://raw.githubusercontent.com/{NASA_REPO}/master/"
 NASA_WEB = f"https://github.com/{NASA_REPO}/tree/master/"
 
-PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d", "smithsonian")
+PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d", "smithsonian", "archive")
 PROVIDER_LABELS = {
     "printables": "Printables", "makerworld": "MakerWorld", "sketchfab": "Sketchfab", "thingiverse": "Thingiverse",
     "myminifactory": "MyMiniFactory", "cults3d": "Cults3D",
     "commons": "Wikimedia Commons", "nasa3d": "NASA 3D Resources", "smithsonian": "Smithsonian 3D",
+    "archive": "Internet Archive (Thingiverse)",
 }
 # Providers that need credentials: the fields to enter in Settings (each is stored
 # as the setting "<provider>_<field>"), a label, whether it is secret, and where to get one.
@@ -87,7 +88,7 @@ CREDENTIAL_HELP = {
 }
 KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_FIELDS)
 # Where model files can be downloaded by this server (see the module docstring)
-DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d", "smithsonian")
+DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d", "smithsonian", "archive")
 DOWNLOAD_NOTES = {
     "makerworld": "MakerWorld only gives model files to logged-in users. Open the listing, then use the Model Hub browser extension while logged in.",
     "sketchfab": "Sketchfab only gives downloads to logged-in users, and as glTF rather than printable formats.",
@@ -97,7 +98,7 @@ DOWNLOAD_NOTES = {
 # Pictures are only ever downloaded from these sites' own domains (and their subdomains)
 IMAGE_DOMAINS = (
     "printables.com", "bblmw.com", "sketchfab.com", "thingiverse.com", "myminifactory.com", "cults3d.com",
-    "wikimedia.org", "githubusercontent.com", "si.edu",
+    "wikimedia.org", "githubusercontent.com", "si.edu", "archive.org",
 )
 
 
@@ -132,6 +133,7 @@ _THINGIVERSE_URL = re.compile(r"^https?://(?:www\.)?thingiverse\.com/thing:(\d+)
 _MYMINIFACTORY_URL = re.compile(r"^https?://(?:www\.)?myminifactory\.com/(?:[a-z]{2}/)?object/(?:[^/?#]*-)?(\d+)(?:[/?#]|$)", re.I)
 _CULTS3D_URL = re.compile(r"^https?://(?:www\.)?cults3d\.com/[a-z]{2}/3d-model/[^/?#]+/([A-Za-z0-9_-]{3,200})(?:[/?#]|$)", re.I)
 _SMITHSONIAN_URL = re.compile(r"^https?://(?:www\.)?3d\.si\.edu/object/3d/(?:[^/?#]*:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#]|$)", re.I)
+_ARCHIVE_URL = re.compile(r"^https?://(?:www\.)?archive\.org/(?:details|download)/(thingiverse-\d{1,12})(?:[/?#]|$)", re.I)
 _NASA_URL = re.compile(r"^https?://github\.com/nasa/NASA-3D-Resources/(?:tree|blob)/master/([^?#]+)", re.I)
 _URL_PATTERNS = (
     ("printables", _PRINTABLES_URL), ("makerworld", _MAKERWORLD_URL),
@@ -155,6 +157,9 @@ def nasa_listing_id(folder: str) -> str:
 def parse_url(url: str) -> Optional[tuple]:
     """(provider, id) for a supported model URL, else None."""
     url = (url or "").strip()
+    archive = _ARCHIVE_URL.match(url)
+    if archive:
+        return "archive", archive.group(1).lower()
     smithsonian = _SMITHSONIAN_URL.match(url)
     if smithsonian:
         return "smithsonian", smithsonian.group(1).lower()
@@ -180,6 +185,8 @@ def valid_source_id(provider: str, source_id) -> bool:
         return re.fullmatch(r"[A-Za-z0-9_-]{3,200}", source_id) is not None
     if provider == "nasa3d":
         return re.fullmatch(r"[0-9a-f]{12}", source_id) is not None
+    if provider == "archive":
+        return re.fullmatch(r"thingiverse-\d{1,12}", source_id) is not None
     if provider == "smithsonian":
         return re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source_id) is not None
     return provider in PROVIDERS and source_id.isdigit()
@@ -311,6 +318,8 @@ def fetch_details(provider: str, source_id: str, credentials: Optional[dict] = N
             return _nasa_details(client, source_id)
         if provider == "smithsonian":
             return _smithsonian_details(client, source_id)
+        if provider == "archive":
+            return _archive_details(client, source_id)
         return _thingiverse_details(client, source_id, _thingiverse_token(credentials))
 
 
@@ -1024,6 +1033,98 @@ def smithsonian_files(client: httpx.Client, source_id: str) -> list:
     return smithsonian_files_from_rows(_smithsonian_rows(client, source_id), source_id)
 
 
+# ---------- Internet Archive's Thingiverse archive (no account) ----------
+# The Archive keeps a copy of a large part of Thingiverse (about 600 000 things), one item per thing: "thingiverse-<number>", with the
+# thing's files in one ZIP, its description, its designer and its Creative Commons licence. Search and downloads need no token.
+
+ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
+ARCHIVE_META = "https://archive.org/metadata/"
+ARCHIVE_DOWNLOAD = "https://archive.org/download/"
+ARCHIVE_WEB = "https://archive.org/details/"
+ARCHIVE_DOMAINS = ("archive.org",)
+_ARCHIVE_ID = re.compile(r"thingiverse-\d{1,12}")
+_CC_URL = re.compile(r"creativecommons\.org/(licenses|publicdomain)/([a-z-]+)/?([0-9.]*)", re.I)
+
+
+def archive_license(url) -> str:
+    """'https://creativecommons.org/licenses/by-nc-sa/4.0/' -> 'CC BY-NC-SA 4.0'; the address itself for anything else."""
+    match = _CC_URL.search(str(url or ""))
+    if not match:
+        return str(url or "")[:120]
+    kind, code, version = match.groups()
+    if kind == "publicdomain":
+        return "CC0" if code.lower() in ("zero", "mark") else "Public domain"
+    return f"CC {code.upper()}{' ' + version if version else ''}"
+
+
+def _archive_title(title) -> str:
+    return re.sub(r"\s*\(\d+\)\s*$", "", str(title or "")).strip() or "Thingiverse model"
+
+
+def _archive_text(value) -> str:
+    if isinstance(value, list):
+        value = "\n".join(str(v) for v in value)
+    return html_to_text(str(value or ""))[:4000]
+
+
+def _search_archive(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", query) if w][:8]
+    if not words:
+        raise SourceError("Type something to search for")
+    data = _get_json(client, ARCHIVE_SEARCH, params={
+        "q": "collection:thingiverse AND title:(" + " AND ".join(words) + ")", "fl[]": ["identifier", "title", "creator", "licenseurl"],
+        "rows": limit, "page": page, "output": "json", "sort[]": "downloads desc"})
+    found = []
+    for doc in (data.get("response") or {}).get("docs") or []:
+        identifier = str(doc.get("identifier") or "")
+        if not _ARCHIVE_ID.fullmatch(identifier):
+            continue
+        creator = doc.get("creator")
+        creator = creator[0] if isinstance(creator, list) and creator else creator
+        found.append({
+            "provider": "archive", "source_id": identifier, "url": ARCHIVE_WEB + identifier, "title": _archive_title(doc.get("title")),
+            "designer": re.sub(r"\s*\([^)]*\)\s*$", "", str(creator or "")).strip(), "license": archive_license(doc.get("licenseurl")),
+            "thumbnail": f"https://archive.org/services/img/{identifier}",
+        })
+    return found
+
+
+def _archive_item(client: httpx.Client, source_id: str) -> dict:
+    data = _get_json(client, ARCHIVE_META + source_id)
+    if not data.get("metadata") or not isinstance(data.get("files"), list):
+        raise SourceError("That listing was not found (it may have been removed)")
+    return data
+
+
+def _archive_details(client: httpx.Client, source_id: str) -> dict:
+    data = _archive_item(client, source_id)
+    meta = data["metadata"]
+    creator = meta.get("creator")
+    creator = creator[0] if isinstance(creator, list) and creator else creator
+    subjects = meta.get("subject") or []
+    subjects = [subjects] if isinstance(subjects, str) else subjects
+    tags = [str(t).replace("_", " ").strip() for t in subjects if str(t).strip().lower() not in ("thingiverse", "3d_printing", "3d printing", "stl")]
+    return {
+        "provider": "archive", "source_id": source_id, "url": ARCHIVE_WEB + source_id, "title": _archive_title(meta.get("title")),
+        "designer": re.sub(r"\s*\([^)]*\)\s*$", "", str(creator or "")).strip(), "license": archive_license(meta.get("licenseurl")),
+        "description": _archive_text(meta.get("description")), "tags": tags[:12], "category": "",
+        "images": [f"https://archive.org/services/img/{source_id}"],
+        "likes": None, "downloads": None, "parts": [], "filaments": [],
+    }
+
+
+def archive_files(client: httpx.Client, source_id: str) -> list:
+    """The thing's own files (its ZIP, or loose model files), not the Archive's bookkeeping files."""
+    out = []
+    for f in _archive_item(client, source_id)["files"]:
+        name = str(f.get("name") or "")
+        if f.get("source") != "original" or Path(name).suffix.lower() not in (".zip", ".stl", ".3mf", ".obj", ".step", ".stp") or "/" in name:
+            continue
+        out.append({"id": hashlib.sha1(name.encode("utf-8")).hexdigest()[:10], "name": name, "size": int(f["size"]) if str(f.get("size", "")).isdigit() else None,
+                    "url": f"{ARCHIVE_DOWNLOAD}{source_id}/{quote(name)}"})
+    return out
+
+
 # ---------- model files (Printables, Thingiverse) ----------
 # Only these two sites let a server fetch the files; see the module docstring.
 
@@ -1260,7 +1361,7 @@ query($q: String!, $limit: Int!, $offset: Int!) { result: searchPrints2(query: $
 
 # Collections of reference models rather than designers' marketplaces: a personal file
 # is unlikely to come from there, and a wrong automatic link is worse than none.
-NOT_FOR_MATCHING = ("commons", "nasa3d", "smithsonian")
+NOT_FOR_MATCHING = ("commons", "nasa3d", "smithsonian", "archive")
 
 
 def matching_providers(credentials: Optional[dict] = None) -> tuple:
@@ -1297,6 +1398,8 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
             return _search_nasa3d(client, query, limit, page)
         if provider == "smithsonian":
             return _search_smithsonian(client, query, limit, page)
+        if provider == "archive":
+            return _search_archive(client, query, limit, page)
         return _search_cults3d(client, query, limit, _cults3d_auth(credentials), page)
 
     # every site at once: one slow site delays the answer, it does not add up

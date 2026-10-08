@@ -52,23 +52,62 @@ def load(session: Session, printer: Printer, slot: int, filament_id: Optional[in
     return row
 
 
+def _rgb(colour) -> Optional[tuple]:
+    text = str(colour or "").lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def suggest_spool(tray: dict, spools: list, taken: set) -> Optional[int]:
+    """The spool that best fits what an AMS tray reports (same material, close colour), among spools not already in a slot."""
+    if not tray or tray.get("empty") or not tray.get("material"):
+        return None
+    wanted, want_rgb = str(tray["material"]).lower(), _rgb(tray.get("color"))
+    best, best_distance = None, None
+    for spool in spools:
+        if spool.id in taken or str(spool.material or "").lower() != wanted:
+            continue
+        have = _rgb(spool.color_hex)
+        if want_rgb and have:
+            distance = sum((a - b) ** 2 for a, b in zip(want_rgb, have)) ** 0.5
+            if distance <= 60 and (best_distance is None or distance < best_distance):
+                best, best_distance = spool.id, distance
+    return best
+
+
+def reported(printer_id: int) -> dict:
+    """What a printer last said is in its slots: {slot: tray}. Empty for a printer that reports nothing."""
+    from app import printwatch
+    return {t["slot"]: t for t in (printwatch.latest.get(printer_id, {}).get("ams") or [])}
+
+
 def overview(session: Session) -> list:
     """Every printer that has slots, with what is in each: [{id, name, slot_count, slots: [{slot, label, filament_id, spool}]}]."""
     spools = {f.id: f for f in session.exec(select(Filament)).all()}
     rows = {(r.printer_id, r.slot): r for r in session.exec(select(SpoolSlot)).all()}
+    in_slots = {r.filament_id for r in rows.values() if r.filament_id}
+    spool_list = list(spools.values())
     out = []
     for printer in session.exec(select(Printer).order_by(Printer.name)).all():
         count = slot_count(printer)
         if not count:
             continue
         slots = []
+        seen = reported(printer.id)
         for number in range(1, count + 1):
             row = rows.get((printer.id, number))
+            tray = seen.get(number)
             spool = spools.get(row.filament_id) if row and row.filament_id else None
             slots.append({"slot": number, "label": row.label if row else None, "filament_id": spool.id if spool else None,
                           "spool": {"id": spool.id, "material": spool.material, "brand": spool.brand, "color": spool.color, "color_hex": spool.color_hex,
-                                    "remaining_g": spool.remaining_g} if spool else None})
-        out.append({"id": printer.id, "name": printer.name, "slot_count": count, "slots": slots})
+                                    "remaining_g": spool.remaining_g} if spool else None,
+                          "reported": tray,
+                          "suggested_filament_id": suggest_spool(tray, spool_list, in_slots) if tray and not spool else None})
+        out.append({"id": printer.id, "name": printer.name, "slot_count": count, "kind": printer.kind, "reads_slots": printer.kind == "bambu", "slots": slots})
     return out
 
 

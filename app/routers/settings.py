@@ -63,6 +63,13 @@ def notify_test(session: Session = Depends(get_session)):
     return {"status": "sent"}
 
 
+@router.post("/weekly-test")
+def weekly_test(session: Session = Depends(get_session)):
+    """Send the summary of the last week now (to see what it looks like, and to check the webhook)."""
+    from app import weekly
+    return {"status": "sent", "message": weekly.send(session)}
+
+
 @router.post("/mqtt-test")
 def mqtt_test(session: Session = Depends(get_session)):
     """Send one test message to the MQTT broker, to check the settings."""

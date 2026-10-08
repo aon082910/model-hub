@@ -23,6 +23,8 @@ EVENTS = {
     "listing_changes": "A linked listing changed",
     "low_stock": "A spool or supply is running low",
     "plan_short": "A planned print needs more filament than you have",
+    "maintenance_due": "A printer needs maintenance",
+    "weekly_summary": "The weekly summary (only sent if you switch it on)",
     "print_done": "A printer finished a print",
     "backup_failed": "A scheduled backup failed",
     "update_available": "A newer Model Hub release is out",

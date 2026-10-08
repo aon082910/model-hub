@@ -63,3 +63,12 @@ def test_failure_hints_slots_timelapses_and_week_repeat_have_their_controls():
     assert "printer-slot-count" in JS and "slot_count" in JS
     assert "timelapse-find" in JS and "timelapse-candidates" in JS and "timelapse_url" in JS
     assert "cal-repeat-go" in JS and "/api/calendar/copy" in JS
+
+
+def test_bambu_maintenance_slicer_weekly_and_suggestions_have_their_controls():
+    assert 'value="bambu"' in HTML and 'id="printer-serial"' in HTML and "syncPrinterForm" in JS and "slot-apply" in JS and "slot-sync" in JS
+    assert 'id="maintenance-panel"' in HTML and "loadMaintenance" in JS and "/api/maintenance" in JS and "maint-done" in JS
+    assert 'id="model-slicer-panel"' in HTML and "renderSlicerPanel" in JS and "/api/slicer-link/" in JS
+    assert 'id="weekly-summary"' in HTML and "/api/settings/weekly-test" in JS
+    assert "suggested-settings" in JS and "ps-use" in JS
+    assert "timelapse-play" in JS and "archive: 'Internet Archive (Thingiverse)'" in JS

@@ -217,6 +217,12 @@ Warehouse* and the paid marketplaces (*CGTrader*, *TurboSquid*) need a login or 
 *Libre3D*, *Pinshape*, *Ponoko* and *Wevolver* are gone or not model libraries. So none of those were added rather than guessing at scraping; if one of them
 publishes an API later it is a small addition. For any site that needs a login to download, use the browser extension.
 
+**Internet Archive (Thingiverse archive)** was added from the research for this release: the Archive keeps a copy of a large part of Thingiverse (about 600 000 things, one item each, with the thing's ZIP, description,
+designer and Creative Commons licence). Its search and downloads need no account or token, so it is a way to reach Thingiverse things without a Thingiverse token; it is only that archive that is searched, not the Archive's other
+collections. I also tried *GitHub repositories* (search by topic): the results were mostly tools and slicers, not models, so it was left out. Features that other tools are praised for, and that this release adds: AMS reading,
+maintenance schedules, open in slicer, a weekly summary. Ones I looked at and left for later: order tracking for people who sell prints, NFC tags for spools (the QR labels do the job from a phone camera), and staggered start for
+farms with limited power.
+
 Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
 MakerWorld, Thingiverse, MyMiniFactory, Cults3D, Sketchfab, NIH 3D, Smithsonian and NASA (all dealt with above) plus: *Thangs* and *Free3D* refuse requests from a server (403) and have no public
 API; *Creality Cloud* has no public API either (its pages run on a private app interface, and downloads need a login, which is the case where the browser extension is the way); *3DExport*, *3DSky*,
@@ -267,10 +273,13 @@ grams it used (edit its entry), and then the **Stats** page can show how much fi
 failures were on, and a tip for the usual reason), and the same warning appears next to it in the Print Queue and on the Calendar, so you hear about it before you start
 it again. The Library can be filtered to **Failed before**. The tips are general advice, not a diagnosis.
 
+**What worked, from how it went.** *What worked* on a model's page now adds a suggestion made from its prints: the material it printed best in (a better rating counts for more), the layer height and profile of the
+sliced file that printed successfully, and materials to stay away from (two or more failures, at least half of the attempts). *Fill in the empty boxes* copies it into the form; nothing is saved until you press Save.
+
 **Time-lapse links.** A print entry can keep a link to its time-lapse video (**Time-lapse**, then paste the address). For a print a printer reported, the administrator
 can press **Find on the printer**: Klipper (with the moonraker-timelapse plugin) and OctoPrint are asked for their time-lapse videos, the ones saved closest to the
-print come first, and *Use this one* keeps the link. The link opens in a new tab (Model Hub does not play it inside the page, because a printer on plain http cannot be
-embedded in a page served over https). Videos are never copied; only the address is kept.
+print come first, and *Use this one* keeps the link. The link opens in a new tab, and **Play here** plays it inside the page (not offered when Model Hub is served over https and the video is on plain http,
+which a browser would block). Videos are never copied; only the address is kept.
 
 **Photos from a phone.** *Take photo* on a print entry opens the phone's camera straight away (*Choose photo* picks from the gallery); the Calendar's
 list of prints made on a day has the same button, so the picture can be added right when the print comes off the bed.
@@ -486,13 +495,23 @@ Give a printer its camera's still-picture address (Print Queue, the printer's *C
 entry, unless the entry already has one. *Take a picture now* tests the address. The address must not contain a user name or password; redirects are not followed, the printer's API key is never sent to the camera, and a camera that is off or wrong never
 stops the print being recorded. Photos are kept in `/config/print_photos` and are part of backups.
 
+## Bambu Lab printers
+
+Add a **Bambu Lab (LAN mode)** printer with its address on your network, its serial number and its LAN access code (on the printer's screen: Settings, WLAN; LAN Only mode or Developer
+Mode must be on). Model Hub asks the printer's own MQTT service (port 8883, the printer's self-signed certificate is accepted because the access code is the proof) for its state, so it
+appears in the printer list like the others, a finished or failed print is logged by itself (with the AMS spool it was counted against), and the numbers can go to Home Assistant.
+It cannot send files to a Bambu printer (use Bambu Studio) and the access code is kept hidden like an API key. **This was written from the documented protocol and tested against a stand-in,
+not against a real printer**, so check the printer card shows its state, and tell me if it does not.
+
 ## Which spool is in which slot
 
 A printer with several spools at once (a Bambu AMS has 4 slots, a Prusa MMU 5, a toolchanger one per tool) can be given a number of **Spool slots** (Print Queue, the printer's
 *Spool slots* section; 0 to 16). The **Spools in the printers** panel then shows each slot with a menu for the spool loaded in it and an optional name, and the Filament tab says where
 each spool is loaded. A spool is in at most one slot: loading it somewhere takes it out of the last one. A queue entry can name the printer and a slot; the spool in that slot at the
-time the print finishes is the one the filament is taken from, and the one the Calendar checks the plan against, so a spool swapped in between is the one counted. Model Hub does not
-read the slots from the printer, so say what you loaded; a print that uses several slots at once (multicolour) is counted against the one slot you chose.
+time the print finishes is the one the filament is taken from, and the one the Calendar checks the plan against, so a spool swapped in between is the one counted. A Bambu printer
+reports what its AMS holds (material, colour and, for spools with a tag, the percentage left), shown next to each slot: *Load the spools it points at* fills empty slots with the spool of the
+same material and nearest colour (never replacing one you chose), and *Set remaining weights from the printer* turns the reported percentage into grams. Other printers cannot say what is loaded,
+so say it yourself. A print that uses several slots at once (multicolour) is counted against the one slot you chose.
 
 ## Print calendar
 
@@ -512,6 +531,22 @@ The Calendar also checks your **filament**. Planned prints that name a spool and
 enough left for is marked (the day gets a warning, the day's list says by how many grams). Prints already done are not counted again. Once a day Model Hub also
 tells you (the *A planned print needs more filament than you have* notification, which has its own switch) about shortfalls in the next two weeks,
 once for each, and again only if it was fixed and then became short again.
+
+## Printer maintenance
+
+**Print Queue → Printer maintenance** keeps tasks for each printer (oil the rails, change the nozzle...) that fall due after so many hours of printing and/or so many days; common ones are offered.
+Print hours are the minutes of the prints a printer reported (failed ones too), counted from the moment the task was added or last marked **Done**, so a printer Model Hub is not connected to only gets the
+day-based part. A task is *soon* from 90% of its interval and *due* at 100%, and you are told once when it becomes due (the *A printer needs maintenance* notification).
+
+## The weekly summary
+
+**Settings → Notifications → Send me a summary of the week** sends one message every seven days to your webhook: prints, hours, filament and cost, failures and their usual reason, what waits in the queue and is planned for
+the coming week (and what is short of filament), what runs low, maintenance that is due or soon, and a new Model Hub release. It is off until you switch it on, and starts counting from that day. *Send one now* shows what it looks like.
+
+## Open in a slicer
+
+A model's page has **Open in a slicer** (PrusaSlicer, OrcaSlicer, Bambu Studio). The slicer on your computer is given a link that works for 15 minutes for that one file (signed with this server's secret, read-only, no login needed),
+so Model Hub must be reachable from that computer at the address in your browser. It needs a slicer recent enough to open `prusaslicer://`, `orcaslicer://` or `bambustudio://` links; if nothing opens, download the file instead.
 
 ## Repeating a week
 

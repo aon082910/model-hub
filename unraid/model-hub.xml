@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.15.0
+Bambu Lab printers (LAN mode) can be added: their state shows like the others,
+finished and failed prints are logged, and the AMS slots are read, with
+one-click loading of the matching spools and remaining weights. New: printer
+maintenance schedules (print hours and days, with a notification when due), an
+optional weekly summary, "Open in a slicer" buttons (PrusaSlicer, OrcaSlicer,
+Bambu Studio), suggested settings from how a model's prints went, playing
+time-lapse videos in the page, and a new source: the Internet Archive's copy of
+Thingiverse (search and download, no account). No new settings are required;
+new columns and tables are added automatically on first start.
+
 ### 2.14.0
 A model that failed before now warns you (on its page, in the Print Queue and
 on the Calendar) with the usual reason and a tip, and the Library can be

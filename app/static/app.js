@@ -542,9 +542,28 @@ function renderModelPage(model) {
   renderModelPrints(model);
   renderModelPrinter(model);
   renderPrintSettings(model);
+  renderSlicerPanel(model);
   renderVersions(model);
   renderSlicedFiles(model);
   renderSharePanel('#model-share-panel', 'model', model.id);
+}
+
+// ---------- Open a model in a slicer on this computer ----------
+const SLICER_BUTTONS = [['prusaslicer', 'PrusaSlicer'], ['orcaslicer', 'OrcaSlicer'], ['bambustudio', 'Bambu Studio']];
+function renderSlicerPanel(model) {
+  const panel = $('#model-slicer-panel');
+  if (!panel) return;
+  if (!['.stl', '.3mf', '.obj', '.step', '.stp'].includes(model.extension)) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  panel.innerHTML = `<h3>Open in a slicer</h3>
+    <div class="row">${SLICER_BUTTONS.map(([id, label]) => `<button class="slicer-open" data-slicer="${id}">${label}</button>`).join('')}</div>
+    <p class="muted slicer-note">The slicer on this computer fetches the file from a link that works for 15 minutes, so Model Hub has to be reachable from here at the address in your browser. If nothing opens, the slicer is not installed or too old to open links.</p>`;
+  panel.querySelectorAll('.slicer-open').forEach(btn => btn.onclick = async () => {
+    const res = await fetch(`/api/slicer-link/${model.id}`);
+    if (!res.ok) { panel.querySelector('.slicer-note').textContent = await sourceErrorText(res); return; }
+    const data = await res.json();
+    window.location.href = data.schemes[btn.dataset.slicer] + encodeURIComponent(location.origin + data.path);
+  });
 }
 
 // ---------- What worked: print settings per model ----------
@@ -563,6 +582,21 @@ function renderPrintSettings(model) {
       <label>Notes <textarea class="ps-field" data-key="notes" rows="3" placeholder="Orientation, tricks, what to avoid...">${esc(saved.notes || '')}</textarea></label>
       <div class="row"><button id="ps-save">Save</button><button id="ps-again" title="Queue it again with the filament and grams of its last print">Print again</button><span id="ps-status" class="muted"></span></div>
     </div>`;
+  fetch(`/api/library/models/${model.id}/suggested-settings`).then(r => (r.ok ? r.json() : null)).then(data => {
+    if (!data || !$('#ps-status')) return;
+    const sg = data.suggested, have = data.current || {};
+    const fill = ['material', 'layer_height', 'profile'].filter(k => sg[k] && !have[k]);
+    if (!fill.length && !sg.avoid.length) return;
+    const box = document.createElement('div');
+    box.className = 'hint-box';
+    box.innerHTML = `<b>From how its prints went</b> (${sg.based_on} good print${sg.based_on === 1 ? '' : 's'}):
+      ${['material', 'layer_height', 'profile'].filter(k => sg[k]).map(k => `${esc(k.replace('_', ' '))} ${esc(sg[k])}`).join(', ') || 'nothing certain yet'}.
+      ${sg.avoid.length ? `<div class="warn-text">Better not in: ${sg.avoid.map(esc).join(', ')}.</div>` : ''}
+      ${fill.length ? '<button id="ps-use">Fill in the empty boxes</button>' : ''}`;
+    $('#model-settings-panel h3').after(box);
+    const use = $('#ps-use');
+    if (use) use.onclick = () => { fill.forEach(k => { const f = $(`#model-settings-panel .ps-field[data-key="${k}"]`); if (f) f.value = sg[k]; }); $('#ps-status').textContent = 'Filled in; press Save to keep them.'; };
+  });
   $('#ps-save').onclick = async () => {
     const body = {};
     $$('#model-settings-panel .ps-field').forEach(f => { body[f.dataset.key] = f.value; });
@@ -750,7 +784,8 @@ async function renderModelPrints(model) {
           ${l.source === 'queue' ? '<span class="muted">from the print queue</span>' : ''}
           ${l.notes ? `<div>${esc(l.notes)}</div>` : ''}
         </div>
-        ${l.timelapse_url ? `<div><a href="${esc(safeUrl(l.timelapse_url))}" target="_blank" rel="noopener noreferrer">&#9654; Time-lapse</a></div>` : ''}
+        ${l.timelapse_url ? `<div><a href="${esc(safeUrl(l.timelapse_url))}" target="_blank" rel="noopener noreferrer">&#9654; Time-lapse</a>
+          ${location.protocol === 'https:' && !/^https:/i.test(l.timelapse_url) ? '' : `<button class="timelapse-play" data-url="${esc(safeUrl(l.timelapse_url))}">Play here</button>`}</div>` : ''}
         ${l.has_photo ? `<a href="/api/prints/${l.id}/photo" target="_blank" rel="noopener"><img class="print-photo" src="/api/prints/${l.id}/photo?v=${Date.now()}" loading="lazy" alt="Photo of the print"></a>` : ''}
         <div class="print-actions">
           <select class="print-outcome" aria-label="How it went">${outcomeOptions(reasons, l.outcome === 'failed' ? (l.failure_reason || 'other') : '')}</select>
@@ -796,6 +831,15 @@ async function renderModelPrints(model) {
     if (res.ok) refreshModelPage(); else $('#print-status').textContent = await sourceErrorText(res);
   };
   $$('#model-prints-panel .print-timelapse').forEach(btn => btn.onclick = () => btn.closest('.print-row').querySelector('.timelapse-box').classList.toggle('hidden'));
+  $$('#model-prints-panel .timelapse-play').forEach(btn => btn.onclick = () => {
+    const holder = btn.parentElement;
+    const open = holder.querySelector('video');
+    if (open) { open.remove(); return; }
+    const video = document.createElement('video');
+    video.controls = true; video.preload = 'metadata'; video.className = 'timelapse-video'; video.src = btn.dataset.url;
+    video.onerror = () => { video.remove(); holder.insertAdjacentHTML('beforeend', '<div class="warn-text">The browser could not play that video here; use the link to open it.</div>'); };
+    holder.appendChild(video);
+  });
   $$('#model-prints-panel .timelapse-save').forEach(btn => btn.onclick = async () => {
     const row = btn.closest('.print-row');
     const res = await jsonRequest('PATCH', `/api/prints/${row.dataset.id}`, { timelapse_url: row.querySelector('.timelapse-url').value.trim() });
@@ -1349,7 +1393,7 @@ function frameCameraOn(object3d) {
 // ---------- Match a model to its Printables / MakerWorld listing ----------
 const PROVIDER_LABELS = {
   printables: 'Printables', makerworld: 'MakerWorld', sketchfab: 'Sketchfab', thingiverse: 'Thingiverse',
-  myminifactory: 'MyMiniFactory', cults3d: 'Cults3D', commons: 'Wikimedia Commons', nasa3d: 'NASA 3D Resources', smithsonian: 'Smithsonian 3D',
+  myminifactory: 'MyMiniFactory', cults3d: 'Cults3D', commons: 'Wikimedia Commons', nasa3d: 'NASA 3D Resources', smithsonian: 'Smithsonian 3D', archive: 'Internet Archive (Thingiverse)',
 };
 
 function parseJsonList(value) {
@@ -3094,7 +3138,7 @@ async function loadPrinters() {
   printerInfo = await res.json();
   $('#printers-list').innerHTML = printerInfo.printers.length ? printerInfo.printers.map(p => `
     <div class="printer-row" data-id="${p.id}">
-      <b>${esc(p.name)}</b> <span class="badge">${p.kind === 'moonraker' ? 'Klipper' : 'OctoPrint'}</span>
+      <b>${esc(p.name)}</b> <span class="badge">${{ moonraker: 'Klipper', octoprint: 'OctoPrint', bambu: 'Bambu Lab' }[p.kind] || esc(p.kind)}</span>
       <span class="muted">${esc(p.url)}</span>
       <span class="printer-state muted">checking...</span>
       <button class="printer-delete">Remove</button>
@@ -3117,8 +3161,16 @@ async function loadPrinters() {
   }, 5000);
 }
 
+function syncPrinterForm() {
+  const bambu = $('#printer-kind').value === 'bambu';
+  $('#printer-serial-row').classList.toggle('hidden', !bambu);
+  $('#printer-url').placeholder = bambu ? '192.168.1.60 (its address on your network)' : 'http://192.168.1.60:7125 (OctoPrint: http://octopi.local)';
+  $('#printer-key').placeholder = bambu ? 'LAN access code (printer screen: Settings, WLAN)' : 'API key (needed for OctoPrint)';
+}
+$('#printer-kind').addEventListener('change', syncPrinterForm);
 $('#printer-add').addEventListener('click', async () => {
   const body = { name: $('#printer-name').value, kind: $('#printer-kind').value, url: $('#printer-url').value };
+  if (body.kind === 'bambu') body.serial = $('#printer-serial').value.trim();
   if ($('#printer-snapshot').value.trim()) body.snapshot_url = $('#printer-snapshot').value.trim();
   if ($('#printer-key').value) body.api_key = $('#printer-key').value;
   const res = await jsonRequest('POST', '/api/printers', body);
@@ -3206,6 +3258,50 @@ async function renderModelPrinter(model) {
   };
 }
 
+// ---------- Printer maintenance ----------
+async function loadMaintenance() {
+  const panel = $('#maintenance-panel');
+  const res = await fetch('/api/maintenance');
+  if (!res.ok) { panel.classList.add('hidden'); return; }
+  const data = await res.json();
+  if (!data.printers.length && !data.tasks.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const readOnly = currentUser.role === 'viewer';
+  const badge = t => `<span class="status-badge ${t.status === 'due' ? 'status-failed' : t.status === 'soon' ? 'status-printing' : ''}">${t.status === 'due' ? 'due' : t.status === 'soon' ? 'soon' : 'ok'}</span>`;
+  const left = t => [t.hours_left != null ? `${t.hours_left} print hours` : '', t.days_left != null ? `${t.days_left} days` : ''].filter(Boolean).join(' or ');
+  panel.innerHTML = `<h3>Printer maintenance</h3>
+    <p class="muted">Tasks fall due after so many hours of printing (counted from the prints a printer reported) and/or days.</p>
+    ${data.tasks.length ? data.tasks.map(t => `<div class="row maint-row" data-id="${t.id}">${badge(t)}
+      <b>${esc(t.printer)}</b>: ${esc(t.name)}
+      <span class="muted">${t.status === 'due' ? 'overdue by ' + esc(left({ hours_left: t.hours_left != null && t.hours_left < 0 ? -t.hours_left : null, days_left: t.days_left != null && t.days_left < 0 ? -t.days_left : null })) || 'now'
+        : esc(left(t)) + ' left'}${t.note ? ' &middot; ' + esc(t.note) : ''}</span>
+      ${readOnly ? '' : '<button class="maint-done">Done</button><button class="maint-delete">Remove</button>'}</div>`).join('') : '<p class="muted">No tasks yet.</p>'}
+    ${readOnly || !data.printers.length ? '' : `<details><summary>Add a task</summary><div class="row">
+      <select id="maint-printer">${data.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+      <select id="maint-preset"><option value="">(a common task...)</option>${data.presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('')}</select></div>
+      <div class="row"><input id="maint-name" placeholder="What has to be done" maxlength="80"><input id="maint-hours" type="number" min="1" placeholder="every ... print hours"><input id="maint-days" type="number" min="1" placeholder="or every ... days">
+      <button id="maint-add" class="primary">Add</button><span id="maint-status" class="muted"></span></div></details>`}`;
+  const preset = $('#maint-preset');
+  if (preset) preset.onchange = () => {
+    const p = data.presets[parseInt(preset.value)];
+    if (p) { $('#maint-name').value = p.name; $('#maint-hours').value = p.every_hours || ''; $('#maint-days').value = p.every_days || ''; }
+  };
+  const add = $('#maint-add');
+  if (add) add.onclick = async () => {
+    const body = { printer_id: parseInt($('#maint-printer').value), name: $('#maint-name').value };
+    if ($('#maint-hours').value) body.every_hours = parseFloat($('#maint-hours').value);
+    if ($('#maint-days').value) body.every_days = parseInt($('#maint-days').value);
+    const res2 = await jsonRequest('POST', '/api/maintenance', body);
+    if (res2.ok) loadMaintenance(); else $('#maint-status').textContent = await sourceErrorText(res2);
+  };
+  panel.querySelectorAll('.maint-done').forEach(b => b.onclick = async () => { await fetch(`/api/maintenance/${b.closest('.maint-row').dataset.id}/done`, { method: 'POST' }); loadMaintenance(); });
+  panel.querySelectorAll('.maint-delete').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this maintenance task?')) return;
+    await fetch(`/api/maintenance/${b.closest('.maint-row').dataset.id}`, { method: 'DELETE' });
+    loadMaintenance();
+  });
+}
+
 // ---------- Which spool is in which slot of a printer ----------
 async function renderSlotsPanel(printers) {
   const panel = $('#slots-panel');
@@ -3216,7 +3312,13 @@ async function renderSlotsPanel(printers) {
   panel.innerHTML = `<h3>Spools in the printers</h3>
     <p class="muted">What is loaded in each slot (an AMS, an MMU, a toolchanger...). A queue entry that names a slot is counted against the spool in it when it finishes.</p>
     ${printers.map(p => `<div class="slot-printer" data-printer="${p.id}"><b>${esc(p.name)}</b>
+      ${p.reads_slots ? `<span class="muted"> reads its slots from the printer</span>
+        <div class="row">${currentUser.role === 'admin' ? '<button class="slot-refresh">Ask the printer now</button>' : ''}
+          ${!readOnly && p.slots.some(sl => sl.suggested_filament_id) ? '<button class="slot-apply">Load the spools it points at</button>' : ''}
+          ${!readOnly && p.slots.some(sl => sl.reported && sl.reported.remain != null && sl.spool) ? '<button class="slot-sync">Set remaining weights from the printer</button>' : ''}
+          <span class="slot-note muted"></span></div>` : ''}
       ${p.slots.map(sl => `<div class="row slot-row" data-slot="${sl.slot}"><span>Slot ${sl.slot}</span>
+        ${sl.reported ? `<span class="muted" title="what the printer reports">${sl.reported.color ? `<span class="swatch" style="background:${esc(sl.reported.color)}"></span>` : ''}${sl.reported.empty ? 'empty' : esc([sl.reported.material, sl.reported.name].filter(Boolean).join(' '))}${sl.reported.remain != null ? ` ${sl.reported.remain}%` : ''}</span>` : ''}
         <input class="slot-label" value="${esc(sl.label || '')}" placeholder="name" maxlength="40" aria-label="Slot name" ${readOnly ? 'disabled' : ''}>
         <select class="slot-spool" aria-label="Spool in slot ${sl.slot}" ${readOnly ? 'disabled' : ''}><option value="">(empty)</option>${spools.map(f =>
           `<option value="${f.id}" ${f.id === sl.filament_id ? 'selected' : ''}>${esc([f.material, f.brand, f.color].filter(Boolean).join(' '))} (${f.remaining_g} g)</option>`).join('')}</select></div>`).join('')}
@@ -3228,6 +3330,21 @@ async function renderSlotsPanel(printers) {
     if (!res.ok) showNotice(await sourceErrorText(res));
     loadQueue();
   };
+  const note = (button, text) => { const el = button.closest('.slot-printer').querySelector('.slot-note'); if (el) el.textContent = text; };
+  panel.querySelectorAll('.slot-refresh').forEach(b => b.onclick = async () => {
+    note(b, 'Asking...');
+    const res = await fetch(`/api/printers/${b.closest('.slot-printer').dataset.printer}/status`);
+    const data = res.ok ? await res.json() : {};
+    if (!data.online) note(b, data.message || 'The printer did not answer.'); else loadQueue();
+  });
+  panel.querySelectorAll('.slot-apply').forEach(b => b.onclick = async () => {
+    const res = await fetch(`/api/slots/${b.closest('.slot-printer').dataset.printer}/apply-suggestions`, { method: 'POST' });
+    if (res.ok) loadQueue(); else note(b, await sourceErrorText(res));
+  });
+  panel.querySelectorAll('.slot-sync').forEach(b => b.onclick = async () => {
+    const res = await fetch(`/api/slots/${b.closest('.slot-printer').dataset.printer}/sync-remaining`, { method: 'POST' });
+    if (res.ok) loadQueue(); else note(b, await sourceErrorText(res));
+  });
   panel.querySelectorAll('.slot-spool').forEach(sel => sel.onchange = () => save(sel.closest('.slot-row')));
   panel.querySelectorAll('.slot-label').forEach(input => input.onchange = () => save(input.closest('.slot-row')));
 }
@@ -3291,6 +3408,7 @@ async function loadQueue() {
     loadQueue();
   });
   renderSlotsPanel(slotData.printers);
+  loadMaintenance();
   $$('.queue-printer').forEach(sel => sel.onchange = async () => {
     await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { printer_id: sel.value ? parseInt(sel.value) : null });
     loadQueue();
@@ -3602,6 +3720,13 @@ async function loadNotifyEvents() {
 $('#notify-events').addEventListener('change', (e) => {
   if (!e.target.classList.contains('notify-event')) return;
   saveSetting({ [`notify_${e.target.dataset.event}`]: e.target.checked ? 'true' : 'false' });
+});
+$('#weekly-summary').addEventListener('change', () => saveSetting({ weekly_summary: $('#weekly-summary').checked ? 'true' : '' }));
+$('#weekly-test-btn').addEventListener('click', async () => {
+  await saveSetting({ notify_webhook_url: $('#notify-webhook-url').value });
+  $('#weekly-test-status').textContent = 'Sending...';
+  const res = await fetch('/api/settings/weekly-test', { method: 'POST' });
+  $('#weekly-test-status').textContent = res.ok ? 'Sent: ' + (await res.json()).message.replace(/\n/g, ' ') : await sourceErrorText(res);
 });
 $('#notify-test-btn').addEventListener('click', async () => {
   await saveSetting({ notify_webhook_url: $('#notify-webhook-url').value });
@@ -4069,6 +4194,7 @@ async function loadSettings() {
   $('#bed-y').value = s.bed_y || '';
   $('#bed-z').value = s.bed_z || '';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
+  $('#weekly-summary').checked = s.weekly_summary === 'true';
   await renderSiteSettings(s);
   refreshBackups();
   loadUsers();

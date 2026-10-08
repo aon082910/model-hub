@@ -379,3 +379,7 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .slot-row { align-items: center; }
 .slot-row input { max-width: 140px; }
 .cal-repeat { margin-top: 10px; border-top: 1px solid var(--border, #2a2e37); padding-top: 6px; }
+
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid #888; margin-right: 4px; vertical-align: -1px; }
+.timelapse-video { display: block; max-width: 100%; width: 480px; margin-top: 6px; border-radius: 6px; }
+.maint-row { align-items: center; margin: 4px 0; }

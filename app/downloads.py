@@ -68,9 +68,13 @@ def _smithsonian_host_ok(host: Optional[str]) -> bool:
     return sources.host_in_domains(host, sources.SMITHSONIAN_DOMAINS)
 
 
+def _archive_host_ok(host: Optional[str]) -> bool:
+    return sources.host_in_domains(host, sources.ARCHIVE_DOMAINS)
+
+
 HOST_CHECKS = {
     "printables": _printables_host_ok, "thingiverse": _thingiverse_host_ok,
-    "commons": _commons_host_ok, "nasa3d": _nasa_host_ok, "smithsonian": _smithsonian_host_ok,
+    "commons": _commons_host_ok, "nasa3d": _nasa_host_ok, "smithsonian": _smithsonian_host_ok, "archive": _archive_host_ok,
 }
 
 
@@ -176,6 +180,8 @@ def provider_files(client: httpx.Client, provider: str, source_id: str, credenti
         files = sources.commons_files(client, source_id)
     elif provider == "nasa3d":
         files = sources.nasa_files(client, source_id)
+    elif provider == "archive":
+        files = sources.archive_files(client, source_id)
     elif provider == "smithsonian":
         files = sources.smithsonian_files(client, source_id)
         ready = [f for f in files if f["print_ready"]]

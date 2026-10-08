@@ -19,7 +19,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "created_at": printer.created_at}
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "created_at": printer.created_at}
 
 
 def _get(session: Session, printer_id: int) -> Printer:
@@ -40,11 +40,20 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
         if payload.get("kind") not in printing.KINDS:
             raise HTTPException(400, "kind must be one of: " + ", ".join(printing.KINDS))
         out["kind"] = payload["kind"]
-    if existing is None or "url" in payload:
+    kind_now = out.get("kind") or (existing.kind if existing else None)
+    if existing is None or "url" in payload or ("kind" in payload and payload["kind"] != (existing.kind if existing else None)):
         try:
-            out["url"] = printing.clean_url(payload.get("url"))
+            value = payload.get("url") if "url" in payload else (existing.url if existing else None)
+            out["url"] = printing.clean_host(value) if kind_now == "bambu" else printing.clean_url(value)
         except printing.PrinterError as e:
             raise HTTPException(400, str(e))
+    if kind_now == "bambu" and (existing is None or "serial" in payload or existing.kind != "bambu"):
+        try:
+            out["serial"] = printing.clean_serial(payload.get("serial", existing.serial if existing else None))
+        except printing.PrinterError as e:
+            raise HTTPException(400, str(e))
+    if kind_now == "bambu" and "slot_count" not in payload and (existing is None or not existing.slot_count):
+        out["slot_count"] = 4                                      # an AMS has four slots; change it if there are more units
     if "slot_count" in payload:
         count = payload["slot_count"]
         if count in (None, ""):
@@ -66,6 +75,8 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
     key_now = out["api_key"] if "api_key" in out else (existing.api_key if existing else None)
     if kind == "octoprint" and not key_now:
         raise HTTPException(400, "OctoPrint needs its API key (OctoPrint settings, API)")
+    if kind == "bambu" and not key_now:
+        raise HTTPException(400, "A Bambu printer needs its LAN access code (on the printer's screen: Settings, WLAN)")
     return out
 
 
@@ -104,6 +115,8 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     name = printer.name
     from app import slots
     slots.forget_printer(session, printer_id)
+    from app import maintenance
+    maintenance.forget_printer(session, printer_id)
     session.delete(printer)
     session.commit()
     activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")
@@ -127,7 +140,11 @@ def printer_snapshot(printer_id: int, session: Session = Depends(get_session)):
 @router.get("/{printer_id}/status")
 def printer_status(printer_id: int, session: Session = Depends(get_session)):
     printer = _get(session, printer_id)
-    return printing.status(printer.kind, printer.url, printer.api_key)
+    result = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
+    if printer.kind == "bambu":                                    # the slots panel reads what the AMS reports from here
+        from app import printwatch
+        printwatch.latest[printer.id] = {**result, "name": printer.name}
+    return result
 
 
 @router.post("/{printer_id}/send")

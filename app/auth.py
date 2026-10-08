@@ -19,7 +19,7 @@ SECRET_KEY_PATH = CONFIG_PATH / "secret.key"
 # itself, static assets needed to render the login page, and the browser
 # extension's own upload endpoint (which authenticates via API key instead).
 PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js"}
-PUBLIC_PREFIXES = ("/assets/", "/share/")
+PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/")
 
 # The extension API key is intentionally weaker than a full login session: it's
 # stored in a browser extension, a lower-trust place than the server admin's own
