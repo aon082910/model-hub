@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 
 from app import sources
 from app.config import MODEL_EXTENSIONS
+from app import print_outcomes
 from app.models import (
     Collection, Model3D, ModelCollectionLink, ModelTagLink, PrintLog, Project, ProjectModelLink, Tag,
 )
@@ -55,7 +56,8 @@ def export_rows(session: Session) -> Iterable[dict]:
                                   .join(Project, ProjectModelLink.project_id == Project.id).order_by(Project.name)).all():
         projects[mid].append(name)
     prints = {mid: (n, last) for mid, n, last in session.exec(
-        select(PrintLog.model_id, func.count(PrintLog.id), func.max(PrintLog.printed_at)).group_by(PrintLog.model_id)).all()}
+        select(PrintLog.model_id, func.count(PrintLog.id), func.max(PrintLog.printed_at)).where(print_outcomes.ok())
+        .group_by(PrintLog.model_id)).all()}
     for m in models:
         count, last = prints.get(m.id, (0, None))
         yield {

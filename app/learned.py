@@ -10,6 +10,7 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
+from app import print_outcomes
 from app.models import PrintFile, PrintLog, QueueItem
 
 MIN_RATIO_SAMPLES = 3
@@ -19,7 +20,7 @@ OWN_BASIS = ("history", "adjusted")
 
 
 def model_samples(session: Session, model_id: int) -> list:
-    rows = session.exec(select(PrintLog.minutes).where(PrintLog.model_id == model_id, PrintLog.measured.is_(True))).all()
+    rows = session.exec(select(PrintLog.minutes).where(PrintLog.model_id == model_id, PrintLog.measured.is_(True), print_outcomes.ok())).all()
     return [float(m) for m in rows if m and m > 0]
 
 

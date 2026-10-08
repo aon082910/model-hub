@@ -433,8 +433,11 @@
     <div class="row">
       <button id="cal-prev" aria-label="Previous month">&larr;</button><b id="cal-title"></b><button id="cal-next" aria-label="Next month">&rarr;</button>
       <button id="cal-today">Today</button>
-      <a class="button-link" href="/api/calendar/export.ics" download>Calendar file (.ics)</a>
+      <label id="cal-printer-label" class="hidden">Printer <select id="cal-printer"></select></label>
+      <a class="button-link" id="cal-ics" href="/api/calendar/export.ics" download>Calendar file (.ics)</a>
     </div>
+    <p id="cal-short-note" class="warn-text hidden"></p>
+    <p id="cal-printer-note" class="muted hidden">Prints already made are not tied to a printer, so they only show under All printers.</p>
     <div id="cal-grid" class="cal-grid"></div>
     <div id="cal-day" class="panel hidden"></div>
     <h3>Waiting without a day</h3>

@@ -5,6 +5,7 @@ from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
 from app.config import MODEL_EXTENSIONS
+from app import print_outcomes
 from app.models import (
     Model3D, ModelCollectionLink, ModelTagLink, PrintLog, ProjectModelLink, Tag,
 )
@@ -46,9 +47,9 @@ def conditions(session: Session, f: dict) -> list:
     if f.get("duplicates_only") is True:
         out.append(Model3D.is_duplicate_of.is_not(None))
     if f.get("printed") is True:
-        out.append(Model3D.id.in_(select(PrintLog.model_id)))
+        out.append(Model3D.id.in_(select(PrintLog.model_id).where(print_outcomes.ok())))
     elif f.get("printed") is False:
-        out.append(Model3D.id.not_in(select(PrintLog.model_id)))
+        out.append(Model3D.id.not_in(select(PrintLog.model_id).where(print_outcomes.ok())))
     if f.get("linked") is True:
         out.append(Model3D.source_provider.is_not(None))
     elif f.get("linked") is False:
@@ -102,7 +103,7 @@ def order_by(sort: Optional[str]):
     if sort == "smallest":
         return [Model3D.size_bytes, Model3D.id], None
     if sort == "last_printed":
-        last = select(PrintLog.model_id, func.max(PrintLog.printed_at).label("last")).group_by(PrintLog.model_id).subquery()
+        last = select(PrintLog.model_id, func.max(PrintLog.printed_at).label("last")).where(print_outcomes.ok()).group_by(PrintLog.model_id).subquery()
         return [last.c.last.desc(), Model3D.id], last
     return [Model3D.id], None
 

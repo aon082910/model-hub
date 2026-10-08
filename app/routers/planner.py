@@ -11,10 +11,11 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 
 @router.get("")
-def month(month: str = "", session: Session = Depends(get_session)):
-    """One month: planned prints and logged prints per day, and the waiting entries that have no day yet."""
+def month(month: str = "", printer: str = "", session: Session = Depends(get_session)):
+    """One month: planned prints and logged prints per day, and the waiting entries that have no day yet.
+    printer limits it to one printer's prints (its id), or "none" for entries without a printer."""
     try:
-        return calendar_plan.month_view(session, month or date.today().strftime("%Y-%m"))
+        return calendar_plan.month_view(session, month or date.today().strftime("%Y-%m"), calendar_plan.parse_printer(printer))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -41,6 +42,10 @@ def plan(payload: dict, request: Request, session: Session = Depends(get_session
 
 
 @router.get("/export.ics")
-def export_ics(session: Session = Depends(get_session)):
-    return Response(calendar_plan.ics(session), media_type="text/calendar; charset=utf-8",
+def export_ics(printer: str = "", session: Session = Depends(get_session)):
+    try:
+        wanted = calendar_plan.parse_printer(printer)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return Response(calendar_plan.ics(session, wanted), media_type="text/calendar; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="modelhub-prints.ics"'})

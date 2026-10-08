@@ -10,12 +10,13 @@ key). All are read-only endpoints; the unofficial ones can change without
 notice, so every failure here is turned into a SourceError with a message that
 is fine to show to the user.
 
-Two more keyless sources that also allow downloads: Wikimedia Commons (its 3D
-files, found with the MediaWiki search API) and NASA's public 3D Resources (a
-GitHub repository, indexed from its file tree).
+Three more keyless sources that also allow downloads: Wikimedia Commons (its 3D
+files, found with the MediaWiki search API), NASA's public 3D Resources (a
+GitHub repository, indexed from its file tree) and the Smithsonian's 3D
+Digitization models that come as print-ready STL (its public 3D API).
 
 Which sites let a server download the model files themselves: Printables (no
-login), Thingiverse (with the token), Wikimedia Commons and NASA 3D Resources. MakerWorld, Sketchfab and MyMiniFactory
+login), Thingiverse (with the token), Wikimedia Commons, NASA 3D Resources and the Smithsonian. MakerWorld, Sketchfab and MyMiniFactory
 only hand files to a logged-in user, and Cults3D's API never serves files; for
 those the browser extension, which runs in your logged-in browser, is the way in.
 
@@ -66,11 +67,11 @@ NASA_TREE_API = f"https://api.github.com/repos/{NASA_REPO}/git/trees/master?recu
 NASA_RAW = f"https://raw.githubusercontent.com/{NASA_REPO}/master/"
 NASA_WEB = f"https://github.com/{NASA_REPO}/tree/master/"
 
-PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d")
+PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d", "smithsonian")
 PROVIDER_LABELS = {
     "printables": "Printables", "makerworld": "MakerWorld", "sketchfab": "Sketchfab", "thingiverse": "Thingiverse",
     "myminifactory": "MyMiniFactory", "cults3d": "Cults3D",
-    "commons": "Wikimedia Commons", "nasa3d": "NASA 3D Resources",
+    "commons": "Wikimedia Commons", "nasa3d": "NASA 3D Resources", "smithsonian": "Smithsonian 3D",
 }
 # Providers that need credentials: the fields to enter in Settings (each is stored
 # as the setting "<provider>_<field>"), a label, whether it is secret, and where to get one.
@@ -86,7 +87,7 @@ CREDENTIAL_HELP = {
 }
 KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_FIELDS)
 # Where model files can be downloaded by this server (see the module docstring)
-DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d")
+DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d", "smithsonian")
 DOWNLOAD_NOTES = {
     "makerworld": "MakerWorld only gives model files to logged-in users. Open the listing, then use the Model Hub browser extension while logged in.",
     "sketchfab": "Sketchfab only gives downloads to logged-in users, and as glTF rather than printable formats.",
@@ -96,7 +97,7 @@ DOWNLOAD_NOTES = {
 # Pictures are only ever downloaded from these sites' own domains (and their subdomains)
 IMAGE_DOMAINS = (
     "printables.com", "bblmw.com", "sketchfab.com", "thingiverse.com", "myminifactory.com", "cults3d.com",
-    "wikimedia.org", "githubusercontent.com",
+    "wikimedia.org", "githubusercontent.com", "si.edu",
 )
 
 
@@ -130,6 +131,7 @@ _SKETCHFAB_URL = re.compile(r"^https?://(?:www\.)?sketchfab\.com/(?:3d-models|mo
 _THINGIVERSE_URL = re.compile(r"^https?://(?:www\.)?thingiverse\.com/thing:(\d+)", re.I)
 _MYMINIFACTORY_URL = re.compile(r"^https?://(?:www\.)?myminifactory\.com/(?:[a-z]{2}/)?object/(?:[^/?#]*-)?(\d+)(?:[/?#]|$)", re.I)
 _CULTS3D_URL = re.compile(r"^https?://(?:www\.)?cults3d\.com/[a-z]{2}/3d-model/[^/?#]+/([A-Za-z0-9_-]{3,200})(?:[/?#]|$)", re.I)
+_SMITHSONIAN_URL = re.compile(r"^https?://(?:www\.)?3d\.si\.edu/object/3d/(?:[^/?#]*:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#]|$)", re.I)
 _NASA_URL = re.compile(r"^https?://github\.com/nasa/NASA-3D-Resources/(?:tree|blob)/master/([^?#]+)", re.I)
 _URL_PATTERNS = (
     ("printables", _PRINTABLES_URL), ("makerworld", _MAKERWORLD_URL),
@@ -153,6 +155,9 @@ def nasa_listing_id(folder: str) -> str:
 def parse_url(url: str) -> Optional[tuple]:
     """(provider, id) for a supported model URL, else None."""
     url = (url or "").strip()
+    smithsonian = _SMITHSONIAN_URL.match(url)
+    if smithsonian:
+        return "smithsonian", smithsonian.group(1).lower()
     nasa = _NASA_URL.match(url)
     if nasa:
         path = unquote(nasa.group(1)).strip("/")
@@ -175,6 +180,8 @@ def valid_source_id(provider: str, source_id) -> bool:
         return re.fullmatch(r"[A-Za-z0-9_-]{3,200}", source_id) is not None
     if provider == "nasa3d":
         return re.fullmatch(r"[0-9a-f]{12}", source_id) is not None
+    if provider == "smithsonian":
+        return re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source_id) is not None
     return provider in PROVIDERS and source_id.isdigit()
 
 
@@ -302,6 +309,8 @@ def fetch_details(provider: str, source_id: str, credentials: Optional[dict] = N
             return _commons_details(client, source_id)
         if provider == "nasa3d":
             return _nasa_details(client, source_id)
+        if provider == "smithsonian":
+            return _smithsonian_details(client, source_id)
         return _thingiverse_details(client, source_id, _thingiverse_token(credentials))
 
 
@@ -920,6 +929,101 @@ def nasa_files(client: httpx.Client, source_id: str) -> list:
              "url": _nasa_raw(m["path"])} for m in f["models"]]
 
 
+# ---------- Smithsonian 3D (no account; the Smithsonian's public 3D API) ----------
+# Only models the Smithsonian offers as print-ready STL (about a hundred: museum objects, fossils, corals, Apollo hardware)
+# are searched, since the rest of its 3D collection is made for screens. A listing is one "3D package"; its files come
+# from one query. Pictures and files are served from 3d-api.si.edu.
+
+SMITHSONIAN_API = "https://3d-api.si.edu/api/v1.0/content/file/search"
+SMITHSONIAN_CONTENT = "https://3d-api.si.edu/content/document/"
+SMITHSONIAN_WEB = "https://3d.si.edu/object/3d/"
+SMITHSONIAN_LICENSE = "Smithsonian (CC0 where the listing says so)"
+SMITHSONIAN_DOMAINS = ("si.edu",)
+_SI_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _si_web_url(title: str, source_id: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower().replace("'", "")).strip("-")[:80]
+    return f"{SMITHSONIAN_WEB}{slug + ':' if slug else ''}{source_id}"
+
+
+def _si_content_url(source_id: str, name: str) -> str:
+    return f"{SMITHSONIAN_CONTENT}3d_package:{source_id}/{quote(name)}"
+
+
+def _smithsonian_rows(client: httpx.Client, source_id: str) -> list:
+    data = _get_json(client, SMITHSONIAN_API, params={"model_url": f"3d_package:{source_id}", "rows": 200})
+    rows = [r for r in data.get("rows") or [] if isinstance(r, dict) and isinstance(r.get("content"), dict)]
+    if not rows:
+        raise SourceError("That listing was not found (it may have been removed)")
+    return rows
+
+
+def _search_smithsonian(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    per_page = limit * 2                       # a model can come with more than one STL, so ask for more rows than results
+    data = _get_json(client, SMITHSONIAN_API, params={"q": query, "model_type": "stl", "start": (page - 1) * per_page, "rows": per_page})
+    seen, found = set(), []
+    for row in data.get("rows") or []:
+        content = (row.get("content") or {}) if isinstance(row, dict) else {}
+        source_id = str(content.get("model_url") or "").removeprefix("3d_package:")
+        if not _SI_ID.fullmatch(source_id) or source_id in seen:
+            continue
+        seen.add(source_id)
+        title = (row.get("title") or "").strip() or "Smithsonian 3D model"
+        found.append({
+            "provider": "smithsonian", "source_id": source_id, "url": _si_web_url(title, source_id), "title": title,
+            "designer": "Smithsonian Institution", "license": SMITHSONIAN_LICENSE,
+            "thumbnail": _si_content_url(source_id, "scene-image-thumb.jpg"),
+        })
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _smithsonian_details(client: httpx.Client, source_id: str) -> dict:
+    rows = _smithsonian_rows(client, source_id)
+    title = next((r.get("title") for r in rows if r.get("title")), None) or "Smithsonian 3D model"
+    pictures = {}
+    for row in rows:
+        content = row["content"]
+        uri = str(content.get("uri") or "")
+        if content.get("usage") == "Image2D" and host_in_domains(urlparse(uri).hostname, SMITHSONIAN_DOMAINS):
+            pictures.setdefault(str(content.get("quality")), uri)
+    images = [pictures[q] for q in ("Medium", "High", "Low") if q in pictures][:2]
+    names = ", ".join(f["name"] for f in smithsonian_files_from_rows(rows, source_id) if f["print_ready"])
+    return {
+        "provider": "smithsonian", "source_id": source_id, "url": _si_web_url(title, source_id),
+        "title": title, "designer": "Smithsonian Institution", "license": SMITHSONIAN_LICENSE,
+        "description": ("From the Smithsonian's 3D Digitization program. Open the listing for the museum's own description of the object "
+                        "and for how it may be used." + (f"\nPrint files: {names}" if names else "")),
+        "tags": ["smithsonian", "museum"], "category": "Museum objects", "images": images,
+        "likes": None, "downloads": None, "parts": [], "filaments": [],
+    }
+
+
+def smithsonian_files_from_rows(rows: list, source_id: str) -> list:
+    """The model files a package offers: print-ready STLs, and the medium or low resolution OBJ downloads (the full resolution
+    ones run to hundreds of MB). Each is {id, name, size, url, print_ready}."""
+    out = []
+    for row in rows:
+        content = row.get("content") or {}
+        uri = str(content.get("uri") or "")
+        if content.get("usage") != "Download3D" or urlparse(uri).scheme != "https" or not host_in_domains(urlparse(uri).hostname, SMITHSONIAN_DOMAINS):
+            continue
+        model_type, quality = str(content.get("model_type") or "").lower(), str(content.get("quality") or "").lower()
+        name = Path(unquote(urlparse(uri).path)).name
+        stl = model_type == "stl"
+        smaller_obj = model_type == "obj" and quality.startswith(("medium", "low"))
+        if (stl or smaller_obj) and Path(name).suffix.lower() in (".zip", ".stl", ".obj"):
+            out.append({"id": hashlib.sha1(uri.encode("utf-8")).hexdigest()[:10], "name": name, "size": content.get("file_size"),
+                        "url": uri, "print_ready": stl})
+    return out
+
+
+def smithsonian_files(client: httpx.Client, source_id: str) -> list:
+    return smithsonian_files_from_rows(_smithsonian_rows(client, source_id), source_id)
+
+
 # ---------- model files (Printables, Thingiverse) ----------
 # Only these two sites let a server fetch the files; see the module docstring.
 
@@ -1156,7 +1260,7 @@ query($q: String!, $limit: Int!, $offset: Int!) { result: searchPrints2(query: $
 
 # Collections of reference models rather than designers' marketplaces: a personal file
 # is unlikely to come from there, and a wrong automatic link is worse than none.
-NOT_FOR_MATCHING = ("commons", "nasa3d")
+NOT_FOR_MATCHING = ("commons", "nasa3d", "smithsonian")
 
 
 def matching_providers(credentials: Optional[dict] = None) -> tuple:
@@ -1191,6 +1295,8 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
             return _search_commons(client, query, limit, page)
         if provider == "nasa3d":
             return _search_nasa3d(client, query, limit, page)
+        if provider == "smithsonian":
+            return _search_smithsonian(client, query, limit, page)
         return _search_cults3d(client, query, limit, _cults3d_auth(credentials), page)
 
     # every site at once: one slow site delays the answer, it does not add up

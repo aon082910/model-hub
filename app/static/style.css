@@ -367,3 +367,8 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .collection-share-panel { margin: 6px 0 10px 12px; }
 
 #tab-calendar a:not(.button-link), #cal-unplanned a { color: #6aa5ff; }
+
+.cal-short { color: #e5a000; }
+.print-failed { border-left: 3px solid #e0645a; padding-left: 8px; }
+.queue-fail { margin: 6px 0 2px; align-items: center; }
+.print-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }

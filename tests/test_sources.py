@@ -314,6 +314,8 @@ class FakeSites:
             if self.nasa_status != 200:
                 return httpx.Response(self.nasa_status)
             return httpx.Response(200, json=NASA_TREE)
+        if host == "3d-api.si.edu" and request.url.path.endswith("/file/search"):        # the Smithsonian: nothing matches in these tests
+            return httpx.Response(200, json={"rows": [], "rowCount": 0, "message": "no results found"})
         if host in ("upload.wikimedia.org", "raw.githubusercontent.com") and not url.endswith((".png", ".jpg", ".jpeg", ".webp")):
             self.file_hosts_seen.append(host)
             return httpx.Response(200, content=_model_stl(61))

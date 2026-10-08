@@ -60,6 +60,17 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
     return item
 
 
+def fail_item(session: Session, item: QueueItem, reason: Optional[str] = None, minutes: Optional[float] = None) -> None:
+    """Mark a queue entry failed and keep a failed entry in the print log (once per entry). Nothing is taken off a spool:
+    how much was used is not known; edit the log entry's grams if you want it counted."""
+    from app.routers.prints import log_print
+    item.status = "failed"
+    session.add(item)
+    if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item.id, PrintLog.outcome == "failed")).first():
+        log_print(session, item.model_id, filament_id=item.filament_id, minutes=round(minutes, 1) if minutes else None, notes=item.notes,
+                  deduct=False, source="queue", queue_item_id=item.id, outcome="failed", failure_reason=reason)
+
+
 def _on_done(session: Session, item: QueueItem) -> None:
     """Deduct consumed filament exactly once, the moment a job transitions into "done",
     and write it to the model's print log (once per queue entry)."""
@@ -69,6 +80,9 @@ def _on_done(session: Session, item: QueueItem) -> None:
             spool.remaining_g = max(0.0, spool.remaining_g - item.estimated_grams)
             session.add(spool)
     from app.routers.prints import log_print
+    for earlier in session.exec(select(PrintLog).where(PrintLog.queue_item_id == item.id, PrintLog.outcome == "failed")).all():
+        earlier.queue_item_id = None                       # a failed first attempt stays in the log, apart from this success
+        session.add(earlier)
     if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item.id)).first():
         log_print(session, item.model_id, filament_id=item.filament_id, grams=item.estimated_grams,
                   minutes=item.actual_minutes or item.estimated_minutes, notes=item.notes, deduct=False, source="queue",
@@ -152,7 +166,8 @@ def print_again(model_id: int, session: Session = Depends(get_session)):
     """Queue the model again with the filament, grams and time of its most recent print."""
     if not session.get(Model3D, model_id):
         raise HTTPException(404, "Model not found")
-    last = session.exec(select(PrintLog).where(PrintLog.model_id == model_id)
+    from app import print_outcomes
+    last = session.exec(select(PrintLog).where(PrintLog.model_id == model_id, print_outcomes.ok())
                         .order_by(PrintLog.printed_at.desc(), PrintLog.id.desc())).first()
     top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
     item = QueueItem(model_id=model_id, position=(top.position + 1) if top else 0,
@@ -173,6 +188,9 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         raise HTTPException(404, "Not found")
 
     was_done = item.status == "done"
+    was_failed = item.status == "failed"
+    from app.routers.prints import clean_reason
+    reason = clean_reason(payload.get("failure_reason")) if payload.get("status") == "failed" else None
     if "printer_id" in payload and payload["printer_id"] is not None and not session.get(Printer, payload["printer_id"]):
         raise HTTPException(400, "That printer does not exist")
     if "planned_date" in payload:
@@ -185,6 +203,8 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
 
     if item.status == "done" and not was_done:
         _on_done(session, item)
+    elif item.status == "failed" and not was_failed:
+        fail_item(session, item, reason)
 
     session.add(item)
     session.commit()

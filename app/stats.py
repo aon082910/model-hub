@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.config import MODEL_EXTENSIONS
+from app import print_outcomes
 from app.models import Filament, Model3D, PrinterJob, PrintLog
 
 
@@ -37,9 +38,17 @@ def build(session: Session, months: int = 12, now: Optional[datetime] = None) ->
     totals = {"prints": 0, "grams": 0.0, "minutes": 0.0, "cost": 0.0, "models_printed": set()}
     materials = defaultdict(float)
     by_model = defaultdict(lambda: [0, None])
+    failures = {"total": 0, "grams": 0.0, "cost": 0.0, "reasons": defaultdict(int)}
     for log in session.exec(select(PrintLog)).all():
         key = log.printed_at.strftime("%Y-%m")
         in_range = key in per_month
+        if print_outcomes.is_failed(log):                      # a failure is counted on its own, not as a print
+            if in_range:
+                failures["total"] += 1
+                failures["grams"] += float(log.grams or 0)
+                failures["cost"] += _cost_of(log, spools)
+                failures["reasons"][log.failure_reason or "unsaid"] += 1
+            continue
         cost = _cost_of(log, spools)
         grams = float(log.grams or 0)
         minutes = float(log.minutes or 0)
@@ -73,7 +82,7 @@ def build(session: Session, months: int = 12, now: Optional[datetime] = None) ->
     finished = outcomes.get("done", 0) + outcomes.get("stopped", 0)
 
     library_total = session.exec(select(func.count()).select_from(Model3D).where(Model3D.extension.in_(MODEL_EXTENSIONS))).one()
-    ever_printed = session.exec(select(func.count(func.distinct(PrintLog.model_id)))).one()
+    ever_printed = session.exec(select(func.count(func.distinct(PrintLog.model_id))).where(print_outcomes.ok())).one()
     linked = session.exec(select(func.count()).select_from(Model3D).where(Model3D.extension.in_(MODEL_EXTENSIONS),
                                                                          Model3D.source_provider.is_not(None))).one()
     spool_rows = list(spools.values())
@@ -87,6 +96,13 @@ def build(session: Session, months: int = 12, now: Optional[datetime] = None) ->
         "materials": [{"material": m, "grams": round(g, 1)} for m, g in sorted(materials.items(), key=lambda kv: -kv[1])],
         "printer_jobs": {"done": outcomes.get("done", 0), "stopped": outcomes.get("stopped", 0),
                          "success_rate": round(outcomes.get("done", 0) / finished * 100, 1) if finished else None},
+        "failures": {
+            "total": failures["total"],
+            "rate": round(failures["total"] / (failures["total"] + totals["prints"]) * 100, 1) if failures["total"] else (0.0 if totals["prints"] else None),
+            "grams": round(failures["grams"], 1), "cost": round(failures["cost"], 2),
+            "by_reason": [{"reason": r, "label": print_outcomes.label(r) or "No reason given", "count": n}
+                          for r, n in sorted(failures["reasons"].items(), key=lambda kv: (-kv[1], kv[0]))],
+        },
         "library": {"models": library_total, "ever_printed": ever_printed, "never_printed": max(0, library_total - ever_printed),
                     "linked": linked},
         "filament": {"spools": len(spool_rows), "remaining_g": round(sum(f.remaining_g for f in spool_rows), 1)},

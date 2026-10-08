@@ -40,6 +40,16 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.13.0
+Failed prints are now tracked: mark a print as failed and say why (bed
+adhesion, warping, clog...), a stopped print is logged as a failure by itself,
+and Stats shows what failures wasted. Failures never count as a print. The
+Calendar can be viewed per printer, warns when a spool will run out before the
+plan is done (with an optional notification), and prints made can get a photo
+straight from a phone camera. New source: Smithsonian 3D, with its print-ready
+museum models searchable and downloadable. No new settings are required; new
+columns are added automatically on first start.
+
 ### 2.12.0
 Print times now learn from your own prints: a model you have printed before is
 queued with the time it really took, and estimates for new models are corrected

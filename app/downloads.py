@@ -1,5 +1,5 @@
 """Download a listing's model files into the library (Printables, Thingiverse,
-Wikimedia Commons and NASA 3D Resources).
+Wikimedia Commons, NASA 3D Resources and the Smithsonian's 3D models).
 
 Each listing is one item in a small background queue. For an item the worker
 fetches the listing's details, lists its files, downloads the model files to a
@@ -64,9 +64,13 @@ def _nasa_host_ok(host: Optional[str]) -> bool:
     return sources.host_in_domains(host, ("githubusercontent.com",))
 
 
+def _smithsonian_host_ok(host: Optional[str]) -> bool:
+    return sources.host_in_domains(host, sources.SMITHSONIAN_DOMAINS)
+
+
 HOST_CHECKS = {
     "printables": _printables_host_ok, "thingiverse": _thingiverse_host_ok,
-    "commons": _commons_host_ok, "nasa3d": _nasa_host_ok,
+    "commons": _commons_host_ok, "nasa3d": _nasa_host_ok, "smithsonian": _smithsonian_host_ok,
 }
 
 
@@ -172,6 +176,15 @@ def provider_files(client: httpx.Client, provider: str, source_id: str, credenti
         files = sources.commons_files(client, source_id)
     elif provider == "nasa3d":
         files = sources.nasa_files(client, source_id)
+    elif provider == "smithsonian":
+        files = sources.smithsonian_files(client, source_id)
+        ready = [f for f in files if f["print_ready"]]
+        if ready:
+            chosen = {f["id"] for f in ready}
+        else:                                           # no STL: the smallest OBJ is better than nothing
+            smallest = min(files, key=lambda f: f.get("size") or 0, default=None)
+            chosen = {smallest["id"]} if smallest else set()
+        return [{**f, "kind": Path(f["name"]).suffix.lstrip(".").lower(), "selectable": True, "selected": f["id"] in chosen} for f in files]
     else:
         return []
     return [{**f, "kind": Path(f["name"]).suffix.lstrip(".").lower(), "selectable": True, "selected": True} for f in files]

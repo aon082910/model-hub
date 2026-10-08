@@ -33,3 +33,24 @@ def test_the_queue_and_model_page_use_the_learned_times():
 
 def test_the_ics_link_points_at_the_real_route():
     assert 'href="/api/calendar/export.ics"' in HTML
+
+
+def test_failed_prints_have_their_controls():
+    assert "print-outcome" in JS and "/api/prints/reasons" in JS and "failure_reason" in JS
+    assert "queue-fail-save" in JS and "Why did it fail?" in JS
+    assert "d.failures.by_reason" in JS and "Failed prints" in JS
+
+
+def test_the_calendar_has_a_printer_choice_and_filament_warnings():
+    for element in ("cal-printer", "cal-printer-label", "cal-short-note", "cal-printer-note", "cal-ics"):
+        assert f'id="{element}"' in HTML, element
+    assert "calPrinter" in JS and "short_count" in JS and "p.short" in JS
+
+
+def test_photos_can_be_taken_with_a_phone_camera_where_prints_are_shown():
+    assert 'capture="environment"' in JS and "cal-photo-input" in JS
+    assert JS.count('class="print-photo-input"') >= 2                        # one to take a photo, one to choose from the gallery
+
+
+def test_smithsonian_has_a_label_in_the_page():
+    assert "smithsonian: 'Smithsonian 3D'" in JS

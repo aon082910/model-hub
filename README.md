@@ -105,7 +105,7 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Recent changes and undo | Done — **Library → Recent changes** records who changed what; bulk edits can be undone. See [Recent changes](#recent-changes) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
-| Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
+| Wikimedia Commons, NASA 3D Resources and Smithsonian 3D | Done — three more sites that need no account and let the server download: Commons' 3D files, NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...) and the Smithsonian's print-ready museum models (fossils, corals, Apollo hardware). All are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
 | Bulk unlinking | Done — **Matches → Linked models** lists every linked model (filter by site and how it was linked) and unlinks the ticked ones, or everything matching the filters, in one go |
 | Match your whole library | Done — the **Matches** tab runs a background job that searches Printables and MakerWorld for every model that isn't linked yet and keeps the closest listings as a review queue; you link, tick-and-link in bulk, or skip. See [Matching models to site listings](#matching-models-to-site-listings) |
 | Import a listing's parts into a project | Done — paste a MakerWorld link (or use **Import parts** on a model linked to one) to get the listing's store items and parts list as editable rows, then add the ticked ones to the project in one go |
@@ -199,17 +199,22 @@ site you have enabled, at once. Tick the sites to search (sites that still need 
   **Tick all / Untick all**, before pressing **Add to library**. Files that are not model files are shown greyed out.
 - **Save**: the **Save** button on a result or listing page puts it on the [Wishlist](#wishlist).
 
-**Which sites let a server download files:** Printables (no login needed), Thingiverse (with your token), Wikimedia Commons and
-NASA 3D Resources (both open, no account). MakerWorld,
+**Which sites let a server download files:** Printables (no login needed), Thingiverse (with your token), Wikimedia Commons,
+NASA 3D Resources and Smithsonian 3D (all open, no account). MakerWorld,
 Sketchfab and MyMiniFactory only give files to a logged-in user (MyMiniFactory's API key alone can't download), and Cults3D's
 API never serves files at all. For those, the page says so and points to the **browser extension**, which downloads in
 your own logged-in browser. Downloads are restricted to each site's own domains (every redirect is checked), the token is only
 sent to Thingiverse's own hosts, and a single file is capped at 1.5 GB. Sites are searched in parallel, so one slow site
 delays the results by its own time rather than adding up.
 
-**Other sites looked at:** *Wikimedia Commons* and *NASA 3D Resources* were added because they have open interfaces that I
-tested against the live sites. I could not find a public API for *NIH 3D*, *Thangs*, *Creality Cloud* or *Smithsonian 3D*
-(their listings are only on their websites), so they were not added rather than guessing at scraping; if one of them
+**Other sites looked at:** *Wikimedia Commons*, *NASA 3D Resources* and *Smithsonian 3D* were added because they have open interfaces that I
+tested against the live sites. Smithsonian 3D has a public 3D API (no key); only the models it offers as print-ready STL are searched (about a hundred,
+the rest of its collection is made for screens), and a model page link from 3d.si.edu is recognised. Its licence is shown as "CC0 where the listing says so",
+because the API does not say which models are CC0: check the listing. I also went through the sites in Makerspaces.com's list of 45 download sites
+(from 2015): Thingiverse, MyMiniFactory, Cults3D, Sketchfab and NASA were already here; *NIH 3D* has no public API any more (its search runs on private
+calls and the site is being reprocessed); *YouMagine*'s search is script-driven; *GrabCAD*, *Embodi3D*, *STLFinder*, *3D ContentCentral*, *SketchUp 3D
+Warehouse* and the paid marketplaces (*CGTrader*, *TurboSquid*) need a login or block servers; *Yeggi* and *STLFinder* only point at other sites; and *Repables*,
+*Libre3D*, *Pinshape*, *Ponoko* and *Wevolver* are gone or not model libraries. So none of those were added rather than guessing at scraping; if one of them
 publishes an API later it is a small addition. For any site that needs a login to download, use the browser extension.
 
 ## Wishlist
@@ -244,6 +249,16 @@ from the spool, never below zero; deleting the entry puts back exactly what it t
 pictures). Finishing a job in the **Print Queue** writes the entry for you, once per queue item. The Library can filter to **Printed** or
 **Never printed**, and printed models show a badge with how many times. Print entries and photos go in backups, and are removed with the
 model.
+
+**Failed prints.** Mark a print as failed (its *How it went* choice in the print history, or the same choice when logging one) and say why: it would not
+stick to the bed, warped, came loose, layers shifted, clogged nozzle, ran out of filament, supports failed, bad quality, power lost, you stopped it, or
+something else. A queue entry set to *failed* asks why; a print a printer reports as stopped is logged as a failure by itself (with the print time and, if the
+printer has a camera, a picture), and the reason is yours to add. A failure is kept but is **not a print**: it does not count as the model having been
+printed, does not take it off the never-printed list, and does not teach the learned print times. Nothing is taken off a spool for a failure until you say how many
+grams it used (edit its entry), and then the **Stats** page can show how much filament and money failures wasted and which reasons are most common.
+
+**Photos from a phone.** *Take photo* on a print entry opens the phone's camera straight away (*Choose photo* picks from the gallery); the Calendar's
+list of prints made on a day has the same button, so the picture can be added right when the print comes off the bed.
 
 ## Duplicates
 
@@ -463,6 +478,18 @@ A day turns red when its planned time is more than your printers can do (**Setti
 day from today with room, in queue order (an entry without an estimate counts as an hour; one longer than a day gets a day to itself); *Preview* shows the result first and a real run can be undone from Recent changes or right after.
 **Calendar file (.ics)** downloads the planned prints for a phone or desktop calendar. It is a download, not a live subscription, because calendars cannot sign in.
 
+## The calendar per printer, and filament
+
+When you have printers, the Calendar has a **Printer** choice: *All printers*, one printer, or *Not assigned*. A printer's day holds the hours you set
+(Settings, Print planning); a print with no printer chosen can go on any of them, so a day with two printers holds twice as much. A day is red when
+one printer has more than its own hours, or the whole day has more than all printers together. Automatic planning respects this per printer.
+Prints already made are not tied to a printer, so they show only under *All printers*. The **.ics** file follows the choice too.
+
+The Calendar also checks your **filament**. Planned prints that name a spool and a weight are taken in date order, and any print that the spool will not have
+enough left for is marked (the day gets a warning, the day's list says by how many grams). Prints already done are not counted again. Once a day Model Hub also
+tells you (the *A planned print needs more filament than you have* notification, which has its own switch) about shortfalls in the next two weeks,
+once for each, and again only if it was fixed and then became short again.
+
 ## Sharing a collection or the whole library
 
 Besides one model or one project, a **collection** can be shared (Collections tab, *share*) and so can the **whole library** (Settings, administrator only). The link opens a read-only gallery of names and pictures with a page per model; each page shows what a
@@ -480,11 +507,12 @@ One timer runs in the background (it wakes every half minute and runs whatever i
 | Low filament and supplies | every 6 hours | Settings → Notifications: warn at this many grams (default 100, 0 = off). Supplies use the minimum you set on each. You are told once per item, again only after it was restocked and ran low again |
 | Listing changes | about daily, **off by default** | Settings → Notifications: check linked listings by itself |
 | Printers | every 30 seconds | see below |
+| Planned prints that the spools cannot cover | every 6 hours | notification only; Settings → Notifications has a switch |
 | MQTT / Home Assistant | every 30 seconds, only if a broker is set | Settings → Home Assistant and MQTT |
 
 **Printer finished:** when a printer that was printing stops, Model Hub notices (Klipper reports *complete*; for OctoPrint a print that ended at 100% counts as finished).
 If the file was one Model Hub sent for a model, the print is recorded for that model: the waiting print-queue entry is completed (which takes the filament off the spool) or, with no
-queue entry, a print-log entry with the print time is written. A cancelled or failed print is announced but not logged. Nothing is ever started or stopped by this, and a print that ends while Model Hub is
+queue entry, a print-log entry with the print time is written. A cancelled or failed print is announced and kept in the print log as a failure (see Failed prints under [Print log](#print-log)). Nothing is ever started or stopped by this, and a print that ends while Model Hub is
 restarting is not noticed (the state is kept in memory).
 
 **Notifications** go to the webhook you set (ntfy, Discord, Slack...). **Settings → Notifications** has a *Send a test message* button and a switch for every kind: new files, AI tagging finished,

@@ -19,7 +19,7 @@ from typing import Optional
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app import printwatch, stock_watch, update_check
+from app import print_outcomes, printwatch, stock_watch, update_check
 from app.config import MODEL_EXTENSIONS
 from app.models import Model3D, Printer, PrintLog, QueueItem
 from app.settings_store import get_setting, set_setting
@@ -63,8 +63,8 @@ def _send(messages: list, cfg: dict) -> None:
 def stats_payload(session: Session) -> dict:
     month = datetime.utcnow().strftime("%Y-%m")
     total = session.exec(select(func.count()).select_from(Model3D).where(Model3D.extension.in_(MODEL_EXTENSIONS))).one()
-    printed = session.exec(select(func.count(func.distinct(PrintLog.model_id)))).one()
-    this_month = sum(1 for at in session.exec(select(PrintLog.printed_at)).all() if at.strftime("%Y-%m") == month)
+    printed = session.exec(select(func.count(func.distinct(PrintLog.model_id))).where(print_outcomes.ok())).one()
+    this_month = sum(1 for at in session.exec(select(PrintLog.printed_at).where(print_outcomes.ok())).all() if at.strftime("%Y-%m") == month)
     from app.models import Filament
     return {"models": total, "never_printed": max(0, total - printed), "prints_this_month": this_month,
             "low_stock": len(stock_watch.current_low(session)),

@@ -261,6 +261,8 @@ class PrintLog(SQLModel, table=True):
     notes: Optional[str] = None
     source: str = "manual"                  # manual, queue
     queue_item_id: Optional[int] = None
+    outcome: Optional[str] = None           # failed, or empty for a print that worked
+    failure_reason: Optional[str] = None    # a key of app.print_outcomes.REASONS
     measured: bool = False                  # minutes is a real time (a printer reported it, or you typed it), not an estimate
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

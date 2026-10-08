@@ -11,6 +11,7 @@ from typing import Optional
 from app import library_filters
 from app.families import family_summary
 from app.db import get_session
+from app import print_outcomes
 from app.models import (
     Collection, Model3D, ModelCollectionLink, ModelTagLink, PrintLog, Project, ProjectModelLink, QueueItem, Tag,
 )
@@ -124,7 +125,7 @@ def _with_tags(session: Session, models: list) -> list:
     if ids:
         for model_id, count, last in session.exec(
                 select(PrintLog.model_id, func.count(PrintLog.id), func.max(PrintLog.printed_at))
-                .where(PrintLog.model_id.in_(ids)).group_by(PrintLog.model_id)).all():
+                .where(PrintLog.model_id.in_(ids), print_outcomes.ok()).group_by(PrintLog.model_id)).all():
             prints[model_id] = (count, last)
     return [{**m.model_dump(exclude={"embedding"}), "tags": tags_by_model.get(m.id, []),
              "print_count": prints.get(m.id, (0, None))[0], "last_printed_at": prints.get(m.id, (0, None))[1]} for m in models]

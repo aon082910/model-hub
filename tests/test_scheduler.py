@@ -255,7 +255,7 @@ def test_a_finished_print_completes_the_waiting_queue_entry(authed, clean, print
         authed.delete(f"/api/filament/{spool['id']}")
 
 
-def test_a_cancelled_print_is_announced_but_not_logged(authed, clean, printer):
+def test_a_cancelled_print_is_announced_and_logged_as_a_failure(authed, clean, printer):
     fake, p = printer
     m = authed.post("/api/library/import", files={"file": ("cancelled.stl", _stl(99), "application/octet-stream")}).json()
     try:
@@ -263,7 +263,9 @@ def test_a_cancelled_print_is_announced_but_not_logged(authed, clean, printer):
         _poll()
         fake.moonraker_state = "cancelled"
         assert _poll() == [("Watchy", "stopped")]
-        assert authed.get("/api/prints", params={"model_id": m["id"]}).json()["total"] == 0
+        logs = authed.get("/api/prints", params={"model_id": m["id"]}).json()["items"]
+        assert len(logs) == 1 and logs[0]["outcome"] == "failed" and logs[0]["source"] == "printer" and logs[0]["failure_reason"] is None
+        assert authed.get(f"/api/library/models/{m['id']}").json()["print_count"] == 0             # a failure is not a print
         assert "stopped" in clean[-1][1]
     finally:
         authed.delete(f"/api/library/models/{m['id']}")

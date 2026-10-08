@@ -4,7 +4,8 @@ Every poll looks at each printer's state. When one that was printing is not any 
   * finished: if the file was one Model Hub sent for a model, the print is recorded for it (the
     matching print-queue entry is completed, which takes the filament off the spool; otherwise a
     print log entry with the print time is written), and you are notified.
-  * stopped (cancelled or failed): you are notified; nothing is logged.
+  * stopped (cancelled or failed): you are notified, and a failed entry goes in the print log (the queue entry, if there was
+    one, is marked failed). Say why in the log or the Stats page. A failed print never counts as the model having been printed.
 Nothing is ever started or controlled by this. State is kept in memory only, so a print that
 ends while Model Hub was restarting is not noticed.
 """
@@ -83,23 +84,31 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
     if job:
         job.finished_at, job.outcome = datetime.utcnow(), outcome
         session.add(job)
-    if outcome == "done" and model:
+    if model and outcome in ("done", "stopped"):
         from app.routers.prints import log_print
-        from app.routers.queue import complete_item
+        from app.routers.queue import complete_item, fail_item
         minutes = duration / 60 if duration else None
         candidates = session.exec(select(QueueItem).where(QueueItem.model_id == model.id, QueueItem.status.in_(["queued", "printing"]))
                                   .order_by(QueueItem.position)).all()
         # the entry meant for this printer first (a model may be queued for several), else the next in line
         waiting = next((c for c in candidates if c.printer_id == printer.id), None) or (candidates[0] if candidates else None)
-        if waiting:
-            complete_item(session, waiting, minutes)
+        if outcome == "done":
+            if waiting:
+                complete_item(session, waiting, minutes)
+            else:
+                kept = session.get(PrintFile, job.print_file_id) if job and job.print_file_id else None
+                log_print(session, model.id, minutes=minutes, grams=kept.est_grams if kept else None, source="printer", deduct=False,
+                          measured=True)
+            session.flush()
+            _photograph(session, printer, model.id)
+        elif waiting:
+            fail_item(session, waiting, minutes=minutes)        # stopped or failed: the log keeps it, with the reason still to be said
         else:
-            kept = session.get(PrintFile, job.print_file_id) if job and job.print_file_id else None
-            log_print(session, model.id, minutes=minutes, grams=kept.est_grams if kept else None, source="printer", deduct=False,
-                      measured=True)
+            log_print(session, model.id, minutes=round(minutes, 1) if minutes else None, source="printer", deduct=False, outcome="failed")
+        if outcome == "stopped":
+            session.flush()
+            _photograph(session, printer, model.id)             # a picture of what went wrong is worth keeping too
         label = model.filename
-        session.flush()
-        _photograph(session, printer, model.id)
     session.commit()
     if outcome == "done":
         notify_event(session, "print_done", f"Model Hub: {printer.name} finished", f"{label} is done" +
