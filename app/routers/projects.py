@@ -430,6 +430,9 @@ def delete_project(project_id: int, session: Session = Depends(get_session)):
         session.delete(link)
     for line in session.exec(select(ProjectModelFilament).where(ProjectModelFilament.project_id == project_id)).all():
         session.delete(line)
+    from app.models import ShareLink
+    for share in session.exec(select(ShareLink).where(ShareLink.kind == "project", ShareLink.target_id == project_id)).all():
+        session.delete(share)         # ids are reused: a link must never outlive what it showed
     session.delete(project)
     session.commit()
     return {"status": "deleted"}

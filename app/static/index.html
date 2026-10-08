@@ -72,6 +72,7 @@
         </select>
         <label class="inline-check"><input type="checkbox" id="f-fits"> Fits my printer's bed</label>
         <label class="inline-check"><input type="checkbox" id="f-notes"> Has notes</label>
+        <label class="inline-check"><input type="checkbox" id="f-latest"> Latest versions only</label>
       </div>
       <div class="row">
         <select id="f-saved"><option value="">saved searches...</option></select>
@@ -116,6 +117,16 @@
       <p class="muted">These files have the same geometry but are not identical (a re-export, a different slicer, a repaired copy...). They are only listed here.</p>
       <div id="dup-similar"></div>
     </details>
+  </section>
+
+  <section id="tab-labels" class="tab">
+    <p class="no-print"><a href="#/filament" id="labels-back" class="back-link">&larr; Back</a></p>
+    <h2 id="labels-title" class="no-print">Labels</h2>
+    <p class="muted no-print">Tick what to print, then press <b>Print labels</b> (or save as PDF). Each QR code opens that item in Model Hub when you scan it with your phone's camera
+      (your phone must be able to reach this server, e.g. on your home network or VPN).</p>
+    <div class="bulk-bar no-print"><button id="labels-all">Tick all</button><button id="labels-none">Untick all</button><button id="labels-print" class="primary">Print labels</button></div>
+    <div id="labels-list" class="labels-list no-print"></div>
+    <div id="labels-sheet" class="labels-sheet"></div>
   </section>
 
   <section id="tab-search" class="tab">
@@ -576,6 +587,8 @@
         <div class="panel" id="model-tags-panel"></div>
         <div class="panel" id="model-details-panel"></div>
         <div class="panel" id="model-settings-panel"></div>
+        <div class="panel" id="model-versions-panel"></div>
+        <div class="panel" id="model-share-panel"></div>
         <div class="panel" id="viewer-source"></div>
       </aside>
     </div>
@@ -586,6 +599,7 @@
       <a href="#/projects" class="back-link">&larr; Projects</a>
     </div>
     <div id="project-page-body"></div>
+    <div class="panel" id="project-share-panel"></div>
   </section>
 
   <div id="auth-overlay" class="modal hidden">

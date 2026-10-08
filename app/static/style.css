@@ -311,3 +311,23 @@ body.not-admin .admin-only { display: none !important; }
 body .card { position: relative; }
 #bulk-bar { position: sticky; top: 0; z-index: 10; }
 .fil-history-row td { background: var(--panel); }
+
+/* ---------- Versions, sharing, labels, 3D tools ---------- */
+.viewer-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.viewer-tools button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.viewer-tools input[type=range] { width: 160px; }
+.version-label { width: 130px; }
+.share-url { width: min(420px, 100%); font-size: 12px; }
+.labels-list { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0; }
+.labels-sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-top: 12px; }
+.label-card { display: flex; gap: 10px; align-items: center; background: #fff; color: #000; border: 1px dashed #888; border-radius: 6px; padding: 8px; break-inside: avoid; }
+.label-card img { width: 84px; height: 84px; flex: 0 0 84px; background: #fff; }
+.label-card .muted { color: #444; font-size: 12px; }
+tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
+@keyframes flash-row { 0%, 100% { background: transparent; } 50% { background: rgba(79, 142, 247, .35); } }
+@media print {
+  body { background: #fff; }
+  header, nav, .no-print, #notice-bar, .whoami { display: none !important; }
+  #tab-labels { display: block !important; }
+  .labels-sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+}

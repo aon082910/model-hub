@@ -94,6 +94,10 @@ Then open http://localhost:8420. Put some STL/3MF files in `./data`, click
 | Bulk edit | Done — **Select** in the Library, pick models (this page, or everything that matches the filters), then add or remove a tag, collection or project, set the designer or license, or add them to the print queue |
 | Print settings and print again | Done — every model's page has **What worked** (material, layer height, infill, supports, temperatures, speed, slicer profile, notes) and **Print again**, which queues it with the filament, grams and time of its last print |
 | Filament prices and low spools | Done — a spool's price history is kept (Filament tab, **prices**), and spools at or below the low-filament level appear on the shopping list (and its CSV and text exports) with their link and last price |
+| Versions of a model | Done — group files as versions (v1, v2...), label them, see them on each model's page, and hide older versions with **Latest versions only**; suggestions come from similar names and identical shapes. See [Versions, sharing and labels](#versions-sharing-and-labels) |
+| Share links | Done — a secret read-only link to a model or a project for someone without a login; downloads and part costs are off unless you switch them on, notes and print history are never shown, links can expire or be revoked |
+| QR labels | Done — printable QR labels for filament spools and supplies; scanning one with a phone camera opens that item |
+| 3D view tools | Done — **Measure** (click two points), **Section** (cut with a plane to look inside) and **Compare** with another version (overlaid in orange, with the size difference) |
 | Wishlist | Done — a **Wishlist** tab keeps listings you want for later (save from a search result or a listing page, with a note), shows which are already in your library, and **Add all to library** queues every one the server can download in one go; the rest are reported with the reason. See [Wishlist](#wishlist) |
 | Choose which files to download | Done — a listing's page lists every file (Printables' individual STLs as well as its model pack, Thingiverse's files, ...); tick the ones you want, or leave the default (the pack / all model files) |
 | Wikimedia Commons and NASA 3D Resources | Done — two more sites that need no account and let the server download: Commons' 3D files and NASA's public-domain 3D Resources (Apollo landing sites, satellites, ...). Both are searchable and downloadable from the Search tab; they are left out of the whole-library match job, since a personal file is unlikely to come from there |
@@ -324,6 +328,20 @@ API keys are never shown again after you save them, are never in an error messag
 **Status of testing:** the Moonraker and OctoPrint code follows their documented HTTP APIs and is tested against simulated printers and a stand-in slicer, and the whole flow was
 exercised in a browser against a simulated Klipper host. It has **not** been tried against a real printer or a real slicer, so try it with an idle printer first. Bambu Lab printers
 (which use their own protocol) are not supported.
+
+## Versions, sharing and labels
+
+- **Versions:** a model's page has a *Versions* panel. It suggests other files that look like versions (the same shape, or the same name apart from a version suffix such as `_v2`); **Group with this model**
+  puts them in one family. Give each a label (`v1`, `final`...). Leaving a group, or deleting a model, dissolves a family that is down to one. Library → Filters → **Latest versions only** shows just the newest file of each family.
+- **Share:** the *Share* panel on a model's or project's page makes a link (`/share/<secret>`) anyone who has it can open without logging in. The page is read-only and shows the title, picture, size, designer, license,
+  tags, the listing's description and link, *What worked*, and for a project its models, filament totals and parts. It never shows notes or print history, and shows part costs and offers file downloads only if you ticked them for that link.
+  Links can expire (1, 7 or 30 days) and **Stop sharing** ends one at once; deleting a model or project deletes its links. Viewers cannot see or make links. Share links are not in backups and a restore leaves them alone.
+  **A link works for anyone who can reach this server's address.** To share outside your home network you must expose Model Hub yourself (a reverse proxy or a VPN); the link itself adds no login.
+  The page is served with a locked-down content policy (no scripts, nothing external) and every piece of text is escaped.
+- **QR labels:** **Filament → Print QR labels for spools** and **Supplies → Print QR labels** make a sheet of labels (QR code, name, a line of detail). Print it, or save as PDF. A label's QR opens
+  `#/spool/<id>` or `#/supply/<id>` on this server, which scrolls to and flashes that row. Your phone's own camera app does the scanning, so this works over plain http on your network (an in-app camera scanner would need https).
+- **3D view tools** (under the model viewer): **Measure** shows the distance between two clicked points, in the model's units (millimetres for most printable files), with the x/y/z parts; **Section** cuts the model along X, Y or Z with a slider
+  so you can see inside; **Compare with...** overlays another version (from its family, or a suggested one) in translucent orange, lined up by their centers, and reports how much bigger or smaller it is. STEP files cannot be compared.
 
 ## Library tools
 

@@ -11,7 +11,7 @@ from app.models import (
 from app.settings_store import get_setting
 
 FILTER_KEYS = ("q", "tag", "extension", "duplicates_only", "printed", "designer", "license", "collection_id",
-               "project_id", "linked", "fits_bed", "has_notes")
+               "project_id", "linked", "fits_bed", "has_notes", "latest_only")
 SORT_KEYS = ("id", "name", "newest", "oldest", "largest", "smallest", "last_printed")
 
 
@@ -53,6 +53,9 @@ def conditions(session: Session, f: dict) -> list:
         out.append(Model3D.source_provider.is_not(None))
     elif f.get("linked") is False:
         out.append(Model3D.source_provider.is_(None))
+    if f.get("latest_only") is True:        # only the newest file of each group of versions
+        newest = select(func.max(Model3D.id)).where(Model3D.family_id.is_not(None)).group_by(Model3D.family_id)
+        out.append(or_(Model3D.family_id.is_(None), Model3D.id.in_(newest)))
     if f.get("has_notes") is True:
         out.append(and_(Model3D.notes.is_not(None), Model3D.notes != ""))
     if text("q"):
@@ -107,7 +110,7 @@ def order_by(sort: Optional[str]):
 def parse_flags(raw: dict) -> dict:
     """Turn query-string style values ('true', 'false', '') into the booleans conditions() expects."""
     out = dict(raw)
-    for key in ("duplicates_only", "printed", "linked", "fits_bed", "has_notes"):
+    for key in ("duplicates_only", "printed", "linked", "fits_bed", "has_notes", "latest_only"):
         value = out.get(key)
         if isinstance(value, str):
             out[key] = True if value == "true" else False if value == "false" else None

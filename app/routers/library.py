@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from app import library_filters
+from app.families import family_summary
 from app.db import get_session
 from app.models import (
     Collection, Model3D, ModelCollectionLink, ModelTagLink, PrintLog, Project, ProjectModelLink, QueueItem, Tag,
@@ -63,6 +64,7 @@ def list_models(
     linked: Optional[bool] = None,
     fits_bed: bool = False,
     has_notes: bool = False,
+    latest_only: bool = False,
     sort: Optional[str] = None,
     limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
@@ -77,6 +79,7 @@ def list_models(
         "q": q, "tag": tag, "extension": extension, "duplicates_only": duplicates_only or None, "printed": printed,
         "designer": designer, "license": license, "collection_id": collection_id, "project_id": project_id,
         "linked": linked, "fits_bed": fits_bed or None, "has_notes": has_notes or None,
+        "latest_only": latest_only or None,
     }
     try:
         conditions = library_filters.conditions(session, filters)
@@ -223,6 +226,7 @@ def get_model_full(model_id: int, session: Session = Depends(get_session)):
         "queue": [{"id": q.id, "status": q.status, "position": q.position, "estimated_grams": q.estimated_grams,
                    "estimated_minutes": q.estimated_minutes} for q in queue],
         "duplicates": [{"id": m.id, "filename": m.filename, "path": m.path} for m in copies],
+        "family": family_summary(session, model),
         "file_exists": (LIBRARY_PATH / model.path).exists(),
     }
 

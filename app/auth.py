@@ -19,7 +19,7 @@ SECRET_KEY_PATH = CONFIG_PATH / "secret.key"
 # itself, static assets needed to render the login page, and the browser
 # extension's own upload endpoint (which authenticates via API key instead).
 PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js"}
-PUBLIC_PREFIXES = ("/assets/",)
+PUBLIC_PREFIXES = ("/assets/", "/share/")
 
 # The extension API key is intentionally weaker than a full login session: it's
 # stored in a browser extension, a lower-trust place than the server admin's own
@@ -139,6 +139,8 @@ ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/print
 # ...and these they alone may change (members can still look): they delete files from disk
 ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
 ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove"}
+# Share links are secrets: viewers may not even list them
+NO_VIEWER_PREFIXES = ("/api/shares",)
 
 
 def current_user(request: Request, session: Session):
@@ -174,6 +176,8 @@ def forbidden_reason(user: dict, method: str, path: str):
     writing = method not in ("GET", "HEAD")
     if path.startswith(ADMIN_ONLY_PREFIXES) or path in ADMIN_ONLY_PATHS or (writing and path.startswith(ADMIN_ONLY_WRITE_PREFIXES)):
         return "Only the administrator can do that."
+    if role == "viewer" and path.startswith(NO_VIEWER_PREFIXES):
+        return "Your account is read-only."
     if role == "viewer" and writing and path != "/api/auth/me/password":
         return "Your account is read-only."
     return None

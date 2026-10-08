@@ -77,6 +77,8 @@ class Model3D(SQLModel, table=True):
     source_change: Optional[str] = None       # JSON list of the parts that changed since (title, files...)
     source_changed_at: Optional[datetime] = None
     notes: Optional[str] = None             # your own notes on this model
+    family_id: Optional[int] = Field(default=None, index=True)   # versions of the same model share a family
+    version_label: Optional[str] = None                          # v1, v2, final...
     print_settings: Optional[str] = None    # JSON: what worked (material, layer height, infill, supports, temperatures...)
 
     is_duplicate_of: Optional[int] = Field(default=None, foreign_key="model3d.id")
@@ -296,6 +298,26 @@ class FilamentPrice(SQLModel, table=True):
     cost: float
     spool_weight_g: float = 1000
     at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ModelFamily(SQLModel, table=True):
+    """Several files that are versions of one model (v1, v2, a repaired copy...)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ShareLink(SQLModel, table=True):
+    """A secret link that shows one model or project, read-only, to someone without a login."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    token: str = Field(index=True, unique=True)
+    kind: str                                  # model, project
+    target_id: int
+    allow_downloads: bool = False
+    show_costs: bool = False
+    created_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = None
 
 
 class AppUser(SQLModel, table=True):

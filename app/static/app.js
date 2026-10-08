@@ -87,6 +87,17 @@ function route() {
     showSection('tab-search', 'search');
     return openSearchPage(search[1] ? decodeURIComponent(search[1]) : '');
   }
+  const labels = hash.match(/^#\/labels\/(filament|supplies)$/);
+  if (labels) {
+    showSection('tab-labels', labels[1]);
+    return loadLabels(labels[1]);
+  }
+  const scanned = hash.match(/^#\/(spool|supply)\/(\d+)$/);
+  if (scanned) {
+    const spool = scanned[1] === 'spool';
+    showSection(spool ? 'tab-filament' : 'tab-supplies', spool ? 'filament' : 'supplies');
+    return (spool ? loadFilament() : loadSupplies()).then(() => highlightRow(spool ? '#filament-table' : '#supplies-table', scanned[2]));
+  }
   const listing = hash.match(/^#\/listing\/([a-z0-9]+)\/([A-Za-z0-9_-]+)$/);
   if (listing) {
     showSection('page-listing', 'search');
@@ -146,6 +157,7 @@ function libraryParams() {
   put('sort', $('#f-sort').value);
   if ($('#f-fits').checked) params.set('fits_bed', 'true');
   if ($('#f-notes').checked) params.set('has_notes', 'true');
+  if ($('#f-latest').checked) params.set('latest_only', 'true');
   return params;
 }
 
@@ -161,6 +173,7 @@ function setLibraryFilters(values) {
   $('#f-sort').value = values.sort || '';
   $('#f-fits').checked = values.fits_bed === true || values.fits_bed === 'true';
   $('#f-notes').checked = values.has_notes === true || values.has_notes === 'true';
+  $('#f-latest').checked = values.latest_only === true || values.latest_only === 'true';
 }
 
 // a filter changed: back to the first page, then reload (the paging script resets on a search-box input)
@@ -183,7 +196,7 @@ async function loadFilterChoices() {
 let savedSearches = [];
 
 ['#f-designer', '#f-license'].forEach(sel => $(sel).addEventListener('input', debounce(filtersChanged, 400)));
-['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
+['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
 $('#library-filters').addEventListener('toggle', () => { if ($('#library-filters').open) loadFilterChoices(); });
 $('#f-clear').addEventListener('click', () => { setLibraryFilters({}); filtersChanged(); });
 $('#f-saved').addEventListener('change', () => {
@@ -194,7 +207,7 @@ $('#f-saved').addEventListener('change', () => {
 });
 $('#f-save').addEventListener('click', async () => {
   const params = Object.fromEntries(libraryParams());
-  for (const key of ['fits_bed', 'has_notes', 'duplicates_only']) if (params[key] === 'true') params[key] = true;
+  for (const key of ['fits_bed', 'has_notes', 'duplicates_only', 'latest_only']) if (params[key] === 'true') params[key] = true;
   const name = prompt('Name this search:');
   if (!name) return;
   const res = await jsonRequest('POST', '/api/saved-searches', { name, params });
@@ -407,6 +420,8 @@ function renderModelPage(model) {
   renderModelPrints(model);
   renderModelPrinter(model);
   renderPrintSettings(model);
+  renderVersions(model);
+  renderSharePanel('#model-share-panel', 'model', model.id);
 }
 
 // ---------- What worked: print settings per model ----------
@@ -436,6 +451,125 @@ function renderPrintSettings(model) {
     const res = await fetch(`/api/queue/again/${model.id}`, { method: 'POST' });
     $('#ps-status').textContent = res.ok ? 'Added to the print queue.' : await sourceErrorText(res);
   };
+}
+
+// ---------- Versions of a model ----------
+async function renderVersions(model) {
+  const panel = $('#model-versions-panel');
+  const fam = model.family;
+  let suggestions = [];
+  const res = await fetch(`/api/families/suggest/${model.id}`);
+  if (res.ok) suggestions = (await res.json()).suggestions;
+  if (!currentModel || currentModel.id !== model.id) return;
+  panel.innerHTML = `
+    <h3>Versions</h3>
+    ${fam ? `
+      <div class="muted">${fam.name ? esc(fam.name) : 'This model has other versions'}</div>
+      <ul class="link-list">${fam.members.map(m => `
+        <li data-id="${m.id}">
+          ${m.id === model.id ? `<b>${esc(m.filename)}</b>` : `<a href="#/model/${m.id}">${esc(m.filename)}</a>`}
+          <input class="version-label" value="${esc(m.version_label || '')}" placeholder="label (v2...)" maxlength="40" aria-label="Version label">
+          ${m.id === model.id ? '<button class="version-leave">Leave group</button>' : ''}
+        </li>`).join('')}</ul>` : '<p class="muted">Not grouped with other versions.</p>'}
+    ${suggestions.length ? `<div class="muted">Looks like another version:</div>
+      <ul class="link-list">${suggestions.map(s => `<li><a href="#/model/${s.id}">${esc(s.filename)}</a> <span class="muted">${s.same_shape ? 'same shape' : 'similar name'}</span>
+        <button class="version-join" data-id="${s.id}">Group with this model</button></li>`).join('')}</ul>` : ''}
+    <span id="versions-status" class="muted"></span>`;
+  $$('#model-versions-panel .version-join').forEach(btn => btn.onclick = async () => {
+    const r = await jsonRequest('POST', '/api/families', { model_ids: [model.id, parseInt(btn.dataset.id)] });
+    if (r.ok) refreshModelPage(); else $('#versions-status').textContent = await sourceErrorText(r);
+  });
+  $$('#model-versions-panel .version-label').forEach(input => input.onchange = async () => {
+    const r = await jsonRequest('PUT', `/api/families/members/${input.closest('li').dataset.id}`, { label: input.value });
+    $('#versions-status').textContent = r.ok ? 'Saved.' : await sourceErrorText(r);
+  });
+  const leave = $('#model-versions-panel .version-leave');
+  if (leave) leave.onclick = async () => { await fetch(`/api/families/members/${model.id}`, { method: 'DELETE' }); refreshModelPage(); };
+}
+
+// ---------- Share links (a model or a project) ----------
+async function renderSharePanel(selector, kind, targetId) {
+  const panel = $(selector);
+  if (!panel) return;
+  if (currentUser.role === 'viewer') { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const res = await fetch(`/api/shares?kind=${kind}&target_id=${targetId}`);
+  const links = res.ok ? await res.json() : [];
+  panel.innerHTML = `
+    <h3>Share</h3>
+    <p class="muted">A secret link that shows this ${kind} read-only to anyone who has it, without a login. Notes, print history and (unless you tick it) costs are never shown.
+      Anyone who can reach this server's address can open it, so for people outside your network you need to expose Model Hub yourself (a reverse proxy or VPN).</p>
+    ${links.length ? `<ul class="link-list">${links.map(l => `
+      <li data-id="${l.id}"><input class="share-url" readonly value="${esc(location.origin + l.path)}" aria-label="Share link">
+        <button class="share-copy">Copy</button>
+        <span class="muted">${l.allow_downloads ? 'downloads on' : 'no downloads'}${l.show_costs ? ' · costs shown' : ''}${l.expires_at ? ` · ${l.expired ? 'expired' : 'expires ' + esc(String(l.expires_at).slice(0, 10))}` : ''}</span>
+        <button class="share-revoke danger">Stop sharing</button></li>`).join('')}</ul>` : ''}
+    <div class="row">
+      <label class="inline-check"><input type="checkbox" class="share-downloads"> Allow file downloads</label>
+      ${kind === 'project' ? '<label class="inline-check"><input type="checkbox" class="share-costs"> Show part costs</label>' : ''}
+      <label>Expires in <select class="share-expiry"><option value="">never</option><option value="1">1 day</option><option value="7">a week</option><option value="30">30 days</option></select></label>
+      <button class="share-create primary">Create a link</button><span class="share-status muted"></span>
+    </div>`;
+  panel.querySelector('.share-create').onclick = async () => {
+    const body = { kind, target_id: targetId, allow_downloads: panel.querySelector('.share-downloads').checked };
+    if (kind === 'project') body.show_costs = panel.querySelector('.share-costs').checked;
+    const days = panel.querySelector('.share-expiry').value;
+    if (days) body.expires_days = parseInt(days);
+    const r = await jsonRequest('POST', '/api/shares', body);
+    if (r.ok) renderSharePanel(selector, kind, targetId); else panel.querySelector('.share-status').textContent = await sourceErrorText(r);
+  };
+  panel.onclick = async (e) => {
+    const row = e.target.closest('li');
+    if (!row) return;
+    if (e.target.classList.contains('share-copy')) {
+      const input = row.querySelector('.share-url');
+      input.select();
+      const ok = await copyText(input.value);
+      e.target.textContent = ok ? 'Copied' : 'Select + copy';
+    } else if (e.target.classList.contains('share-revoke')) {
+      if (!confirm('Stop sharing? The link stops working at once.')) return;
+      await fetch(`/api/shares/${row.dataset.id}`, { method: 'DELETE' });
+      renderSharePanel(selector, kind, targetId);
+    }
+  };
+}
+
+// ---------- QR labels for spools and supplies ----------
+let labelItems = [];
+
+async function loadLabels(kind) {
+  $('#labels-back').href = kind === 'filament' ? '#/filament' : '#/supplies';
+  $('#labels-title').textContent = kind === 'filament' ? 'Spool labels' : 'Supply labels';
+  const res = await fetch(kind === 'filament' ? '/api/filament' : '/api/inventory');
+  labelItems = (res.ok ? await res.json() : []).map(i => kind === 'filament'
+    ? { id: i.id, route: `spool/${i.id}`, title: [i.material, i.brand, i.color].filter(Boolean).join(' '), line: `${i.remaining_g} g left` }
+    : { id: i.id, route: `supply/${i.id}`, title: i.name, line: [i.category, i.location].filter(Boolean).join(' · ') });
+  $('#labels-list').innerHTML = labelItems.length ? labelItems.map(i => `
+    <label class="inline-check"><input type="checkbox" class="label-pick" value="${i.id}" checked> ${esc(i.title)}</label>`).join('') : '<p class="muted">Nothing to label yet.</p>';
+  drawLabelSheet();
+}
+
+function drawLabelSheet() {
+  const picked = new Set([...$$('.label-pick:checked')].map(c => parseInt(c.value)));
+  $('#labels-sheet').innerHTML = labelItems.filter(i => picked.has(i.id)).map(i => `
+    <div class="label-card">
+      <img src="/api/qr?text=${encodeURIComponent(location.origin + '/#/' + i.route)}" alt="QR code">
+      <div><b>${esc(i.title)}</b><div class="muted">${esc(i.line)}</div></div>
+    </div>`).join('');
+}
+
+$('#labels-list').addEventListener('change', drawLabelSheet);
+$('#labels-all').addEventListener('click', () => { $$('.label-pick').forEach(c => { c.checked = true; }); drawLabelSheet(); });
+$('#labels-none').addEventListener('click', () => { $$('.label-pick').forEach(c => { c.checked = false; }); drawLabelSheet(); });
+$('#labels-print').addEventListener('click', () => window.print());
+
+// a scanned label opens its row: scroll to it and flash it
+function highlightRow(tableSelector, id) {
+  const row = document.querySelector(`${tableSelector} tr[data-id="${id}"]`);
+  if (!row) return;
+  row.scrollIntoView({ block: 'center' });
+  row.classList.add('flash');
+  setTimeout(() => row.classList.remove('flash'), 2500);
 }
 
 // ---------- Print history on a model's page ----------
@@ -661,6 +795,7 @@ async function renderModelLinks(model) {
 function startModelViewer(model) {
   initViewer();
   ensureViewerColorControl();
+  ensureViewerTools(model);
   const fileUrl = `/api/library/models/${model.id}/file`;
   const loaders = {
     '.stl': loadSTL, '.obj': loadOBJ, '.3mf': load3MF, '.fbx': loadFBX, '.step': loadSTEP, '.stp': loadSTEP,
@@ -713,6 +848,159 @@ function disposeViewer() {
     spent.replaceWith(fresh);
   }
   renderer = scene = camera = controls = null;
+  resetViewerTools();
+}
+
+// ---------- 3D view tools: measure, section, compare ----------
+const viewerTools = { measure: false, points: [], marks: [], line: null, plane: null, section: false, compare: null };
+const COMPARE_COLOR = 0xff8a3d;
+
+function resetViewerTools() {
+  Object.assign(viewerTools, { measure: false, points: [], marks: [], line: null, plane: null, section: false, compare: null });
+}
+
+function viewerMeshes(skipCompare) {
+  const out = [];
+  if (!scene) return out;
+  scene.traverse(o => { if (o.isMesh && !(skipCompare && viewerTools.compare && viewerTools.compare.getObjectById(o.id))) out.push(o); });
+  return out;
+}
+
+function viewerBox() {
+  const box = new THREE.Box3();
+  viewerMeshes(true).forEach(m => box.expandByObject(m));
+  return box;
+}
+
+function clearMeasure() {
+  viewerTools.marks.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  if (viewerTools.line) { scene.remove(viewerTools.line); viewerTools.line.geometry.dispose(); viewerTools.line.material.dispose(); }
+  viewerTools.marks = [];
+  viewerTools.points = [];
+  viewerTools.line = null;
+}
+
+function applySection(axis, position) {
+  const normals = { x: [-1, 0, 0], y: [0, -1, 0], z: [0, 0, -1] };
+  const plane = new THREE.Plane(new THREE.Vector3(...normals[axis]), position);
+  viewerTools.plane = plane;
+  renderer.localClippingEnabled = true;
+  viewerMeshes(false).forEach(mesh => {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    mats.forEach(m => { m.clippingPlanes = viewerTools.section ? [plane] : []; m.side = viewerTools.section ? THREE.DoubleSide : THREE.FrontSide; m.needsUpdate = true; });
+  });
+}
+
+async function loadComparisonObject(model) {
+  const loaders = { '.stl': () => new STLLoader(), '.obj': () => new OBJLoader(), '.3mf': () => new ThreeMFLoader(), '.fbx': () => new FBXLoader() };
+  const make = loaders[model.extension];
+  if (!make) throw new Error(`${model.extension} files cannot be compared here`);
+  const loaded = await make().loadAsync(`/api/library/models/${model.id}/file`);
+  const object = loaded.isBufferGeometry ? new THREE.Mesh(loaded) : loaded;
+  const material = new THREE.MeshStandardMaterial({ color: COMPARE_COLOR, transparent: true, opacity: 0.55, depthWrite: false });
+  object.traverse(child => { if (child.isMesh) child.material = material; });
+  const box = new THREE.Box3().setFromObject(object);
+  object.position.sub(box.getCenter(new THREE.Vector3()));      // lined up by their centers
+  return { object, size: box.getSize(new THREE.Vector3()) };
+}
+
+async function ensureViewerTools(model) {
+  let bar = $('#viewer-tools');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'viewer-tools';
+    bar.className = 'viewer-tools';
+    $('#viewer-canvas-wrap').insertAdjacentElement('afterend', bar);
+  }
+  const others = [];
+  if (model.family) model.family.members.filter(m => m.id !== model.id).forEach(m => others.push({ id: m.id, label: `${m.filename}${m.version_label ? ' (' + m.version_label + ')' : ''}` }));
+  const found = await fetch(`/api/families/suggest/${model.id}`).then(r => (r.ok ? r.json() : { suggestions: [] }));
+  found.suggestions.forEach(s => { if (!others.some(o => o.id === s.id)) others.push({ id: s.id, label: s.filename }); });
+  if (!currentModel || currentModel.id !== model.id) return;
+  bar.innerHTML = `
+    <button id="tool-measure" type="button" title="Click two points on the model">Measure</button>
+    <button id="tool-section" type="button" title="Cut the model with a plane to look inside">Section</button>
+    <select id="section-axis" class="hidden" aria-label="Section axis"><option value="z">Z (height)</option><option value="x">X</option><option value="y">Y</option></select>
+    <input id="section-pos" class="hidden" type="range" min="0" max="100" value="100" aria-label="Section position">
+    ${others.length ? `<select id="tool-compare" aria-label="Compare with another version"><option value="">Compare with...</option>${others.map(o => `<option value="${o.id}">${esc(o.label)}</option>`).join('')}</select>` : ''}
+    <span id="tool-readout" class="muted"></span>`;
+  const readout = $('#tool-readout');
+
+  $('#tool-measure').onclick = () => {
+    viewerTools.measure = !viewerTools.measure;
+    $('#tool-measure').classList.toggle('active', viewerTools.measure);
+    if (!viewerTools.measure) clearMeasure();
+    readout.textContent = viewerTools.measure ? 'Click one point, then another.' : '';
+  };
+
+  const canvas = renderer.domElement;
+  let down = null;
+  canvas.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!viewerTools.measure || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
+    const rect = canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, camera);
+    const hit = ray.intersectObjects(viewerMeshes(true), false).find(h => !viewerTools.plane || !viewerTools.section || viewerTools.plane.distanceToPoint(h.point) >= 0);
+    if (!hit) return;
+    if (viewerTools.points.length >= 2) clearMeasure();
+    viewerTools.points.push(hit.point.clone());
+    const size = viewerBox().getSize(new THREE.Vector3());
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(Math.max(size.x, size.y, size.z, 1) / 90, 12, 8), new THREE.MeshBasicMaterial({ color: 0xff3b30, depthTest: false }));
+    dot.position.copy(hit.point);
+    dot.renderOrder = 10;
+    scene.add(dot);
+    viewerTools.marks.push(dot);
+    if (viewerTools.points.length === 2) {
+      const [a, b] = viewerTools.points;
+      const geometry = new THREE.BufferGeometry().setFromPoints([a, b]);
+      viewerTools.line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xff3b30, depthTest: false }));
+      viewerTools.line.renderOrder = 10;
+      scene.add(viewerTools.line);
+      const d = b.clone().sub(a);
+      readout.textContent = `${a.distanceTo(b).toFixed(2)} mm  (x ${Math.abs(d.x).toFixed(2)}, y ${Math.abs(d.y).toFixed(2)}, z ${Math.abs(d.z).toFixed(2)})`;
+    } else {
+      readout.textContent = 'Now click the second point.';
+    }
+  });
+
+  const updateSection = () => {
+    const axis = $('#section-axis').value;
+    const box = viewerBox();
+    const lo = box.min[axis], hi = box.max[axis];
+    const position = lo + (hi - lo) * (parseInt($('#section-pos').value) / 100);
+    applySection(axis, position);
+    readout.textContent = viewerTools.section ? `Cut at ${axis.toUpperCase()} = ${position.toFixed(1)} (range ${lo.toFixed(1)} to ${hi.toFixed(1)})` : '';
+  };
+  $('#tool-section').onclick = () => {
+    viewerTools.section = !viewerTools.section;
+    $('#tool-section').classList.toggle('active', viewerTools.section);
+    $('#section-axis').classList.toggle('hidden', !viewerTools.section);
+    $('#section-pos').classList.toggle('hidden', !viewerTools.section);
+    updateSection();
+  };
+  $('#section-axis').onchange = updateSection;
+  $('#section-pos').oninput = updateSection;
+
+  const compare = $('#tool-compare');
+  if (compare) compare.onchange = async () => {
+    if (viewerTools.compare) { scene.remove(viewerTools.compare); viewerTools.compare = null; }
+    if (!compare.value) { readout.textContent = ''; return; }
+    readout.textContent = 'Loading the other version...';
+    try {
+      const other = await fetch(`/api/library/models/${compare.value}`).then(r => r.json());
+      const { object, size } = await loadComparisonObject(other);
+      if (!scene || !currentModel || currentModel.id !== model.id) return;
+      viewerTools.compare = object;
+      scene.add(object);
+      const mine = viewerBox().getSize(new THREE.Vector3());
+      const diff = size.clone().sub(mine);
+      readout.textContent = `Orange = ${other.filename}, lined up by their centers. Size difference (x, y, z): ${diff.x.toFixed(1)}, ${diff.y.toFixed(1)}, ${diff.z.toFixed(1)} mm.`;
+    } catch (err) {
+      readout.textContent = String(err.message || err);
+    }
+  };
 }
 
 let viewerResizeHandler = null;
@@ -1223,6 +1511,7 @@ async function openProjectPage(id, token) {
   document.title = `${project.name} - Model Hub`;
   body.innerHTML = renderProject(project);
   loadFilamentSuggestions(body);
+  renderSharePanel('#project-share-panel', 'project', id);
 }
 
 // after a change on the project page, redraw it; elsewhere refresh the list
@@ -1364,6 +1653,7 @@ async function loadSupplies() {
       <td><button class="supply-del">delete</button></td>
     </tr>`).join('');
   $('#supplies-empty').classList.toggle('hidden', suppliesCache.length > 0);
+  if (!$('#sup-labels-link')) $('#supply-export').insertAdjacentHTML('afterend', ' <a id="sup-labels-link" class="button-link" href="#/labels/supplies">Print QR labels</a>');
 }
 
 $('#add-supply-btn').addEventListener('click', async () => {
@@ -2526,7 +2816,7 @@ $('#add-smart-btn').addEventListener('click', async () => {
 async function loadFilament() {
   const items = await (await fetch('/api/filament')).json();
   $('#filament-table tbody').innerHTML = items.map(f => `
-    <tr>
+    <tr data-id="${f.id}">
       <td>${f.material}</td><td>${f.brand || ''}</td><td>${f.color || ''}</td>
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
       <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
@@ -2534,6 +2824,7 @@ async function loadFilament() {
       <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="del-fil">delete</button></td>
     </tr>
     <tr class="fil-history-row hidden" data-for="${f.id}"><td colspan="6"></td></tr>`).join('');
+  if (!$('#fil-labels-link')) $('#filament-table').insertAdjacentHTML('beforebegin', '<p><a id="fil-labels-link" class="button-link" href="#/labels/filament">Print QR labels for spools</a></p>');
   $$('.fil-price').forEach(input => input.onchange = async () => {
     const value = input.value.trim();
     await jsonRequest('PATCH', `/api/filament/${input.dataset.id}`, { cost: value === '' ? null : parseFloat(value) });

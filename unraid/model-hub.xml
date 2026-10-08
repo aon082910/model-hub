@@ -40,6 +40,16 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.8.0
+Several files can now be grouped as versions of one model (v1, v2...), with a
+"Latest versions only" filter. Models and projects can be shared through a
+secret read-only link (no login needed; notes and print history are never
+shown, downloads and costs only if you allow them, links can expire or be
+revoked). Filament spools and supplies get printable QR labels that open the
+right item when scanned with a phone. The 3D view has Measure, Section and
+Compare-with-another-version tools. No new settings are required; new tables
+and columns are added automatically on first start.
+
 ### 2.7.0
 The Library has filters (designer, license, collection, project, linked or
 not, has notes, and "fits my printer's bed" using the build volume you enter in
