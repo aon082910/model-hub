@@ -53,6 +53,9 @@ def delete_collection(collection_id: int, session: Session = Depends(get_session
     c = session.get(Collection, collection_id)
     if not c:
         raise HTTPException(404, "Not found")
+    from app.models import ShareLink
+    for share in session.exec(select(ShareLink).where(ShareLink.kind == "collection", ShareLink.target_id == collection_id)).all():
+        session.delete(share)                       # SQLite reuses ids: a link must never outlive its collection
     session.delete(c)
     session.commit()
     return {"status": "deleted"}

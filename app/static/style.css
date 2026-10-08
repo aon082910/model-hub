@@ -351,3 +351,19 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .activity-row.undone { opacity: .6; }
 
 .queue-total { display: inline-block; margin-right: 14px; }
+
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 10px 0; }
+.cal-head { text-align: center; color: var(--muted, #9aa1ad); font-size: 12px; padding: 2px 0; }
+.cal-cell { min-height: 64px; text-align: left; padding: 4px 5px; border: 1px solid var(--border, #2a2e37); border-radius: 6px; background: transparent; color: inherit;
+  display: flex; flex-direction: column; gap: 2px; cursor: pointer; font-size: 11px; line-height: 1.25; }
+.cal-empty { border: 0; cursor: default; }
+.cal-num { font-weight: 600; font-size: 13px; }
+.cal-today { border-color: #6aa5ff; }
+.cal-selected { background: rgba(106, 165, 255, 0.15); }
+.cal-over { border-color: #e5484d; background: rgba(229, 72, 77, 0.12); }
+.cal-planned { color: #6aa5ff; }
+.cal-printed { color: #46a758; }
+@media (max-width: 560px) { .cal-cell { min-height: 52px; font-size: 10px; } }
+.collection-share-panel { margin: 6px 0 10px 12px; }
+
+#tab-calendar a:not(.button-link), #cal-unplanned a { color: #6aa5ff; }

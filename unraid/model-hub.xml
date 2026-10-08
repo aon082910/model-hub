@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.12.0
+Print times now learn from your own prints: a model you have printed before is
+queued with the time it really took, and estimates for new models are corrected
+by how far off they usually are. Printers can have a camera address; when a
+print finishes its picture is kept as the print's photo. New Calendar tab to
+plan which day each waiting print is for (days that need more time than your
+printers have turn red, prints can be planned automatically and undone, and a
+.ics file works with phone calendars). A collection, or the whole library, can
+be shared as a read-only gallery link. No new settings are required; new
+columns are added automatically on first start.
+
 ### 2.11.0
 Library information can be exported (JSON or CSV) and imported back or from a
 spreadsheet made elsewhere. New filing rules file a model by itself (a tag or

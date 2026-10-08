@@ -66,6 +66,52 @@ def clean_url(value) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
 
 
+def clean_snapshot_url(value) -> Optional[str]:
+    """The address of the printer camera's still picture (http://host/webcam/?action=snapshot), or None for none."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise PrinterError("The camera address must be text")
+    url = value.strip()
+    if "://" not in url:
+        url = "http://" + url
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise PrinterError("The camera address must start with http:// or https://")
+    if parsed.username or parsed.password:
+        raise PrinterError("Do not put a user name or password in the camera address")
+    if parsed.fragment or len(url) > 500:
+        raise PrinterError("That camera address is not usable")
+    return url
+
+
+MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+
+
+def fetch_snapshot(url: str) -> bytes:
+    """One still picture from the printer's camera. The printer's API key is never sent to the camera."""
+    try:
+        with _client() as client, client.stream("GET", url) as response:
+            if 300 <= response.status_code < 400:
+                raise PrinterError("The camera's address redirects somewhere else; use its real address")
+            if response.status_code != 200:
+                raise PrinterError(f"The camera answered with an error ({response.status_code})")
+            if not response.headers.get("content-type", "").lower().startswith("image/"):
+                raise PrinterError("The camera address did not give a picture")
+            data = bytearray()
+            for chunk in response.iter_bytes():
+                data.extend(chunk)
+                if len(data) > MAX_SNAPSHOT_BYTES:
+                    raise PrinterError("The camera's picture is larger than 8 MB")
+    except httpx.TimeoutException:
+        raise PrinterError("The camera did not answer in time")
+    except httpx.HTTPError as e:
+        raise PrinterError(f"Could not reach the camera ({e.__class__.__name__})")
+    if not data:
+        raise PrinterError("The camera gave an empty picture")
+    return bytes(data)
+
+
 def _client(timeout=TIMEOUT) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=False, headers={"User-Agent": "ModelHub/printers"})
 

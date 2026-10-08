@@ -19,7 +19,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "created_at": printer.created_at}
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "created_at": printer.created_at}
 
 
 def _get(session: Session, printer_id: int) -> Printer:
@@ -43,6 +43,11 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
     if existing is None or "url" in payload:
         try:
             out["url"] = printing.clean_url(payload.get("url"))
+        except printing.PrinterError as e:
+            raise HTTPException(400, str(e))
+    if "snapshot_url" in payload:                  # "" clears it
+        try:
+            out["snapshot_url"] = printing.clean_snapshot_url(payload["snapshot_url"])
         except printing.PrinterError as e:
             raise HTTPException(400, str(e))
     if "api_key" in payload:                       # "" clears it; leaving it out keeps the current one
@@ -94,6 +99,20 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     session.commit()
     activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")
     return {"status": "deleted"}
+
+
+@router.post("/{printer_id}/snapshot")
+def printer_snapshot(printer_id: int, session: Session = Depends(get_session)):
+    """Take a picture from the printer's camera now (to check the camera address)."""
+    from fastapi.responses import Response
+    from app.sources import SourceError, shrink_image
+    printer = _get(session, printer_id)
+    if not printer.snapshot_url:
+        raise HTTPException(400, "Enter the camera's picture address for this printer first")
+    try:
+        return Response(shrink_image(printing.fetch_snapshot(printer.snapshot_url)), media_type="image/jpeg")
+    except (printing.PrinterError, SourceError) as e:
+        raise HTTPException(502, str(e))
 
 
 @router.get("/{printer_id}/status")

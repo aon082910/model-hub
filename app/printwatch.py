@@ -15,7 +15,7 @@ from pathlib import Path
 from sqlmodel import Session, select
 
 from app import printers as printing
-from app.models import Model3D, Printer, PrinterJob, PrintFile, QueueItem
+from app.models import Model3D, PrintLog, Printer, PrinterJob, PrintFile, QueueItem
 from app.notify import notify_event
 
 logger = logging.getLogger("modelhub.printwatch")
@@ -57,6 +57,21 @@ def poll(session: Session) -> list:
     return ended
 
 
+def _photograph(session: Session, printer: Printer, model_id: int) -> None:
+    """If this printer has a camera address, keep a picture of the finished print as the new log entry's photo.
+    A camera that is off or wrong never gets in the way of recording the print."""
+    if not printer.snapshot_url:
+        return
+    from app.routers.prints import photo_path, store_photo
+    log = session.exec(select(PrintLog).where(PrintLog.model_id == model_id).order_by(PrintLog.id.desc())).first()
+    if not log or (datetime.utcnow() - log.created_at).total_seconds() > 120 or photo_path(log.id).is_file():
+        return
+    try:
+        store_photo(log.id, printing.fetch_snapshot(printer.snapshot_url))
+    except Exception as e:                       # PrinterError, a picture that is not one, a full disk...
+        logger.info("No photo of the finished print from %s: %s", printer.name, e.__class__.__name__)
+
+
 def _record(session: Session, printer: Printer, filename, outcome: str, duration) -> None:
     job = None
     if filename:
@@ -80,8 +95,11 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
             complete_item(session, waiting, minutes)
         else:
             kept = session.get(PrintFile, job.print_file_id) if job and job.print_file_id else None
-            log_print(session, model.id, minutes=minutes, grams=kept.est_grams if kept else None, source="printer", deduct=False)
+            log_print(session, model.id, minutes=minutes, grams=kept.est_grams if kept else None, source="printer", deduct=False,
+                      measured=True)
         label = model.filename
+        session.flush()
+        _photograph(session, printer, model.id)
     session.commit()
     if outcome == "done":
         notify_event(session, "print_done", f"Model Hub: {printer.name} finished", f"{label} is done" +

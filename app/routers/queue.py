@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -6,6 +7,22 @@ from app.db import get_session
 from app.models import Model3D, Printer, PrinterJob, PrintFile, QueueItem, Filament, PrintLog
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def clean_date(value) -> Optional[str]:
+    """A calendar day as YYYY-MM-DD, or None to clear it."""
+    if value in (None, ""):
+        return None
+    from datetime import date
+    if not isinstance(value, str) or not DATE_RE.match(value):
+        raise HTTPException(400, "The date must look like 2026-10-31")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(400, "That is not a real date")
+    return value
 
 
 @router.get("")
@@ -21,13 +38,20 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
     printer_id = payload.get("printer_id")
     if printer_id is not None and not session.get(Printer, printer_id):
         raise HTTPException(400, "That printer does not exist")
+    minutes, basis = payload.get("estimated_minutes"), "manual"
+    if not minutes:
+        from app import learned
+        suggestion = learned.suggest(session, payload["model_id"])
+        minutes, basis = suggestion["minutes"], suggestion["basis"]
     item = QueueItem(
         printer_id=printer_id,
         model_id=payload["model_id"],
         filament_id=payload.get("filament_id"),
         notes=payload.get("notes"),
         estimated_grams=payload.get("estimated_grams"),
-        estimated_minutes=payload.get("estimated_minutes"),
+        estimated_minutes=minutes,
+        estimate_basis=basis if minutes else None,
+        planned_date=clean_date(payload.get("planned_date")),
         position=position,
     )
     session.add(item)
@@ -47,7 +71,8 @@ def _on_done(session: Session, item: QueueItem) -> None:
     from app.routers.prints import log_print
     if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item.id)).first():
         log_print(session, item.model_id, filament_id=item.filament_id, grams=item.estimated_grams,
-                  minutes=item.estimated_minutes, notes=item.notes, deduct=False, source="queue", queue_item_id=item.id)
+                  minutes=item.actual_minutes or item.estimated_minutes, notes=item.notes, deduct=False, source="queue",
+                  queue_item_id=item.id, measured=bool(item.actual_minutes))
 
 
 def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = None) -> None:
@@ -55,8 +80,11 @@ def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = 
     if item.status == "done":
         return
     item.status = "done"
+    if minutes:
+        item.actual_minutes = round(minutes, 1)
     if minutes and not item.estimated_minutes:
         item.estimated_minutes = round(minutes, 1)
+        item.estimate_basis = None
     session.add(item)
     _on_done(session, item)
 
@@ -130,6 +158,7 @@ def print_again(model_id: int, session: Session = Depends(get_session)):
     item = QueueItem(model_id=model_id, position=(top.position + 1) if top else 0,
                      filament_id=last.filament_id if last else None,
                      estimated_grams=last.grams if last else None, estimated_minutes=last.minutes if last else None,
+                     estimate_basis=("history" if last.measured else "estimate") if last and last.minutes else None,
                      notes="Printed again" if last else None)
     session.add(item)
     session.commit()
@@ -146,9 +175,13 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
     was_done = item.status == "done"
     if "printer_id" in payload and payload["printer_id"] is not None and not session.get(Printer, payload["printer_id"]):
         raise HTTPException(400, "That printer does not exist")
+    if "planned_date" in payload:
+        item.planned_date = clean_date(payload["planned_date"])
     for field in ("status", "position", "filament_id", "notes", "estimated_grams", "estimated_minutes", "printer_id"):
         if field in payload:
             setattr(item, field, payload[field])
+    if "estimated_minutes" in payload:
+        item.estimate_basis = "manual" if item.estimated_minutes else None
 
     if item.status == "done" and not was_done:
         _on_done(session, item)
@@ -164,6 +197,10 @@ def remove_queue_item(item_id: int, session: Session = Depends(get_session)):
     item = session.get(QueueItem, item_id)
     if not item:
         raise HTTPException(404, "Not found")
+    # SQLite hands a deleted id to the next entry; a print log still pointing at it would make that entry look already logged
+    for log in session.exec(select(PrintLog).where(PrintLog.queue_item_id == item_id)).all():
+        log.queue_item_id = None
+        session.add(log)
     session.delete(item)
     session.commit()
     return {"status": "deleted"}

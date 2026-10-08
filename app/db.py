@@ -32,9 +32,18 @@ def _sync_columns():
                 logger.info("Migrated: added column %s.%s", table_name, col.name)
 
 
+def _backfill():
+    """Facts about rows written before a column existed (runs again harmlessly: it only touches NULLs)."""
+    with engine.begin() as conn:
+        # print times typed in by a person or reported by a printer are real; the queue's own are estimates
+        conn.execute(text("UPDATE printlog SET measured = CASE WHEN minutes > 0 AND source IN ('manual', 'printer') THEN 1 ELSE 0 END "
+                          "WHERE measured IS NULL"))
+
+
 def init_db():
     SQLModel.metadata.create_all(engine)
     _sync_columns()
+    _backfill()
 
 
 def get_session():

@@ -119,6 +119,9 @@ class QueueItem(SQLModel, table=True):
     notes: Optional[str] = None
     estimated_grams: Optional[float] = None
     estimated_minutes: Optional[float] = None
+    actual_minutes: Optional[float] = None     # what the printer reported when it finished
+    estimate_basis: Optional[str] = None       # manual, history, adjusted, estimate: where estimated_minutes came from
+    planned_date: Optional[str] = None         # YYYY-MM-DD, for the calendar
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -258,6 +261,7 @@ class PrintLog(SQLModel, table=True):
     notes: Optional[str] = None
     source: str = "manual"                  # manual, queue
     queue_item_id: Optional[int] = None
+    measured: bool = False                  # minutes is a real time (a printer reported it, or you typed it), not an estimate
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -269,6 +273,7 @@ class Printer(SQLModel, table=True):
     kind: str                       # moonraker, octoprint
     url: str
     api_key: Optional[str] = None
+    snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

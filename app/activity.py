@@ -40,6 +40,20 @@ def as_json(entry: ActivityLog) -> dict:
             "undone_at": entry.undone_at, "undone_by": entry.undone_by}
 
 
+def _unplan(session: Session, planned: dict) -> int:
+    """Take planned days away again, but only from entries still on the day the plan gave them."""
+    from app.models import QueueItem
+    count = 0
+    for item_id, day in planned.items():
+        item = session.get(QueueItem, int(item_id)) if str(item_id).isdigit() else None
+        if item and item.planned_date == day:
+            item.planned_date = None
+            session.add(item)
+            count += 1
+    session.commit()
+    return count
+
+
 def undo(session: Session, entry: ActivityLog, actor: str) -> int:
     """Reverse an entry. Raises ValueError if it cannot be (or was already)."""
     if entry.undone:
@@ -52,6 +66,8 @@ def undo(session: Session, entry: ActivityLog, actor: str) -> int:
         restored = bulk.undo(session, spec)
     elif spec.get("kind") == "multi":
         restored = sum(bulk.undo(session, one) for one in spec.get("specs", []) if isinstance(one, dict) and one.get("kind") == "bulk")
+    elif spec.get("kind") == "planned_dates":
+        restored = _unplan(session, spec.get("new") or {})
     else:
         raise ValueError("That change cannot be undone from here")
     entry.undone, entry.undone_at, entry.undone_by = True, datetime.utcnow(), actor

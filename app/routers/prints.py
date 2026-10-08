@@ -88,10 +88,12 @@ def _names(session: Session, logs: list) -> dict:
 
 
 def log_print(session: Session, model_id: int, *, printed_at=None, filament_id=None, grams=None, minutes=None,
-              rating=None, notes=None, deduct: bool = True, source: str = "manual", queue_item_id=None) -> PrintLog:
+              rating=None, notes=None, deduct: bool = True, source: str = "manual", queue_item_id=None,
+              measured: bool = False) -> PrintLog:
     """Record a print (does not commit). Used by the log's own API and by the print queue."""
     log = PrintLog(model_id=model_id, printed_at=printed_at or datetime.utcnow(), filament_id=filament_id,
-                   grams=grams, minutes=minutes, rating=rating, notes=notes, source=source, queue_item_id=queue_item_id)
+                   grams=grams, minutes=minutes, rating=rating, notes=notes, source=source, queue_item_id=queue_item_id,
+                   measured=bool(measured and minutes))
     session.add(log)
     session.flush()
     if deduct:
@@ -121,11 +123,12 @@ def add_print(payload: dict, session: Session = Depends(get_session)):
     if filament_id is not None and not session.get(Filament, filament_id):
         raise HTTPException(400, "That filament spool does not exist")
     rating = _number(payload.get("rating"), "rating", 1, 5)
+    minutes = _number(payload.get("minutes"), "minutes", 0, 10_000_000)
     log = log_print(
         session, model.id, printed_at=_when(payload.get("printed_at")), filament_id=filament_id,
-        grams=_number(payload.get("grams"), "grams", 0, 100000), minutes=_number(payload.get("minutes"), "minutes", 0, 10_000_000),
+        grams=_number(payload.get("grams"), "grams", 0, 100000), minutes=minutes,
         rating=int(rating) if rating else None, notes=_text(payload.get("notes"), 4000),
-        deduct=bool(payload.get("deduct", True)))
+        deduct=bool(payload.get("deduct", True)), measured=True)
     session.commit()
     session.refresh(log)
     return _json(log, {model.id: model.filename})
@@ -145,6 +148,7 @@ def update_print(log_id: int, payload: dict, session: Session = Depends(get_sess
         log.notes = _text(payload["notes"], 4000)
     if "minutes" in payload:
         log.minutes = _number(payload["minutes"], "minutes", 0, 10_000_000)
+        log.measured = bool(log.minutes)               # typed in by a person: a real time
     if "grams" in payload or "filament_id" in payload:
         # the spool's level is kept right: give back what this print took, then take the new amount
         _give_back_filament(session, log)
@@ -174,20 +178,26 @@ def delete_print(log_id: int, session: Session = Depends(get_session)):
     return {"status": "deleted"}
 
 
+def store_photo(log_id: int, data: bytes) -> None:
+    """Keep a picture (any common format, shrunk to a JPEG) as this print's photo. Raises SourceError for a bad picture."""
+    from app.sources import shrink_image
+    jpeg = shrink_image(data)
+    PHOTO_ROOT.mkdir(parents=True, exist_ok=True)
+    photo_path(log_id).write_bytes(jpeg)
+
+
 @router.post("/{log_id}/photo")
 def set_photo(log_id: int, file: UploadFile = File(...), session: Session = Depends(get_session)):
-    from app.sources import SourceError, shrink_image
+    from app.sources import SourceError
     if not session.get(PrintLog, log_id):
         raise HTTPException(404, "Not found")
     data = file.file.read(MAX_PHOTO_BYTES + 1)
     if len(data) > MAX_PHOTO_BYTES:
         raise HTTPException(413, "That picture is larger than 16 MB")
     try:
-        jpeg = shrink_image(data)
+        store_photo(log_id, data)
     except SourceError as e:
         raise HTTPException(400, str(e))
-    PHOTO_ROOT.mkdir(parents=True, exist_ok=True)
-    photo_path(log_id).write_bytes(jpeg)
     return {"status": "saved"}
 
 

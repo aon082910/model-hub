@@ -439,6 +439,36 @@ Model Hub only publishes: it listens to nothing and cannot be controlled over MQ
 The server cannot draw STEP files, so the browser does: **Library → Make STEP pictures** renders each STEP model that has no picture (using the same viewer engine) and sends a small PNG to the server. It works on this
 computer's browser while the page stays open; models the browser cannot read are skipped and counted.
 
+## Print times that learn
+
+Estimates are only guesses, so Model Hub keeps score. When a printer reports a finished print, or you type a time into a print-log entry, that time is remembered as *measured*. Then:
+
+* **A model you have printed before** is queued with the median of its measured times ("from your past prints").
+* **A model you have not printed**, with a time from its sliced file or the Estimate button, is corrected by how far off estimates usually are, once at least three finished queue entries have both an estimate and a real time
+  (never more than 3 times or less than half). The Print Queue says so ("prints usually take 20% longer than estimated").
+* A time you type yourself always wins and is never changed.
+
+Nothing is changed after the fact: the number is only filled in when an entry is added. The model page's *Estimate print* shows what your own prints suggest next to the usual estimate.
+
+## Photos from the printer's camera
+
+Give a printer its camera's still-picture address (Print Queue, the printer's *Camera* section; for Mainsail/Fluidd it looks like `http://host/webcam/?action=snapshot`). When that printer finishes a print, the picture is kept as the photo of the print-log
+entry, unless the entry already has one. *Take a picture now* tests the address. The address must not contain a user name or password; redirects are not followed, the printer's API key is never sent to the camera, and a camera that is off or wrong never
+stops the print being recorded. Photos are kept in `/config/print_photos` and are part of backups.
+
+## Print calendar
+
+**Calendar** shows a month: the prints planned for each day (with the time they need), the prints you logged, and the waiting prints that have no day yet. Give a queue entry a day from the Print Queue (the date box on each entry) or from the Calendar.
+A day turns red when its planned time is more than your printers can do (**Settings → Print planning**: hours a printer may run per day, 12 by default, times the number of printers you added). *Plan them automatically* puts each waiting print on the first
+day from today with room, in queue order (an entry without an estimate counts as an hour; one longer than a day gets a day to itself); *Preview* shows the result first and a real run can be undone from Recent changes or right after.
+**Calendar file (.ics)** downloads the planned prints for a phone or desktop calendar. It is a download, not a live subscription, because calendars cannot sign in.
+
+## Sharing a collection or the whole library
+
+Besides one model or one project, a **collection** can be shared (Collections tab, *share*) and so can the **whole library** (Settings, administrator only). The link opens a read-only gallery of names and pictures with a page per model; each page shows what a
+single-model link shows (tags, designer, license, what worked, the original listing) and never notes, print history or costs. Downloads are only offered if you tick them for that link. Nothing on the page can run: it is plain HTML with a locked-down content policy,
+and a link stops working when the collection is deleted, expires or is stopped. For people outside your network you still need to expose Model Hub yourself (a reverse proxy or VPN).
+
 ## Things Model Hub does by itself
 
 One timer runs in the background (it wakes every half minute and runs whatever is due; a failing job never stops the others):

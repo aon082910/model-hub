@@ -1,4 +1,4 @@
-"""Read-only share links: show a model or a project to someone without giving them a login.
+"""Read-only share links: show a model, a project, a collection or the whole library to someone without giving them a login.
 
 The link is a long random token. What a visitor sees is chosen here, not by the visitor: no notes, no
 costs (unless asked for), no print history, nothing editable, and files only when downloads were
@@ -18,13 +18,15 @@ from sqlmodel import Session, select
 from app import activity, sources
 from app.config import LIBRARY_PATH, THUMB_DIR
 from app.db import get_session
-from app.models import Filament, Model3D, Project, ProjectModelFilament, ProjectModelLink, ProjectPart, ShareLink
+from app.models import Collection, Filament, Model3D, ModelCollectionLink, Project, ProjectModelFilament, ProjectModelLink, ProjectPart, ShareLink
 
 router = APIRouter(prefix="/api/shares", tags=["shares"])
 public_router = APIRouter(prefix="/share", tags=["share-pages"], include_in_schema=False)
 
 MAX_SHARES = 200
-KINDS = ("model", "project")
+KINDS = ("model", "project", "collection", "library")
+GALLERY_KINDS = ("project", "collection", "library")
+PAGE_SIZE = 48
 HEADERS = {
     "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -38,6 +40,11 @@ def _target_name(session: Session, link: ShareLink) -> Optional[str]:
     if link.kind == "model":
         m = session.get(Model3D, link.target_id)
         return m.filename if m else None
+    if link.kind == "library":
+        return "the whole library"
+    if link.kind == "collection":
+        c = session.get(Collection, link.target_id)
+        return c.name if c else None
     p = session.get(Project, link.target_id)
     return p.name if p else None
 
@@ -63,17 +70,22 @@ def list_shares(kind: Optional[str] = None, target_id: Optional[int] = None, ses
 def create_share(payload: dict, request: Request, session: Session = Depends(get_session)):
     kind, target = payload.get("kind"), payload.get("target_id")
     if kind not in KINDS:
-        raise HTTPException(400, "kind must be model or project")
+        raise HTTPException(400, "kind must be model, project, collection or library")
+    user = getattr(request.state, "user", None) or {}
+    if kind == "library":
+        if user.get("role") != "admin":
+            raise HTTPException(403, "Only the administrator can share the whole library")
+        target = 0
     if not isinstance(target, int) or isinstance(target, bool):
         raise HTTPException(400, "target_id must be a number")
-    if not (session.get(Model3D, target) if kind == "model" else session.get(Project, target)):
+    found = {"model": Model3D, "project": Project, "collection": Collection}.get(kind)
+    if found and not session.get(found, target):
         raise HTTPException(404, f"That {kind} was not found")
     days = payload.get("expires_days")
     if days is not None and (isinstance(days, bool) or not isinstance(days, (int, float)) or not (0 < days <= 3650)):
         raise HTTPException(400, "expires_days must be between 1 and 3650")
     if len(session.exec(select(ShareLink.id)).all()) >= MAX_SHARES:
         raise HTTPException(400, f"At most {MAX_SHARES} share links")
-    user = getattr(request.state, "user", None) or {}
     link = ShareLink(token=secrets.token_urlsafe(24), kind=kind, target_id=target,
                      allow_downloads=payload.get("allow_downloads") is True, show_costs=payload.get("show_costs") is True,
                      created_by=user.get("username"), expires_at=datetime.utcnow() + timedelta(days=days) if days else None)
@@ -105,12 +117,37 @@ def _link(session: Session, token: str) -> ShareLink:
     return link
 
 
-def _models_in_scope(session: Session, link: ShareLink) -> list:
+def _scope_ids(link: ShareLink):
+    """A query for the ids of the models this link shows, or None when it is one fixed model (link.target_id)."""
+    if link.kind == "project":
+        return select(ProjectModelLink.model_id).where(ProjectModelLink.project_id == link.target_id)
+    if link.kind == "collection":
+        return select(ModelCollectionLink.model_id).where(ModelCollectionLink.collection_id == link.target_id)
+    return None
+
+
+def _scope_query(link: ShareLink):
     if link.kind == "model":
-        m = session.get(Model3D, link.target_id)
-        return [m] if m else []
-    ids = session.exec(select(ProjectModelLink.model_id).where(ProjectModelLink.project_id == link.target_id)).all()
-    return session.exec(select(Model3D).where(Model3D.id.in_(ids)).order_by(Model3D.filename)).all() if ids else []
+        return select(Model3D).where(Model3D.id == link.target_id)
+    ids = _scope_ids(link)
+    return select(Model3D) if ids is None else select(Model3D).where(Model3D.id.in_(ids))
+
+
+def _models_in_scope(session: Session, link: ShareLink) -> list:
+    return session.exec(_scope_query(link).order_by(Model3D.filename, Model3D.id)).all()
+
+
+def _model_in_scope(session: Session, link: ShareLink, model_id: int) -> Optional[Model3D]:
+    """One model, only if this link is meant to show it."""
+    return session.exec(_scope_query(link).where(Model3D.id == model_id)).first()
+
+
+def _gallery_page(session: Session, link: ShareLink, page: int):
+    from sqlalchemy import func
+    base = _scope_query(link)
+    total = session.exec(select(func.count()).select_from(base.subquery())).one()
+    models = session.exec(base.order_by(Model3D.filename, Model3D.id).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
+    return models, total
 
 
 def _e(value) -> str:
@@ -146,7 +183,10 @@ def _model_card(session: Session, link: ShareLink, m: Model3D) -> str:
     dims = (f"{m.bbox_x:.0f} x {m.bbox_y:.0f} x {m.bbox_z:.0f} mm" if None not in (m.bbox_x, m.bbox_y, m.bbox_z) else "")
     bits = [m.extension.lstrip("."), _size(m.size_bytes), dims, f"by {m.designer}" if m.designer else "", m.license or ""]
     download = (f' &middot; <a href="/share/{_e(link.token)}/file/{m.id}">Download file</a>' if link.allow_downloads else "")
-    return (f'<div class="card row">{thumb}<div><b>{_e(m.source_title or m.filename)}</b><div class="muted">{_e(m.filename)}</div>'
+    title = _e(m.source_title or m.filename)
+    if link.kind in GALLERY_KINDS:
+        title = f'<a href="/share/{_e(link.token)}/model/{m.id}">{title}</a>'
+    return (f'<div class="card row">{thumb}<div><b>{title}</b><div class="muted">{_e(m.filename)}</div>'
             f'<div class="muted">{_e(" · ".join(b for b in bits if b))}{download}</div></div></div>')
 
 
@@ -201,9 +241,46 @@ def _render_project(session: Session, link: ShareLink, project: Project) -> str:
     return PAGE.format(title=_e(project.name), body=body)
 
 
-@public_router.get("/{token}", response_class=HTMLResponse)
-def share_page(token: str, session: Session = Depends(get_session)):
+def _render_gallery(session: Session, link: ShareLink, page: int) -> str:
+    if link.kind == "collection":
+        title = session.get(Collection, link.target_id).name
+    else:
+        title = "Model library"
+    models, total = _gallery_page(session, link, page)
+    pages = max(1, -(-total // PAGE_SIZE))
+    body = f"<h1>{_e(title)}</h1><div class=\"muted\">{total} model{'' if total == 1 else 's'}</div>"
+    body += "".join(_model_card(session, link, m) for m in models) or "<p class=\"muted\">Nothing here yet.</p>"
+    if pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(f'<a href="/share/{_e(link.token)}?page={page - 1}">&larr; Previous</a>')
+        nav.append(f"Page {page} of {pages}")
+        if page < pages:
+            nav.append(f'<a href="/share/{_e(link.token)}?page={page + 1}">Next &rarr;</a>')
+        body += '<p class="muted">' + " &middot; ".join(nav) + "</p>"
+    return PAGE.format(title=_e(title), body=body)
+
+
+@public_router.get("/{token}/model/{model_id}", response_class=HTMLResponse)
+def share_model_page(token: str, model_id: int, session: Session = Depends(get_session)):
     link = _link(session, token)
+    model = _model_in_scope(session, link, model_id)
+    if not model:
+        raise HTTPException(404, "Not found")
+    from app.routers.library import _with_tags
+    page = _render_model(session, link, model, [t["name"] for t in _with_tags(session, [model])[0]["tags"]])
+    if link.kind != "model":
+        page = page.replace("<main>", f'<main><p><a href="/share/{_e(link.token)}">&larr; Back</a></p>', 1)
+    return HTMLResponse(page, headers=HEADERS)
+
+
+@public_router.get("/{token}", response_class=HTMLResponse)
+def share_page(token: str, page: int = 1, session: Session = Depends(get_session)):
+    link = _link(session, token)
+    if link.kind in ("collection", "library"):
+        if link.kind == "collection" and not session.get(Collection, link.target_id):
+            raise HTTPException(404, "This link does not exist or has expired")
+        return HTMLResponse(_render_gallery(session, link, max(1, min(page, 100000))), headers=HEADERS)
     if link.kind == "model":
         model = session.get(Model3D, link.target_id)
         if not model:
@@ -221,7 +298,7 @@ def share_page(token: str, session: Session = Depends(get_session)):
 @public_router.get("/{token}/thumb/{model_id}")
 def share_thumb(token: str, model_id: int, session: Session = Depends(get_session)):
     link = _link(session, token)
-    model = next((m for m in _models_in_scope(session, link) if m.id == model_id), None)
+    model = _model_in_scope(session, link, model_id)
     if not model:
         raise HTTPException(404, "Not found")
     if model.thumbnail_path and (THUMB_DIR / model.thumbnail_path).is_file():
@@ -241,7 +318,7 @@ def share_file(token: str, model_id: int, session: Session = Depends(get_session
     link = _link(session, token)
     if not link.allow_downloads:
         raise HTTPException(404, "Not found")
-    model = next((m for m in _models_in_scope(session, link) if m.id == model_id), None)
+    model = _model_in_scope(session, link, model_id)
     path = (LIBRARY_PATH / model.path) if model else None
     if not model or not path.is_file():
         raise HTTPException(404, "Not found")

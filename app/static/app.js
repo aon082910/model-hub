@@ -68,7 +68,7 @@ const TAB_LOADERS = {
   library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(), activity: () => loadActivity(),
   collections: () => { loadRules(); return loadCollections(); }, projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
-  queue: () => loadQueue(), settings: () => loadSettings(),
+  queue: () => loadQueue(), calendar: () => loadCalendar(), settings: () => loadSettings(),
 };
 
 function showSection(sectionId, activeTab) {
@@ -1431,7 +1431,16 @@ async function runEstimate(modelId) {
   }
   const grams = est.estimated_grams != null ? `${est.estimated_grams} g` : '? g';
   const mins = est.estimated_minutes != null ? `${Math.round(est.estimated_minutes)} min` : '? min';
-  $('#viewer-estimate-result').textContent = `${grams} · ${mins} (${est.source})`;
+  let text = `${grams} · ${mins} (${est.source})`;
+  const learnedRes = await fetch(`/api/estimates/${modelId}${est.estimated_minutes != null ? `?base=${est.estimated_minutes}` : ''}`);
+  const learned = learnedRes.ok ? await learnedRes.json() : {};
+  if (learned.basis === 'history' || learned.basis === 'adjusted') {
+    est.estimated_minutes = learned.minutes;                   // the queue gets the time your own prints suggest
+    text += learned.basis === 'history'
+      ? ` · your own ${learned.samples === 1 ? 'print' : learned.samples + ' prints'} took about ${formatMinutes(learned.minutes)}`
+      : ` · prints here usually take ${learned.factor}x the estimate, so about ${formatMinutes(learned.minutes)}`;
+  }
+  $('#viewer-estimate-result').textContent = text;
 }
 
 async function addToQueue(modelId) {
@@ -2906,7 +2915,13 @@ $('#linked-unlink-all').addEventListener('click', () => {
 // ---------- Collections ----------
 async function loadCollections() {
   const cols = await (await fetch('/api/collections')).json();
-  $('#collections-list').innerHTML = cols.map(c => `<li>${c.name} <button data-id="${c.id}" class="del-col">delete</button></li>`).join('');
+  $('#collections-list').innerHTML = cols.map(c => `<li data-id="${c.id}">${esc(c.name)} <button data-id="${c.id}" class="share-col">share</button> <button data-id="${c.id}" class="del-col">delete</button>
+    <div class="panel hidden collection-share-panel" id="collection-share-${c.id}"></div></li>`).join('');
+  $$('.share-col').forEach(b => b.onclick = () => {
+    const panel = $(`#collection-share-${b.dataset.id}`);
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) renderSharePanel(`#collection-share-${b.dataset.id}`, 'collection', parseInt(b.dataset.id));
+  });
   $$('.del-col').forEach(b => b.onclick = async () => { await fetch(`/api/collections/${b.dataset.id}`, { method: 'DELETE' }); loadCollections(); });
 
   const smart = await (await fetch('/api/collections/smart')).json();
@@ -3010,6 +3025,12 @@ async function loadPrinters() {
       <span class="muted">${esc(p.url)}</span>
       <span class="printer-state muted">checking...</span>
       <button class="printer-delete">Remove</button>
+      <details class="printer-camera"><summary>Camera${p.snapshot_url ? ' (set)' : ''}</summary>
+        <p class="muted">A still-picture address (Mainsail/Fluidd: <code>http://host/webcam/?action=snapshot</code>). When a print finishes, its picture is kept as the print's photo.</p>
+        <div class="row"><input class="printer-snapshot-url" value="${esc(p.snapshot_url || '')}" placeholder="http://192.168.1.60/webcam/?action=snapshot" aria-label="Camera picture address">
+          <button class="printer-snapshot-save">Save</button><button class="printer-snapshot-try">Take a picture now</button></div>
+        <div class="printer-snapshot-result muted"></div>
+      </details>
     </div>`).join('') : '<p class="muted">No printers yet.</p>';
   $('#send-printer').innerHTML = printerInfo.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   refreshPrinterStatuses();
@@ -3021,12 +3042,29 @@ async function loadPrinters() {
 
 $('#printer-add').addEventListener('click', async () => {
   const body = { name: $('#printer-name').value, kind: $('#printer-kind').value, url: $('#printer-url').value };
+  if ($('#printer-snapshot').value.trim()) body.snapshot_url = $('#printer-snapshot').value.trim();
   if ($('#printer-key').value) body.api_key = $('#printer-key').value;
   const res = await jsonRequest('POST', '/api/printers', body);
   $('#printers-status').textContent = res.ok ? 'Added.' : await sourceErrorText(res);
-  if (res.ok) { $('#printer-name').value = ''; $('#printer-url').value = ''; $('#printer-key').value = ''; loadPrinters(); }
+  if (res.ok) { $('#printer-name').value = ''; $('#printer-url').value = ''; $('#printer-key').value = ''; $('#printer-snapshot').value = ''; loadPrinters(); }
 });
 $('#printers-list').addEventListener('click', async (e) => {
+  const row = e.target.closest('.printer-row');
+  if (row && e.target.classList.contains('printer-snapshot-save')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { snapshot_url: row.querySelector('.printer-snapshot-url').value.trim() });
+    row.querySelector('.printer-snapshot-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('printer-snapshot-try')) {
+    const out = row.querySelector('.printer-snapshot-result');
+    out.textContent = 'Asking the camera...';
+    await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { snapshot_url: row.querySelector('.printer-snapshot-url').value.trim() });
+    const res = await fetch(`/api/printers/${row.dataset.id}/snapshot`, { method: 'POST' });
+    if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+    const url = URL.createObjectURL(await res.blob());
+    out.innerHTML = `<img src="${url}" alt="Picture from the printer camera" style="max-width:320px;border-radius:6px">`;
+    return;
+  }
   if (!e.target.classList.contains('printer-delete')) return;
   if (!confirm('Remove this printer from Model Hub? (The printer itself is not touched.)')) return;
   await fetch(`/api/printers/${e.target.closest('.printer-row').dataset.id}`, { method: 'DELETE' });
@@ -3099,15 +3137,23 @@ async function loadQueue() {
   $('#queue-summary').innerHTML = summary.printers.length
     ? summary.printers.map(r => `<span class="queue-total"><b>${esc(r.printer)}</b>: ${r.jobs} job${r.jobs === 1 ? '' : 's'}, about ${formatMinutes(r.minutes) || '0 min'}${r.without_estimate ? ` (+${r.without_estimate} without an estimate)` : ''}</span>`).join(' ')
     : '';
+  const accuracy = await fetch('/api/estimates/accuracy').then(r => (r.ok ? r.json() : null));
+  if (accuracy && accuracy.usable) {
+    const off = Math.round(Math.abs(accuracy.factor - 1) * 100);
+    $('#queue-summary').innerHTML += `<div class="muted">${off < 3 ? 'Estimates have matched the real print times' : `Prints usually take ${off}% ${accuracy.factor > 1 ? 'longer' : 'less time'} than estimated`} (from ${accuracy.samples} prints); new estimates for models you have not printed are corrected for it.</div>`;
+  }
   $('#queue-list').innerHTML = items.map(i => {
     const m = modelById[i.model_id];
+    const basis = { history: 'from your past prints', adjusted: 'adjusted by how long prints really take' }[i.estimate_basis];
     const est = [i.estimated_grams != null ? `${i.estimated_grams}g` : null,
-                 i.estimated_minutes != null ? `${Math.round(i.estimated_minutes)}min` : null]
+                 i.estimated_minutes != null ? `${Math.round(i.estimated_minutes)}min${basis ? ` (${basis})` : ''}` : null,
+                 i.actual_minutes != null ? `took ${Math.round(i.actual_minutes)}min` : null]
       .filter(Boolean).join(' · ');
     return `
     <li>
       <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}</span>
       <span>
+        ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
         ${printers.length ? `<select data-id="${i.id}" class="queue-printer" aria-label="Printer">
           <option value="">any printer</option>${printers.map(p => `<option value="${p.id}" ${p.id === i.printer_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
           ${i.printer_id && ['queued', 'failed'].includes(i.status) ? `<button data-id="${i.id}" class="queue-send" title="Send the model's newest kept G-code file to this printer">Send</button>` : ''}` : ''}
@@ -3118,6 +3164,10 @@ async function loadQueue() {
       </span>
     </li>`;
   }).join('');
+  $$('.queue-date').forEach(input => input.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { planned_date: input.value || null });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+  });
   $$('.queue-printer').forEach(sel => sel.onchange = async () => {
     await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { printer_id: sel.value ? parseInt(sel.value) : null });
     loadQueue();
@@ -3567,6 +3617,129 @@ $('#rules-status').addEventListener('click', async (e) => {
   if (await undoActivity(e.target.dataset.id)) $('#rules-status').textContent = 'Undone.';
 });
 
+// ---------- Calendar ----------
+function localMonth(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+let calMonth = localMonth(new Date());
+let calSelected = null;
+let calData = null;
+
+function shiftMonth(month, delta) {
+  const [y, m] = month.split('-').map(Number);
+  return localMonth(new Date(y, m - 1 + delta, 1));
+}
+
+function dayLabel(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+async function loadCalendar() {
+  const res = await fetch(`/api/calendar?month=${calMonth}`);
+  if (!res.ok) { $('#cal-status').textContent = await sourceErrorText(res); return; }
+  calData = await res.json();
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const data = calData;
+  const [y, m] = data.month.split('-').map(Number);
+  $('#cal-title').textContent = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const offset = (new Date(y, m - 1, 1).getDay() + 6) % 7;                  // weeks start on Monday
+  const last = parseInt(data.last.slice(8));
+  const today = new Date();
+  const todayIso = `${localMonth(today)}-${String(today.getDate()).padStart(2, '0')}`;
+  const heads = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="cal-head">${d}</div>`).join('');
+  let cells = '<div class="cal-cell cal-empty"></div>'.repeat(offset);
+  for (let d = 1; d <= last; d++) {
+    const iso = `${data.month}-${String(d).padStart(2, '0')}`;
+    const info = data.days[iso];
+    const classes = ['cal-cell', iso === todayIso ? 'cal-today' : '', iso === calSelected ? 'cal-selected' : '', info && info.overbooked ? 'cal-over' : ''].join(' ');
+    const planned = info ? info.planned.length : 0, printed = info ? info.printed.length : 0;
+    cells += `<button type="button" class="${classes}" data-day="${iso}" aria-label="${esc(dayLabel(iso))}">
+      <span class="cal-num">${d}</span>
+      ${planned ? `<span class="cal-planned">${planned} planned<br>${formatMinutes(info.minutes)}</span>` : ''}
+      ${printed ? `<span class="cal-printed">${printed} printed</span>` : ''}</button>`;
+  }
+  $('#cal-grid').innerHTML = heads + cells;
+  renderCalendarDay();
+  $('#cal-unplanned').innerHTML = data.unplanned.length ? data.unplanned.map(u => `
+    <li data-id="${u.id}"><a href="#/model/${u.model_id}">${esc(u.filename || 'model ' + u.model_id)}</a>${u.minutes ? ` <span class="muted">${esc(formatMinutes(u.minutes))}</span>` : ''}
+      <input type="date" class="cal-set-date" aria-label="Day for this print" value="${calSelected || ''}"> <button class="cal-set">Plan for this day</button></li>`).join('')
+    + (data.unplanned_total > data.unplanned.length ? `<li class="muted">and ${data.unplanned_total - data.unplanned.length} more</li>` : '')
+    : '<li class="muted">Nothing is waiting without a day.</li>';
+}
+
+function renderCalendarDay() {
+  const panel = $('#cal-day');
+  const info = calSelected && calData.days[calSelected];
+  if (!calSelected) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const capacity = formatMinutes(calData.capacity_minutes);
+  panel.innerHTML = `<h3>${esc(dayLabel(calSelected))}</h3>
+    ${info && info.overbooked ? `<p class="warn-text">${esc(formatMinutes(info.minutes))} of prints, and your printers have about ${esc(capacity)} for a day.</p>` : ''}
+    ${info && info.planned.length ? '<ul>' + info.planned.map(p => `
+      <li data-id="${p.id}"><a href="#/model/${p.model_id}">${esc(p.filename || 'model ' + p.model_id)}</a>
+        <span class="muted">${p.minutes ? esc(formatMinutes(p.minutes)) : 'no estimate'}${p.printer ? ' on ' + esc(p.printer) : ''}${p.status === 'printing' ? ' (printing)' : ''}</span>
+        <input type="date" class="cal-move-date" aria-label="Move to another day" value="${calSelected}"> <button class="cal-move">Move</button> <button class="cal-unplan">Take off the calendar</button></li>`).join('') + '</ul>' : '<p class="muted">Nothing planned for this day.</p>'}
+    ${info && info.printed.length ? '<h4>Printed</h4><ul>' + info.printed.map(p => `
+      <li><a href="#/model/${p.model_id}">${esc(p.filename || 'model ' + p.model_id)}</a> <span class="muted">${p.minutes ? esc(formatMinutes(p.minutes)) : ''}${p.has_photo ? ' &middot; has a photo' : ''}</span></li>`).join('') + '</ul>' : ''}`;
+}
+
+async function planCalendarItem(id, day) {
+  const res = await jsonRequest('PATCH', `/api/queue/${id}`, { planned_date: day || null });
+  if (!res.ok) { showNotice(await sourceErrorText(res)); return; }
+  await loadCalendar();
+}
+
+$('#cal-prev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); calSelected = null; loadCalendar(); });
+$('#cal-next').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); calSelected = null; loadCalendar(); });
+$('#cal-today').addEventListener('click', () => { calMonth = localMonth(new Date()); calSelected = null; loadCalendar(); });
+$('#cal-grid').addEventListener('click', (e) => {
+  const cell = e.target.closest('.cal-cell[data-day]');
+  if (!cell) return;
+  calSelected = calSelected === cell.dataset.day ? null : cell.dataset.day;
+  renderCalendar();
+});
+$('#cal-day').addEventListener('click', async (e) => {
+  const row = e.target.closest('li[data-id]');
+  if (!row) return;
+  if (e.target.classList.contains('cal-unplan')) await planCalendarItem(row.dataset.id, null);
+  else if (e.target.classList.contains('cal-move')) await planCalendarItem(row.dataset.id, row.querySelector('.cal-move-date').value);
+});
+$('#cal-unplanned').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('cal-set')) return;
+  const row = e.target.closest('li');
+  const day = row.querySelector('.cal-set-date').value;
+  if (!day) { $('#cal-status').textContent = 'Choose a day first (click one on the calendar, or pick a date).'; return; }
+  await planCalendarItem(row.dataset.id, day);
+});
+async function planAutomatically(dry) {
+  $('#cal-status').textContent = dry ? 'Checking...' : 'Planning...';
+  const res = await jsonRequest('POST', '/api/calendar/plan', { dry_run: dry });
+  if (!res.ok) { $('#cal-status').textContent = await sourceErrorText(res); return; }
+  const r = await res.json();
+  if (!r.assigned.length) { $('#cal-status').textContent = 'Nothing is waiting without a day.'; return; }
+  const days = r.assigned.map(a => a.planned_date).sort();
+  const guessed = r.assigned.filter(a => a.guessed).length;
+  $('#cal-status').innerHTML = `${dry ? 'Would plan' : 'Planned'} ${r.assigned.length} print${r.assigned.length === 1 ? '' : 's'} between ${esc(days[0])} and ${esc(days[days.length - 1])}${guessed ? ` (${guessed} without an estimate counted as an hour each)` : ''}.`
+    + (r.unplaced ? ` ${r.unplaced} did not fit in the next year.` : '')
+    + (!dry && r.activity_id ? ` <button id="cal-undo" data-id="${r.activity_id}">Undo</button>` : '');
+  if (!dry) loadCalendar();
+}
+$('#cal-plan-preview').addEventListener('click', () => planAutomatically(true));
+$('#cal-plan-run').addEventListener('click', () => planAutomatically(false));
+$('#cal-status').addEventListener('click', async (e) => {
+  if (e.target.id !== 'cal-undo') return;
+  if (await undoActivity(e.target.dataset.id)) { $('#cal-status').textContent = 'Undone.'; loadCalendar(); }
+});
+
+$('#calendar-hours-save').addEventListener('click', async () => {
+  const ok = await saveSetting({ calendar_hours_per_day: $('#calendar-hours').value.trim() });
+  $('#calendar-hours-status').textContent = ok ? 'Saved.' : 'Could not save.';
+});
+
 // ---------- Library information and MQTT (Settings) ----------
 async function importLibraryInfo(dry) {
   const file = $('#io-file').files[0];
@@ -3699,6 +3872,8 @@ async function loadSettings() {
   refreshBackups();
   loadUsers();
   loadMqttSettings(s);
+  $('#calendar-hours').value = s.calendar_hours_per_day || '';
+  renderSharePanel('#library-share-panel', 'library', 0);
   loadVersion();
   loadTokens();
   $('#auto-backup').value = s.auto_backup || 'weekly';
