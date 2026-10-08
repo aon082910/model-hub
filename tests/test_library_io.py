@@ -10,8 +10,9 @@ from starlette.testclient import TestClient
 PW = "a long enough password"
 
 
-def _stl(n):
-    return (f"solid t\nfacet normal 0 0 1\n outer loop\n  vertex 0 0 0\n  vertex {n} 0 0\n  vertex 0 {n} 0\n endloop\nendfacet\nendsolid t\n").encode()
+def _stl(n, salt="t"):
+    """The salt makes each model's content (and so its hash) its own, whatever the other tests left in the library."""
+    return (f"solid {salt}\nfacet normal 0 0 1\n outer loop\n  vertex 0 0 0\n  vertex {n} 0 0\n  vertex 0 {n} 0\n endloop\nendfacet\nendsolid t\n").encode()
 
 
 @pytest.fixture()
@@ -19,7 +20,7 @@ def trio(authed):
     tag = uuid.uuid4().hex[:6]
     models = []
     for i, n in enumerate((44, 55, 66)):
-        models.append(authed.post("/api/library/import", files={"file": (f"{tag}_part{i}.stl", _stl(n + int(tag[:2], 16) % 20), "application/octet-stream")}).json())
+        models.append(authed.post("/api/library/import", files={"file": (f"{tag}_part{i}.stl", _stl(n + int(tag[:2], 16) % 20, f"{tag}{i}"), "application/octet-stream")}).json())
     yield tag, models
     for m in models:
         authed.delete(f"/api/library/models/{m['id']}")
