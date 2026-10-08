@@ -278,6 +278,7 @@ function libraryParams() {
   if ($('#f-fits').checked) params.set('fits_bed', 'true');
   if ($('#f-notes').checked) params.set('has_notes', 'true');
   if ($('#f-latest').checked) params.set('latest_only', 'true');
+  if ($('#f-failed').checked) params.set('failed_before', 'true');
   return params;
 }
 
@@ -294,6 +295,7 @@ function setLibraryFilters(values) {
   $('#f-fits').checked = values.fits_bed === true || values.fits_bed === 'true';
   $('#f-notes').checked = values.has_notes === true || values.has_notes === 'true';
   $('#f-latest').checked = values.latest_only === true || values.latest_only === 'true';
+  $('#f-failed').checked = values.failed_before === true || values.failed_before === 'true';
 }
 
 // a filter changed: back to the first page, then reload (the paging script resets on a search-box input)
@@ -316,7 +318,7 @@ async function loadFilterChoices() {
 let savedSearches = [];
 
 ['#f-designer', '#f-license'].forEach(sel => $(sel).addEventListener('input', debounce(filtersChanged, 400)));
-['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
+['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
 $('#library-filters').addEventListener('toggle', () => { if ($('#library-filters').open) loadFilterChoices(); });
 $('#f-clear').addEventListener('click', () => { setLibraryFilters({}); filtersChanged(); });
 $('#f-saved').addEventListener('change', () => {
@@ -327,7 +329,7 @@ $('#f-saved').addEventListener('change', () => {
 });
 $('#f-save').addEventListener('click', async () => {
   const params = Object.fromEntries(libraryParams());
-  for (const key of ['fits_bed', 'has_notes', 'duplicates_only', 'latest_only']) if (params[key] === 'true') params[key] = true;
+  for (const key of ['fits_bed', 'has_notes', 'duplicates_only', 'latest_only', 'failed_before']) if (params[key] === 'true') params[key] = true;
   const name = prompt('Name this search:');
   if (!name) return;
   const res = await jsonRequest('POST', '/api/saved-searches', { name, params });
@@ -696,6 +698,17 @@ function highlightRow(tableSelector, id) {
 // ---------- Print history on a model's page ----------
 function ratingText(n) { return n ? '\u2605'.repeat(n) + '\u2606'.repeat(5 - n) : ''; }
 
+// "failed 3 of 5 attempts, usually: Warped or curled" from a hint of /api/prints/hints
+function hintText(h) {
+  if (!h) return '';
+  const usual = h.top_label ? `, usually: ${h.top_label}` : '';
+  return `Failed ${h.failures} of ${h.attempts} attempt${h.attempts === 1 ? '' : 's'}${usual}`;
+}
+async function loadHints(modelId) {
+  const res = await fetch(`/api/prints/hints${modelId ? `?model_id=${modelId}` : ''}`);
+  return res.ok ? (await res.json()).hints : {};
+}
+
 // why a print failed (the server's list), fetched once
 let failureReasons = null;
 async function loadFailureReasons() {
@@ -710,16 +723,21 @@ function outcomeOptions(reasons, selected) {
 
 async function renderModelPrints(model) {
   const panel = $('#model-prints-panel');
-  const [logs, spools, reasons] = await Promise.all([
+  const [logs, spools, reasons, hints] = await Promise.all([
     fetch(`/api/prints?model_id=${model.id}`).then(r => (r.ok ? r.json() : { total: 0, items: [] })),
     fetch('/api/filament').then(r => (r.ok ? r.json() : [])),
     loadFailureReasons(),
+    loadHints(model.id),
   ]);
+  const hint = hints[model.id];
   if (!currentModel || currentModel.id !== model.id) return;
   const spoolText = f => [f.material, f.brand, f.color].filter(Boolean).join(' ');
   const spoolById = new Map(spools.map(f => [f.id, f]));
   const today = new Date().toISOString().slice(0, 10);
   panel.innerHTML = `
+    ${hint ? `<div class="hint-box"><b>&#9888; ${esc(hintText(hint))}</b> (${hint.rate}%)
+      ${hint.materials.length ? `<div class="muted">On ${hint.materials.map(m => `${esc(m.material)} (${m.failures})`).join(', ')}.</div>` : ''}
+      ${hint.tip ? `<div>${esc(hint.tip)}</div>` : ''}</div>` : ''}
     <h3>Print history${logs.total ? ` (${logs.total})` : ''}</h3>
     ${logs.items.length ? logs.items.map(l => `
       <div class="print-row${l.outcome === 'failed' ? ' print-failed' : ''}" data-id="${l.id}">
@@ -732,12 +750,20 @@ async function renderModelPrints(model) {
           ${l.source === 'queue' ? '<span class="muted">from the print queue</span>' : ''}
           ${l.notes ? `<div>${esc(l.notes)}</div>` : ''}
         </div>
+        ${l.timelapse_url ? `<div><a href="${esc(safeUrl(l.timelapse_url))}" target="_blank" rel="noopener noreferrer">&#9654; Time-lapse</a></div>` : ''}
         ${l.has_photo ? `<a href="/api/prints/${l.id}/photo" target="_blank" rel="noopener"><img class="print-photo" src="/api/prints/${l.id}/photo?v=${Date.now()}" loading="lazy" alt="Photo of the print"></a>` : ''}
         <div class="print-actions">
           <select class="print-outcome" aria-label="How it went">${outcomeOptions(reasons, l.outcome === 'failed' ? (l.failure_reason || 'other') : '')}</select>
           <label class="button-link print-photo-btn">${l.has_photo ? 'Replace photo' : 'Take photo'}<input type="file" accept="image/*" capture="environment" class="print-photo-input" hidden></label>
           <label class="button-link print-photo-btn">Choose photo<input type="file" accept="image/*" class="print-photo-input" hidden></label>
+          <button class="print-timelapse">Time-lapse</button>
           <button class="print-delete">Delete</button>
+        </div>
+        <div class="timelapse-box hidden" data-printer="${l.printer_id || ''}">
+          <div class="row"><input class="timelapse-url" value="${esc(l.timelapse_url || '')}" placeholder="https://... link to the video" aria-label="Time-lapse link">
+            <button class="timelapse-save">Save</button>
+            ${currentUser.role === 'admin' && l.printer_id ? '<button class="timelapse-find">Find on the printer</button>' : ''}</div>
+          <div class="timelapse-found muted"></div>
         </div>
       </div>`).join('') : '<p class="muted">Not printed yet.</p>'}
     <h3>Log a print</h3>
@@ -769,6 +795,27 @@ async function renderModelPrints(model) {
     const res = await jsonRequest('POST', '/api/prints', body);
     if (res.ok) refreshModelPage(); else $('#print-status').textContent = await sourceErrorText(res);
   };
+  $$('#model-prints-panel .print-timelapse').forEach(btn => btn.onclick = () => btn.closest('.print-row').querySelector('.timelapse-box').classList.toggle('hidden'));
+  $$('#model-prints-panel .timelapse-save').forEach(btn => btn.onclick = async () => {
+    const row = btn.closest('.print-row');
+    const res = await jsonRequest('PATCH', `/api/prints/${row.dataset.id}`, { timelapse_url: row.querySelector('.timelapse-url').value.trim() });
+    if (res.ok) refreshModelPage(); else row.querySelector('.timelapse-found').textContent = await sourceErrorText(res);
+  });
+  $$('#model-prints-panel .timelapse-find').forEach(btn => btn.onclick = async () => {
+    const row = btn.closest('.print-row');
+    const out = row.querySelector('.timelapse-found');
+    out.textContent = 'Asking the printer...';
+    const res = await fetch(`/api/prints/${row.dataset.id}/timelapse-candidates`);
+    if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+    const data = await res.json();
+    out.innerHTML = data.files.length ? `Videos on ${esc(data.printer)}, closest to this print first:` + data.files.map(f =>
+      `<div class="row"><a href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener noreferrer">${esc(f.name)}</a>${f.size ? ` <span class="muted">${formatBytes(f.size)}</span>` : ''}
+       <button class="timelapse-use" data-url="${esc(f.url)}">Use this one</button></div>`).join('') : `${esc(data.printer)} has no time-lapse videos (Klipper needs the moonraker-timelapse plugin).`;
+    out.querySelectorAll('.timelapse-use').forEach(use => use.onclick = async () => {
+      await jsonRequest('PATCH', `/api/prints/${row.dataset.id}`, { timelapse_url: use.dataset.url });
+      refreshModelPage();
+    });
+  });
   $$('#model-prints-panel .print-outcome').forEach(sel => sel.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/prints/${sel.closest('.print-row').dataset.id}`,
       sel.value ? { outcome: 'failed', failure_reason: sel.value } : { outcome: 'done' });
@@ -2974,9 +3021,12 @@ $('#add-smart-btn').addEventListener('click', async () => {
 // ---------- Filament ----------
 async function loadFilament() {
   const items = await (await fetch('/api/filament')).json();
+  const loadedIn = {};
+  const slotInfo = await fetch('/api/slots').then(r => (r.ok ? r.json() : { printers: [] }));
+  for (const p of slotInfo.printers) for (const sl of p.slots) if (sl.filament_id) loadedIn[sl.filament_id] = `${p.name} slot ${sl.slot}${sl.label ? ' (' + sl.label + ')' : ''}`;
   $('#filament-table tbody').innerHTML = items.map(f => `
     <tr data-id="${f.id}">
-      <td>${f.material}</td><td>${f.brand || ''}</td><td>${f.color || ''}</td>
+      <td>${f.material}</td><td>${f.brand || ''}</td><td>${f.color || ''}${loadedIn[f.id] ? `<br><small class="muted">loaded in ${esc(loadedIn[f.id])}</small>` : ''}</td>
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
       <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
         ${f.cost != null && f.spool_weight_g ? `<small class="muted">$${(f.cost / f.spool_weight_g * 1000).toFixed(2)}/kg</small>` : ''}</td>
@@ -3048,6 +3098,10 @@ async function loadPrinters() {
       <span class="muted">${esc(p.url)}</span>
       <span class="printer-state muted">checking...</span>
       <button class="printer-delete">Remove</button>
+      <details class="printer-slotcount"><summary>Spool slots${p.slot_count ? ` (${p.slot_count})` : ''}</summary>
+        <p class="muted">How many spools it can hold at once (an AMS has 4, a toolchanger one per tool). Leave 0 for a printer with one spool.</p>
+        <div class="row"><input type="number" class="printer-slot-count" min="0" max="16" value="${p.slot_count || 0}" aria-label="Number of spool slots"><button class="printer-slot-save">Save</button><span class="printer-slot-result muted"></span></div>
+      </details>
       <details class="printer-camera"><summary>Camera${p.snapshot_url ? ' (set)' : ''}</summary>
         <p class="muted">A still-picture address (Mainsail/Fluidd: <code>http://host/webcam/?action=snapshot</code>). When a print finishes, its picture is kept as the print's photo.</p>
         <div class="row"><input class="printer-snapshot-url" value="${esc(p.snapshot_url || '')}" placeholder="http://192.168.1.60/webcam/?action=snapshot" aria-label="Camera picture address">
@@ -3073,6 +3127,12 @@ $('#printer-add').addEventListener('click', async () => {
 });
 $('#printers-list').addEventListener('click', async (e) => {
   const row = e.target.closest('.printer-row');
+  if (row && e.target.classList.contains('printer-slot-save')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { slot_count: parseInt(row.querySelector('.printer-slot-count').value) || 0 });
+    row.querySelector('.printer-slot-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    if (res.ok) loadQueue();
+    return;
+  }
   if (row && e.target.classList.contains('printer-snapshot-save')) {
     const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { snapshot_url: row.querySelector('.printer-snapshot-url').value.trim() });
     row.querySelector('.printer-snapshot-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
@@ -3146,9 +3206,40 @@ async function renderModelPrinter(model) {
   };
 }
 
+// ---------- Which spool is in which slot of a printer ----------
+async function renderSlotsPanel(printers) {
+  const panel = $('#slots-panel');
+  if (!printers.length) { panel.classList.add('hidden'); return; }
+  const spools = await fetch('/api/filament').then(r => (r.ok ? r.json() : []));
+  const readOnly = currentUser.role === 'viewer';
+  panel.classList.remove('hidden');
+  panel.innerHTML = `<h3>Spools in the printers</h3>
+    <p class="muted">What is loaded in each slot (an AMS, an MMU, a toolchanger...). A queue entry that names a slot is counted against the spool in it when it finishes.</p>
+    ${printers.map(p => `<div class="slot-printer" data-printer="${p.id}"><b>${esc(p.name)}</b>
+      ${p.slots.map(sl => `<div class="row slot-row" data-slot="${sl.slot}"><span>Slot ${sl.slot}</span>
+        <input class="slot-label" value="${esc(sl.label || '')}" placeholder="name" maxlength="40" aria-label="Slot name" ${readOnly ? 'disabled' : ''}>
+        <select class="slot-spool" aria-label="Spool in slot ${sl.slot}" ${readOnly ? 'disabled' : ''}><option value="">(empty)</option>${spools.map(f =>
+          `<option value="${f.id}" ${f.id === sl.filament_id ? 'selected' : ''}>${esc([f.material, f.brand, f.color].filter(Boolean).join(' '))} (${f.remaining_g} g)</option>`).join('')}</select></div>`).join('')}
+    </div>`).join('')}`;
+  const save = async (row) => {
+    const printer = row.closest('.slot-printer').dataset.printer;
+    const spool = row.querySelector('.slot-spool').value;
+    const res = await jsonRequest('PUT', `/api/slots/${printer}/${row.dataset.slot}`, { filament_id: spool ? parseInt(spool) : null, label: row.querySelector('.slot-label').value });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  };
+  panel.querySelectorAll('.slot-spool').forEach(sel => sel.onchange = () => save(sel.closest('.slot-row')));
+  panel.querySelectorAll('.slot-label').forEach(input => input.onchange = () => save(input.closest('.slot-row')));
+}
+
 // ---------- Queue ----------
 async function loadQueue() {
   loadPrinters();
+  const [slotData, hints] = await Promise.all([
+    fetch('/api/slots').then(r => (r.ok ? r.json() : { printers: [] })),
+    loadHints(),
+  ]);
+  const slotsByPrinter = Object.fromEntries(slotData.printers.map(p => [p.id, p]));
   const [items, models, printerData, summary] = await Promise.all([
     (await fetch('/api/queue')).json(),
     (await fetch('/api/library/models?limit=1000')).json(),
@@ -3174,11 +3265,14 @@ async function loadQueue() {
       .filter(Boolean).join(' · ');
     return `
     <li>
-      <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}</span>
+      <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
+        ${hints[i.model_id] && ['queued', 'printing'].includes(i.status) ? `<span class="warn-text" title="${esc(hints[i.model_id].tip || '')}">&#9888; ${esc(hintText(hints[i.model_id]))}</span>` : ''}</span>
       <span>
         ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
         ${printers.length ? `<select data-id="${i.id}" class="queue-printer" aria-label="Printer">
           <option value="">any printer</option>${printers.map(p => `<option value="${p.id}" ${p.id === i.printer_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+          ${slotsByPrinter[i.printer_id] ? `<select data-id="${i.id}" class="queue-slot" aria-label="Spool slot">
+            <option value="">no slot</option>${slotsByPrinter[i.printer_id].slots.map(sl => `<option value="${sl.slot}" ${sl.slot === i.slot ? 'selected' : ''}>slot ${sl.slot}${sl.label ? ' ' + esc(sl.label) : ''}${sl.spool ? ': ' + esc([sl.spool.material, sl.spool.color].filter(Boolean).join(' ')) : ' (empty)'}</option>`).join('')}</select>` : ''}
           ${i.printer_id && ['queued', 'failed'].includes(i.status) ? `<button data-id="${i.id}" class="queue-send" title="Send the model's newest kept G-code file to this printer">Send</button>` : ''}` : ''}
         <select data-id="${i.id}" class="queue-status">
           ${['queued', 'printing', 'done', 'failed'].map(s => `<option value="${s}" ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}
@@ -3191,6 +3285,12 @@ async function loadQueue() {
     const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { planned_date: input.value || null });
     if (!res.ok) showNotice(await sourceErrorText(res));
   });
+  $$('.queue-slot').forEach(sel => sel.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { slot: sel.value ? parseInt(sel.value) : null });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
+  renderSlotsPanel(slotData.printers);
   $$('.queue-printer').forEach(sel => sel.onchange = async () => {
     await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { printer_id: sel.value ? parseInt(sel.value) : null });
     loadQueue();
@@ -3670,6 +3770,8 @@ let calMonth = localMonth(new Date());
 let calSelected = null;
 let calData = null;
 let calPrinter = '';
+let calHints = {};
+let calRepeatHtml = '';              // the answer of the last 'Repeat this week', kept while the calendar redraws
 
 function shiftMonth(month, delta) {
   const [y, m] = month.split('-').map(Number);
@@ -3690,6 +3792,7 @@ async function loadCalendar() {
     return;
   }
   calData = await res.json();
+  calHints = await loadHints();
   renderCalendar();
 }
 
@@ -3742,8 +3845,15 @@ function renderCalendarDay() {
     ${info && info.planned.length ? '<ul>' + info.planned.map(p => `
       <li data-id="${p.id}"><a href="#/model/${p.model_id}">${esc(p.filename || 'model ' + p.model_id)}</a>
         <span class="muted">${p.minutes ? esc(formatMinutes(p.minutes)) : 'no estimate'}${p.printer ? ' on ' + esc(p.printer) : ''}${p.status === 'printing' ? ' (printing)' : ''}</span>
+        ${calHints[p.model_id] ? `<div class="warn-text" title="${esc(calHints[p.model_id].tip || '')}">&#9888; ${esc(hintText(calHints[p.model_id]))}</div>` : ''}
         ${p.short ? `<div class="warn-text">&#9888; ${esc(p.short.spool)} will be short by ${p.short.short_by} g (this print needs ${p.need ?? p.short.need} g)</div>` : ''}
         <input type="date" class="cal-move-date" aria-label="Move to another day" value="${calSelected}"> <button class="cal-move">Move</button> <button class="cal-unplan">Take off the calendar</button></li>`).join('') + '</ul>' : '<p class="muted">Nothing planned for this day.</p>'}
+    <div class="cal-repeat"><h4>Repeat this week</h4>
+      <p class="muted">Copy every print planned in the week of ${esc(dayLabel(calSelected))} onto the following weeks, as waiting prints.</p>
+      <div class="row"><label>For <select id="cal-repeat-weeks">${[1, 2, 3, 4, 6, 8].map(n => `<option value="${n}">${n} week${n === 1 ? '' : 's'}</option>`).join('')}</select></label>
+        <label class="inline-check"><input type="checkbox" id="cal-repeat-done" checked> include prints already done</label>
+        <button id="cal-repeat-preview">Preview</button><button id="cal-repeat-go" class="primary">Repeat</button></div>
+      <div id="cal-repeat-status" class="muted">${calRepeatHtml}</div></div>
     ${info && info.printed.length ? '<h4>Printed</h4><ul>' + info.printed.map(p => `
       <li><a href="#/model/${p.model_id}">${esc(p.filename || 'model ' + p.model_id)}</a>
         ${p.failed ? `<span class="status-badge status-failed">Failed${p.reason && failureReasons ? ': ' + esc((failureReasons.find(r => r.key === p.reason) || {}).label || '') : ''}</span>` : ''}
@@ -3760,6 +3870,24 @@ async function planCalendarItem(id, day) {
 $('#cal-prev').addEventListener('click', () => { calMonth = shiftMonth(calMonth, -1); calSelected = null; loadCalendar(); });
 $('#cal-next').addEventListener('click', () => { calMonth = shiftMonth(calMonth, 1); calSelected = null; loadCalendar(); });
 $('#cal-today').addEventListener('click', () => { calMonth = localMonth(new Date()); calSelected = null; loadCalendar(); });
+async function repeatWeek(dry) {
+  const out = $('#cal-repeat-status');
+  const show = (html) => { calRepeatHtml = html; out.innerHTML = html; };
+  const statuses = $('#cal-repeat-done').checked ? ['queued', 'printing', 'done'] : ['queued', 'printing'];
+  show(dry ? 'Checking...' : 'Copying...');
+  const res = await jsonRequest('POST', '/api/calendar/copy', { date: calSelected, weeks: parseInt($('#cal-repeat-weeks').value), statuses, dry_run: dry });
+  if (!res.ok) { show(esc(await sourceErrorText(res))); return; }
+  const r = await res.json();
+  if (!r.created.length) { show('Nothing was planned that week.'); return; }
+  show(`${dry ? 'Would add' : 'Added'} ${r.created.length} waiting print${r.created.length === 1 ? '' : 's'} (the week of ${esc(r.week)} and the days after).`
+    + (!dry && r.activity_id ? ` <button id="cal-repeat-undo" data-id="${r.activity_id}">Undo</button>` : ''));
+  if (!dry) loadCalendar();
+}
+$('#cal-day').addEventListener('click', async (e) => {
+  if (e.target.id === 'cal-repeat-preview') repeatWeek(true);
+  else if (e.target.id === 'cal-repeat-go') repeatWeek(false);
+  else if (e.target.id === 'cal-repeat-undo' && await undoActivity(e.target.dataset.id)) { calRepeatHtml = 'Undone.'; loadCalendar(); }
+});
 $('#cal-printer').addEventListener('change', () => { calPrinter = $('#cal-printer').value; calSelected = null; loadCalendar(); });
 $('#cal-day').addEventListener('change', async (e) => {
   if (!e.target.classList.contains('cal-photo-input') || !e.target.files.length) return;
@@ -3772,6 +3900,7 @@ $('#cal-grid').addEventListener('click', (e) => {
   const cell = e.target.closest('.cal-cell[data-day]');
   if (!cell) return;
   calSelected = calSelected === cell.dataset.day ? null : cell.dataset.day;
+  calRepeatHtml = '';
   renderCalendar();
 });
 $('#cal-day').addEventListener('click', async (e) => {

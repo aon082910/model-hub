@@ -217,6 +217,12 @@ Warehouse* and the paid marketplaces (*CGTrader*, *TurboSquid*) need a login or 
 *Libre3D*, *Pinshape*, *Ponoko* and *Wevolver* are gone or not model libraries. So none of those were added rather than guessing at scraping; if one of them
 publishes an API later it is a small addition. For any site that needs a login to download, use the browser extension.
 
+Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
+MakerWorld, Thingiverse, MyMiniFactory, Cults3D, Sketchfab, NIH 3D, Smithsonian and NASA (all dealt with above) plus: *Thangs* and *Free3D* refuse requests from a server (403) and have no public
+API; *Creality Cloud* has no public API either (its pages run on a private app interface, and downloads need a login, which is the case where the browser extension is the way); *3DExport*, *3DSky*,
+*Toymakr3D*, *Make It Real*, *Pixup3D*, *Nexprint*, *Fab365* and *Brutal Cities* are shops, galleries or login-gated libraries with only web pages; *Iteration3D*, *Yeggi*, *STLFinder* and *3DFindit* are
+search engines over other sites; and *Instructables* is a project site whose models sit inside write-ups. I looked each up on 2026-10-08.
+
 ## Wishlist
 
 The **Wishlist** tab keeps listings you want to come back to. Use **Save** on a search result or a listing page; each item can
@@ -256,6 +262,15 @@ something else. A queue entry set to *failed* asks why; a print a printer report
 printer has a camera, a picture), and the reason is yours to add. A failure is kept but is **not a print**: it does not count as the model having been
 printed, does not take it off the never-printed list, and does not teach the learned print times. Nothing is taken off a spool for a failure until you say how many
 grams it used (edit its entry), and then the **Stats** page can show how much filament and money failures wasted and which reasons are most common.
+
+**What went wrong before.** A model that has failed shows a box at the top of its print history ("Failed 3 of 5 attempts, usually: Warped or curled", the materials the
+failures were on, and a tip for the usual reason), and the same warning appears next to it in the Print Queue and on the Calendar, so you hear about it before you start
+it again. The Library can be filtered to **Failed before**. The tips are general advice, not a diagnosis.
+
+**Time-lapse links.** A print entry can keep a link to its time-lapse video (**Time-lapse**, then paste the address). For a print a printer reported, the administrator
+can press **Find on the printer**: Klipper (with the moonraker-timelapse plugin) and OctoPrint are asked for their time-lapse videos, the ones saved closest to the
+print come first, and *Use this one* keeps the link. The link opens in a new tab (Model Hub does not play it inside the page, because a printer on plain http cannot be
+embedded in a page served over https). Videos are never copied; only the address is kept.
 
 **Photos from a phone.** *Take photo* on a print entry opens the phone's camera straight away (*Choose photo* picks from the gallery); the Calendar's
 list of prints made on a day has the same button, so the picture can be added right when the print comes off the bed.
@@ -471,6 +486,14 @@ Give a printer its camera's still-picture address (Print Queue, the printer's *C
 entry, unless the entry already has one. *Take a picture now* tests the address. The address must not contain a user name or password; redirects are not followed, the printer's API key is never sent to the camera, and a camera that is off or wrong never
 stops the print being recorded. Photos are kept in `/config/print_photos` and are part of backups.
 
+## Which spool is in which slot
+
+A printer with several spools at once (a Bambu AMS has 4 slots, a Prusa MMU 5, a toolchanger one per tool) can be given a number of **Spool slots** (Print Queue, the printer's
+*Spool slots* section; 0 to 16). The **Spools in the printers** panel then shows each slot with a menu for the spool loaded in it and an optional name, and the Filament tab says where
+each spool is loaded. A spool is in at most one slot: loading it somewhere takes it out of the last one. A queue entry can name the printer and a slot; the spool in that slot at the
+time the print finishes is the one the filament is taken from, and the one the Calendar checks the plan against, so a spool swapped in between is the one counted. Model Hub does not
+read the slots from the printer, so say what you loaded; a print that uses several slots at once (multicolour) is counted against the one slot you chose.
+
 ## Print calendar
 
 **Calendar** shows a month: the prints planned for each day (with the time they need), the prints you logged, and the waiting prints that have no day yet. Give a queue entry a day from the Print Queue (the date box on each entry) or from the Calendar.
@@ -489,6 +512,12 @@ The Calendar also checks your **filament**. Planned prints that name a spool and
 enough left for is marked (the day gets a warning, the day's list says by how many grams). Prints already done are not counted again. Once a day Model Hub also
 tells you (the *A planned print needs more filament than you have* notification, which has its own switch) about shortfalls in the next two weeks,
 once for each, and again only if it was fixed and then became short again.
+
+## Repeating a week
+
+Select a day in the Calendar and **Repeat this week** copies every print planned in that week (Monday to Sunday) onto the following 1 to 8 weeks, on the same weekdays, as new waiting
+prints with the same printer, slot, spool, estimate and notes. Prints already done are included unless you untick that, so last week's batch can simply be run again; failed ones are not.
+*Preview* counts without adding anything, and a real run can be undone (right away, or from Recent changes), which removes the copies that are still waiting. At most 200 are added at once.
 
 ## Sharing a collection or the whole library
 

@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -110,6 +110,34 @@ def fetch_snapshot(url: str) -> bytes:
     if not data:
         raise PrinterError("The camera gave an empty picture")
     return bytes(data)
+
+
+def list_timelapses(kind: str, url: str, api_key: Optional[str]) -> list:
+    """The time-lapse videos a printer keeps: [{name, size, modified (epoch seconds or None), url}]. Raises PrinterError.
+    Klipper needs the moonraker-timelapse plugin, OctoPrint its timelapse feature; a printer with neither has none."""
+    base = urlparse(url)
+    root = f"{base.scheme}://{base.netloc}"
+    with _client() as client:
+        if kind == "moonraker":
+            response = _request(client, "GET", f"{url}/server/files/list", api_key, params={"root": "timelapse"})
+            if response.status_code == 404:
+                return []
+            if response.status_code != 200:
+                raise PrinterError(f"The printer answered with an error ({response.status_code})")
+            found = [{"name": str(f.get("path")), "size": f.get("size"), "modified": f.get("modified"),
+                      "url": f"{url}/server/files/timelapse/{quote(str(f.get('path')))}"}
+                     for f in (_json(response).get("result") or []) if isinstance(f, dict) and str(f.get("path", "")).lower().endswith(VIDEO_EXTENSIONS)]
+        else:
+            response = _request(client, "GET", f"{url}/api/timelapse", api_key)
+            if response.status_code != 200:
+                raise PrinterError(f"The printer answered with an error ({response.status_code})")
+            found = [{"name": str(f.get("name")), "size": f.get("bytes") or f.get("size"), "modified": None, "url": root + str(f.get("url"))}
+                     for f in (_json(response).get("files") or []) if isinstance(f, dict) and str(f.get("url", "")).startswith("/")
+                     and str(f.get("name", "")).lower().endswith(VIDEO_EXTENSIONS)]
+    return found
+
+
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".mkv", ".mov")
 
 
 def _client(timeout=TIMEOUT) -> httpx.Client:

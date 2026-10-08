@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.14.0
+A model that failed before now warns you (on its page, in the Print Queue and
+on the Calendar) with the usual reason and a tip, and the Library can be
+filtered to models that failed before. Printers with several spools (AMS, MMU,
+toolchangers) can have spool slots: say which spool is in which slot, and a
+queue entry that names a slot is counted against the spool in it. Print
+entries can keep a link to their time-lapse video, and the administrator can
+find it on the Klipper or OctoPrint printer. The Calendar can repeat a week of
+planned prints onto the next weeks, with undo. No new settings are required;
+new columns and tables are added automatically on first start.
+
 ### 2.13.0
 Failed prints are now tracked: mark a print as failed and say why (bed
 adhesion, warping, clog...), a stopped print is logged as a failure by itself,

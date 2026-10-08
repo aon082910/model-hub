@@ -54,3 +54,12 @@ def test_photos_can_be_taken_with_a_phone_camera_where_prints_are_shown():
 
 def test_smithsonian_has_a_label_in_the_page():
     assert "smithsonian: 'Smithsonian 3D'" in JS
+
+
+def test_failure_hints_slots_timelapses_and_week_repeat_have_their_controls():
+    assert "hintText(" in JS and "/api/prints/hints" in JS and "hint-box" in JS
+    assert 'id="f-failed"' in HTML and "failed_before" in JS and "'#f-failed'" in JS
+    assert 'id="slots-panel"' in HTML and "renderSlotsPanel" in JS and "/api/slots" in JS and "queue-slot" in JS
+    assert "printer-slot-count" in JS and "slot_count" in JS
+    assert "timelapse-find" in JS and "timelapse-candidates" in JS and "timelapse_url" in JS
+    assert "cal-repeat-go" in JS and "/api/calendar/copy" in JS

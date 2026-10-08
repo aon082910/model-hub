@@ -122,6 +122,7 @@ class QueueItem(SQLModel, table=True):
     actual_minutes: Optional[float] = None     # what the printer reported when it finished
     estimate_basis: Optional[str] = None       # manual, history, adjusted, estimate: where estimated_minutes came from
     planned_date: Optional[str] = None         # YYYY-MM-DD, for the calendar
+    slot: Optional[int] = None                 # the spool slot of printer_id the job is printed from
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -263,6 +264,8 @@ class PrintLog(SQLModel, table=True):
     queue_item_id: Optional[int] = None
     outcome: Optional[str] = None           # failed, or empty for a print that worked
     failure_reason: Optional[str] = None    # a key of app.print_outcomes.REASONS
+    printer_id: Optional[int] = None        # the printer that made it, when a printer reported it
+    timelapse_url: Optional[str] = None     # a link to its time-lapse video
     measured: bool = False                  # minutes is a real time (a printer reported it, or you typed it), not an estimate
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -275,8 +278,19 @@ class Printer(SQLModel, table=True):
     kind: str                       # moonraker, octoprint
     url: str
     api_key: Optional[str] = None
+    slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SpoolSlot(SQLModel, table=True):
+    """Which spool sits in which slot of a printer (slot 1..slot_count). A spool is in at most one slot."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(index=True)
+    slot: int
+    filament_id: Optional[int] = Field(default=None, index=True)
+    label: Optional[str] = None
+    loaded_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class PrinterJob(SQLModel, table=True):

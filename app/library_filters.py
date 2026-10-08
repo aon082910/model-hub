@@ -12,7 +12,7 @@ from app.models import (
 from app.settings_store import get_setting
 
 FILTER_KEYS = ("q", "tag", "extension", "duplicates_only", "printed", "designer", "license", "collection_id",
-               "project_id", "linked", "fits_bed", "has_notes", "latest_only")
+               "project_id", "linked", "fits_bed", "has_notes", "latest_only", "failed_before")
 SORT_KEYS = ("id", "name", "newest", "oldest", "largest", "smallest", "last_printed")
 
 
@@ -50,6 +50,8 @@ def conditions(session: Session, f: dict) -> list:
         out.append(Model3D.id.in_(select(PrintLog.model_id).where(print_outcomes.ok())))
     elif f.get("printed") is False:
         out.append(Model3D.id.not_in(select(PrintLog.model_id).where(print_outcomes.ok())))
+    if f.get("failed_before") is True:      # at least one failed print in its log
+        out.append(Model3D.id.in_(select(PrintLog.model_id).where(print_outcomes.failed())))
     if f.get("linked") is True:
         out.append(Model3D.source_provider.is_not(None))
     elif f.get("linked") is False:
@@ -111,7 +113,7 @@ def order_by(sort: Optional[str]):
 def parse_flags(raw: dict) -> dict:
     """Turn query-string style values ('true', 'false', '') into the booleans conditions() expects."""
     out = dict(raw)
-    for key in ("duplicates_only", "printed", "linked", "fits_bed", "has_notes", "latest_only"):
+    for key in ("duplicates_only", "printed", "linked", "fits_bed", "has_notes", "latest_only", "failed_before"):
         value = out.get(key)
         if isinstance(value, str):
             out[key] = True if value == "true" else False if value == "false" else None

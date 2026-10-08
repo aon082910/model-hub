@@ -19,7 +19,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "created_at": printer.created_at}
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "created_at": printer.created_at}
 
 
 def _get(session: Session, printer_id: int) -> Printer:
@@ -45,6 +45,13 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
             out["url"] = printing.clean_url(payload.get("url"))
         except printing.PrinterError as e:
             raise HTTPException(400, str(e))
+    if "slot_count" in payload:
+        count = payload["slot_count"]
+        if count in (None, ""):
+            count = 0
+        if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= 16:
+            raise HTTPException(400, "slot_count must be a number from 0 to 16")
+        out["slot_count"] = count
     if "snapshot_url" in payload:                  # "" clears it
         try:
             out["snapshot_url"] = printing.clean_snapshot_url(payload["snapshot_url"])
@@ -95,6 +102,8 @@ def update_printer(printer_id: int, payload: dict, session: Session = Depends(ge
 def delete_printer(printer_id: int, request: Request, session: Session = Depends(get_session)):
     printer = _get(session, printer_id)
     name = printer.name
+    from app import slots
+    slots.forget_printer(session, printer_id)
     session.delete(printer)
     session.commit()
     activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")

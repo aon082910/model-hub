@@ -184,7 +184,8 @@ def forbidden_reason(user: dict, method: str, path: str):
     if role in ("admin", "importer") or path == "/api/auth/logout":
         return None
     writing = method not in ("GET", "HEAD")
-    sends_to_printer = path.startswith("/api/queue/") and path.endswith("/send")      # starting a job on a real printer
+    sends_to_printer = (path.startswith("/api/queue/") and path.endswith("/send")      # starting a job on a real printer
+                        or (path.startswith("/api/prints/") and path.endswith("/timelapse-candidates")))      # asks a printer, and shows where it is
     if (path.startswith(ADMIN_ONLY_PREFIXES) or path in ADMIN_ONLY_PATHS or sends_to_printer
             or (writing and path.startswith(ADMIN_ONLY_WRITE_PREFIXES))):
         return "Only the administrator can do that."

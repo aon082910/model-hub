@@ -372,3 +372,10 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .print-failed { border-left: 3px solid #e0645a; padding-left: 8px; }
 .queue-fail { margin: 6px 0 2px; align-items: center; }
 .print-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+.hint-box { border: 1px solid #e5a000; border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: rgba(229, 160, 0, 0.08); }
+.timelapse-box { flex-basis: 100%; margin-top: 6px; }
+.slot-printer { margin: 8px 0; }
+.slot-row { align-items: center; }
+.slot-row input { max-width: 140px; }
+.cal-repeat { margin-top: 10px; border-top: 1px solid var(--border, #2a2e37); padding-top: 6px; }

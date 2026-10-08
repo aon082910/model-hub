@@ -79,6 +79,8 @@ def delete_filament(filament_id: int, session: Session = Depends(get_session)):
         raise HTTPException(404, "Not found")
     for row in session.exec(select(FilamentPrice).where(FilamentPrice.filament_id == filament_id)).all():
         session.delete(row)
+    from app import slots
+    slots.forget_spool(session, filament_id)
     session.delete(f)
     session.commit()
     return {"status": "deleted"}

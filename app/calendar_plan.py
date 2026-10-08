@@ -73,13 +73,16 @@ def filament_shortfalls(session: Session) -> dict:
     """{queue entry id: {"spool_id", "spool", "need", "short_by"}} for planned entries whose spool will not have enough left,
     taking the planned entries in date order and counting what the earlier ones will use up."""
     items = session.exec(select(QueueItem).where(QueueItem.planned_date.is_not(None), QueueItem.status.in_(OPEN),
-                                                 QueueItem.filament_id.is_not(None), QueueItem.estimated_grams > 0)
+                                                 QueueItem.estimated_grams > 0)
                          .order_by(QueueItem.planned_date, QueueItem.position, QueueItem.id)).all()
-    spools = {f.id: f for f in session.exec(select(Filament).where(Filament.id.in_({i.filament_id for i in items} or {0}))).all()}
+    from app import slots
+    chosen = {i.id: slots.effective_filament(session, i) for i in items}          # the spool in the entry's slot, else the one chosen
+    items = [i for i in items if chosen[i.id]]
+    spools = {f.id: f for f in session.exec(select(Filament).where(Filament.id.in_(set(chosen.values()) - {None} or {0}))).all()}
     left = {sid: float(f.remaining_g or 0) for sid, f in spools.items()}
     short = {}
     for item in items:
-        spool = spools.get(item.filament_id)
+        spool = spools.get(chosen[item.id])
         if not spool:
             continue
         have = max(0.0, left[spool.id])
@@ -194,6 +197,49 @@ def auto_plan(session: Session, start: Optional[date] = None, dry_run: bool = Fa
     if not dry_run:
         session.commit()
     return {"assigned": assigned, "unplaced": unplaced}
+
+
+COPY_STATUSES = ("queued", "printing", "done", "failed")
+MAX_COPIED = 200
+
+
+def week_start(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def copy_weeks(session: Session, source_day: date, weeks: int = 1, statuses=("queued", "printing", "done"), dry_run: bool = False) -> dict:
+    """Repeat the plan of the week (Monday to Sunday) that contains source_day for the next `weeks` weeks: every queue entry
+    planned in that week (with one of `statuses`) is copied, as a waiting entry, to the same weekday a week later (and two, three...).
+    Returns {"week": first day, "created": [{id, source_id, planned_date}]}. Nothing is copied twice by mistake: it is a button you press."""
+    if not 1 <= weeks <= 8:
+        raise ValueError("Repeat for 1 to 8 weeks")
+    wanted = [s for s in statuses if s in COPY_STATUSES]
+    if not wanted:
+        raise ValueError("Choose which entries to copy")
+    start = week_start(source_day)
+    items = session.exec(select(QueueItem).where(QueueItem.planned_date >= start.isoformat(), QueueItem.planned_date < (start + timedelta(days=7)).isoformat(),
+                                                 QueueItem.status.in_(wanted)).order_by(QueueItem.planned_date, QueueItem.position, QueueItem.id)).all()
+    if len(items) * weeks > MAX_COPIED:
+        raise ValueError(f"That would add more than {MAX_COPIED} entries")
+    top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
+    position = (top.position + 1) if top else 0
+    created = []
+    for week in range(1, weeks + 1):
+        for item in items:
+            day = (date.fromisoformat(item.planned_date) + timedelta(days=7 * week)).isoformat()
+            entry = {"source_id": item.id, "planned_date": day, "model_id": item.model_id}
+            if not dry_run:
+                copy = QueueItem(model_id=item.model_id, position=position, status="queued", printer_id=item.printer_id, slot=item.slot,
+                                 filament_id=item.filament_id, notes=item.notes, estimated_grams=item.estimated_grams,
+                                 estimated_minutes=item.estimated_minutes, estimate_basis=item.estimate_basis, planned_date=day)
+                session.add(copy)
+                session.flush()
+                entry["id"] = copy.id
+                position += 1
+            created.append(entry)
+    if not dry_run:
+        session.commit()
+    return {"week": start.isoformat(), "created": created}
 
 
 def _ics_text(value: str) -> str:

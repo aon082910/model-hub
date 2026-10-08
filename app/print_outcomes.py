@@ -24,6 +24,61 @@ REASONS = {
 }
 
 
+TIPS = {
+    "bed_adhesion": "Clean the plate, level again, and try a brim or a few degrees more on the first layer.",
+    "warping": "Try a brim, a hotter bed, less draught (an enclosure) or a different material.",
+    "spaghetti": "Something came loose: more bed adhesion, slower first layers, or supports under the overhangs.",
+    "layer_shift": "Check the belts and pulleys, lower the speed and acceleration, and look for something catching the head.",
+    "clog": "Check the nozzle and the extruder, dry the filament, and try a slightly hotter nozzle.",
+    "ran_out": "Weigh the spool before you start, and find out why it tangled.",
+    "supports": "Change the support density or distance, or print it in another orientation.",
+    "quality": "Dry the filament, lower the speed and tune retraction.",
+    "power": "A small UPS or a more reliable socket helps, and so does power-loss recovery in the firmware.",
+}
+
+
+def hints(session, model_id=None) -> dict:
+    """{model id: what went wrong with it before}, for models that have failed at least once (or just model_id).
+    {prints, failures, attempts, rate, top_reason, top_label, tip, materials: [{material, failures}], last_failure}."""
+    from collections import defaultdict
+    from sqlmodel import select
+    from app.models import Filament
+    stmt = select(PrintLog)
+    if model_id is not None:
+        stmt = stmt.where(PrintLog.model_id == model_id)
+    seen = defaultdict(lambda: {"ok": 0, "failed": [], "last": None})
+    for log in session.exec(stmt).all():
+        slot = seen[log.model_id]
+        if is_failed(log):
+            slot["failed"].append(log)
+            slot["last"] = max(slot["last"] or log.printed_at, log.printed_at)
+        else:
+            slot["ok"] += 1
+    spools = {f.id: f for f in session.exec(select(Filament)).all()}
+    out = {}
+    for mid, slot in seen.items():
+        failed = slot["failed"]
+        if not failed:
+            continue
+        reasons = defaultdict(int)
+        materials = defaultdict(int)
+        for log in failed:
+            if log.failure_reason:
+                reasons[log.failure_reason] += 1
+            spool = spools.get(log.filament_id)
+            if spool and spool.material:
+                materials[spool.material] += 1
+        top = max(sorted(reasons), key=lambda r: reasons[r]) if reasons else None
+        attempts = slot["ok"] + len(failed)
+        out[mid] = {
+            "prints": slot["ok"], "failures": len(failed), "attempts": attempts, "rate": round(len(failed) / attempts * 100),
+            "top_reason": top, "top_label": label(top), "tip": TIPS.get(top) if top else None,
+            "materials": [{"material": m, "failures": n} for m, n in sorted(materials.items(), key=lambda kv: (-kv[1], kv[0]))],
+            "last_failure": slot["last"].isoformat() if slot["last"] else None,
+        }
+    return out
+
+
 def ok():
     """A SQL condition: this log entry is a print that worked."""
     return or_(PrintLog.outcome.is_(None), PrintLog.outcome != "failed")

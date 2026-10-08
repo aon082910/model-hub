@@ -94,17 +94,18 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
         waiting = next((c for c in candidates if c.printer_id == printer.id), None) or (candidates[0] if candidates else None)
         if outcome == "done":
             if waiting:
-                complete_item(session, waiting, minutes)
+                complete_item(session, waiting, minutes, printer.id)
             else:
                 kept = session.get(PrintFile, job.print_file_id) if job and job.print_file_id else None
                 log_print(session, model.id, minutes=minutes, grams=kept.est_grams if kept else None, source="printer", deduct=False,
-                          measured=True)
+                          measured=True, printer_id=printer.id)
             session.flush()
             _photograph(session, printer, model.id)
         elif waiting:
-            fail_item(session, waiting, minutes=minutes)        # stopped or failed: the log keeps it, with the reason still to be said
+            fail_item(session, waiting, minutes=minutes, printer_id=printer.id)        # stopped or failed: the log keeps it, with the reason still to be said
         else:
-            log_print(session, model.id, minutes=round(minutes, 1) if minutes else None, source="printer", deduct=False, outcome="failed")
+            log_print(session, model.id, minutes=round(minutes, 1) if minutes else None, source="printer", deduct=False, outcome="failed",
+                      printer_id=printer.id)
         if outcome == "stopped":
             session.flush()
             _photograph(session, printer, model.id)             # a picture of what went wrong is worth keeping too

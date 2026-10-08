@@ -79,6 +79,7 @@
         <label class="inline-check"><input type="checkbox" id="f-fits"> Fits my printer's bed</label>
         <label class="inline-check"><input type="checkbox" id="f-notes"> Has notes</label>
         <label class="inline-check"><input type="checkbox" id="f-latest"> Latest versions only</label>
+        <label class="inline-check"><input type="checkbox" id="f-failed"> Failed before</label>
       </div>
       <div class="row">
         <select id="f-saved"><option value="">saved searches...</option></select>
@@ -477,6 +478,7 @@
       </details>
       <span id="printers-status" class="muted"></span>
     </div>
+    <div id="slots-panel" class="panel hidden"></div>
     <h2>Print Queue</h2>
     <div id="queue-summary" class="muted"></div>
     <ul id="queue-list"></ul>

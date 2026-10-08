@@ -1,5 +1,5 @@
 """The print log: what you printed, when, with what, how it turned out, and a photo."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -81,6 +81,19 @@ def _json(log: PrintLog, names: Optional[dict] = None) -> dict:
             "model_filename": (names or {}).get(log.model_id), "failure_label": print_outcomes.label(log.failure_reason)}
 
 
+def clean_link(value) -> Optional[str]:
+    """A web address to keep with a print (a time-lapse): http or https, no user name or password. "" clears it."""
+    from urllib.parse import urlparse
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or len(value) > 500:
+        raise HTTPException(400, "The link must be an address of at most 500 characters")
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(400, "The link must start with http:// or https:// and not contain a user name or password")
+    return value.strip()
+
+
 def clean_reason(value) -> Optional[str]:
     """A failure reason key, or None for none. Anything else is refused."""
     if value in (None, ""):
@@ -99,17 +112,25 @@ def _names(session: Session, logs: list) -> dict:
 
 def log_print(session: Session, model_id: int, *, printed_at=None, filament_id=None, grams=None, minutes=None,
               rating=None, notes=None, deduct: bool = True, source: str = "manual", queue_item_id=None,
-              measured: bool = False, outcome: Optional[str] = None, failure_reason: Optional[str] = None) -> PrintLog:
+              measured: bool = False, outcome: Optional[str] = None, failure_reason: Optional[str] = None,
+              printer_id: Optional[int] = None, timelapse_url: Optional[str] = None) -> PrintLog:
     """Record a print (does not commit). Used by the log's own API and by the print queue."""
     log = PrintLog(model_id=model_id, printed_at=printed_at or datetime.utcnow(), filament_id=filament_id,
                    grams=grams, minutes=minutes, rating=rating, notes=notes, source=source, queue_item_id=queue_item_id,
                    measured=bool(measured and minutes and outcome != "failed"),   # a failed print's time is only part of the job
-                   outcome="failed" if outcome == "failed" else None, failure_reason=failure_reason if outcome == "failed" else None)
+                   outcome="failed" if outcome == "failed" else None, failure_reason=failure_reason if outcome == "failed" else None,
+                   printer_id=printer_id, timelapse_url=timelapse_url)
     session.add(log)
     session.flush()
     if deduct:
         _take_filament(session, log)
     return log
+
+
+@router.get("/hints")
+def failure_hints(model_id: Optional[int] = None, session: Session = Depends(get_session)):
+    """What has gone wrong with models before: {"hints": {model id: {...}}} (only models that failed at least once)."""
+    return {"hints": print_outcomes.hints(session, model_id)}
 
 
 @router.get("/reasons")
@@ -152,7 +173,8 @@ def add_print(payload: dict, session: Session = Depends(get_session)):
         session, model.id, printed_at=_when(payload.get("printed_at")), filament_id=filament_id,
         grams=_number(payload.get("grams"), "grams", 0, 100000), minutes=minutes,
         rating=int(rating) if rating else None, notes=_text(payload.get("notes"), 4000),
-        deduct=bool(payload.get("deduct", True)), measured=True, outcome=outcome, failure_reason=reason)
+        deduct=bool(payload.get("deduct", True)), measured=True, outcome=outcome, failure_reason=reason,
+        timelapse_url=clean_link(payload.get("timelapse_url")))
     session.commit()
     session.refresh(log)
     return _json(log, {model.id: model.filename})
@@ -170,6 +192,8 @@ def update_print(log_id: int, payload: dict, session: Session = Depends(get_sess
         log.rating = int(rating) if rating else None
     if "notes" in payload:
         log.notes = _text(payload["notes"], 4000)
+    if "timelapse_url" in payload:
+        log.timelapse_url = clean_link(payload["timelapse_url"])
     if "outcome" in payload:
         if payload["outcome"] not in (None, "", "done", "failed"):
             raise HTTPException(400, "outcome must be done or failed")
@@ -235,6 +259,27 @@ def set_photo(log_id: int, file: UploadFile = File(...), session: Session = Depe
     except SourceError as e:
         raise HTTPException(400, str(e))
     return {"status": "saved"}
+
+
+@router.get("/{log_id}/timelapse-candidates")
+def timelapse_candidates(log_id: int, session: Session = Depends(get_session)):
+    """The time-lapse videos on the printer that made this print, the ones saved closest to the print first.
+    (Administrator only: it shows where the printer is.)"""
+    from app import printers as printing
+    from app.models import Printer
+    log = session.get(PrintLog, log_id)
+    if not log:
+        raise HTTPException(404, "Not found")
+    printer = session.get(Printer, log.printer_id) if log.printer_id else None
+    if not printer:
+        raise HTTPException(400, "A printer did not report this print, so there is no printer to look on. Paste the link yourself.")
+    try:
+        files = printing.list_timelapses(printer.kind, printer.url, printer.api_key)
+    except printing.PrinterError as e:
+        raise HTTPException(502, str(e))
+    stamp = log.created_at.replace(tzinfo=timezone.utc).timestamp() if log.created_at else None
+    files.sort(key=lambda f: (abs(f["modified"] - stamp) if stamp and isinstance(f.get("modified"), (int, float)) else float("inf"), f["name"]))
+    return {"printer": printer.name, "files": files[:20]}
 
 
 @router.get("/{log_id}/photo")

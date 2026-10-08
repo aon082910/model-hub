@@ -54,6 +54,19 @@ def _unplan(session: Session, planned: dict) -> int:
     return count
 
 
+def _remove_created(session: Session, ids: list) -> int:
+    """Take away queue entries that were added in bulk, but only ones still waiting (a print that has begun stays)."""
+    from app.models import QueueItem
+    count = 0
+    for item_id in ids:
+        item = session.get(QueueItem, item_id) if isinstance(item_id, int) else None
+        if item and item.status == "queued":
+            session.delete(item)
+            count += 1
+    session.commit()
+    return count
+
+
 def undo(session: Session, entry: ActivityLog, actor: str) -> int:
     """Reverse an entry. Raises ValueError if it cannot be (or was already)."""
     if entry.undone:
@@ -66,6 +79,8 @@ def undo(session: Session, entry: ActivityLog, actor: str) -> int:
         restored = bulk.undo(session, spec)
     elif spec.get("kind") == "multi":
         restored = sum(bulk.undo(session, one) for one in spec.get("specs", []) if isinstance(one, dict) and one.get("kind") == "bulk")
+    elif spec.get("kind") == "created_queue":
+        restored = _remove_created(session, spec.get("ids") or [])
     elif spec.get("kind") == "planned_dates":
         restored = _unplan(session, spec.get("new") or {})
     else:

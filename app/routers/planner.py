@@ -41,6 +41,36 @@ def plan(payload: dict, request: Request, session: Session = Depends(get_session
     return {**result, "dry_run": dry, "activity_id": activity_id}
 
 
+@router.post("/copy")
+def copy_week(payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Repeat the week that contains `date` (default: this week) for the next `weeks` weeks (default 1). dry_run=true only counts.
+    A real run can be undone from Recent changes."""
+    try:
+        day = date.fromisoformat(str(payload.get("date") or date.today().isoformat()))
+    except ValueError:
+        raise HTTPException(400, "The date must look like 2026-10-31")
+    weeks = payload.get("weeks", 1)
+    if not isinstance(weeks, int) or isinstance(weeks, bool):
+        raise HTTPException(400, "weeks must be a number")
+    statuses = payload.get("statuses")
+    if statuses is None:
+        statuses = ["queued", "printing", "done"]
+    if not isinstance(statuses, list):
+        raise HTTPException(400, "statuses must be a list")
+    dry = payload.get("dry_run") is True
+    try:
+        result = calendar_plan.copy_weeks(session, day, weeks, statuses, dry_run=dry)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    activity_id = None
+    if not dry and result["created"]:
+        entry = activity.record(session, activity.actor_of(request), "calendar",
+                                f"Repeated the week of {result['week']} for {weeks} more week(s): {len(result['created'])} print(s) added",
+                                undo={"kind": "created_queue", "ids": [c["id"] for c in result["created"]]})
+        activity_id = entry.id
+    return {**result, "dry_run": dry, "activity_id": activity_id}
+
+
 @router.get("/export.ics")
 def export_ics(printer: str = "", session: Session = Depends(get_session)):
     try:
