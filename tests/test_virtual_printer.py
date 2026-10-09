@@ -17,6 +17,10 @@ def _stl():
     return (f"solid t\nfacet normal 0 0 1\n outer loop\n  vertex 0 0 0\n  vertex {n} 0 0\n  vertex 0 {n} {n // 4}\n endloop\nendfacet\nendsolid t\n").encode() + uuid.uuid4().hex.encode()
 
 
+def _u():
+    return "z" + uuid.uuid4().hex[:6]
+
+
 def _model(c, name):
     r = c.post("/api/library/import", files={"file": (name, _stl(), "application/octet-stream")})
     assert r.status_code == 200, r.text
@@ -103,25 +107,27 @@ def test_only_the_administrator_sets_it_up_and_is_told_how(authed, key):
 
 # ---------------------------------------------------------------- OctoPrint uploads
 def test_a_sliced_file_is_kept_with_the_model_it_is_named_after(authed, key):
-    m = _model(authed, "benchy.stl")
+    u = _u()
+    m = _model(authed, f"benchy{u}.stl")
     try:
-        r = _send(key, "benchy_0.2mm_PLA_MK4.gcode")
-        assert r.status_code == 201 and r.json()["done"] is True and r.json()["files"]["local"]["name"] == "benchy_0.2mm_PLA_MK4.gcode"
+        r = _send(key, f"benchy{u}_0.2mm_PLA_MK4.gcode")
+        assert r.status_code == 201 and r.json()["done"] is True and r.json()["files"]["local"]["name"] == f"benchy{u}_0.2mm_PLA_MK4.gcode"
         kept = authed.get("/api/print-files", params={"model_id": m["id"]}).json()
-        assert len(kept) == 1 and kept[0]["filename"] == "benchy_0.2mm_PLA_MK4.gcode" and kept[0]["est_grams"] == 12.5 and kept[0]["est_minutes"] == 40 and kept[0]["layer_height"] == "0.2"
+        assert len(kept) == 1 and kept[0]["filename"] == f"benchy{u}_0.2mm_PLA_MK4.gcode" and kept[0]["est_grams"] == 12.5 and kept[0]["est_minutes"] == 40 and kept[0]["layer_height"] == "0.2"
         assert kept[0]["notes"] == "Sent from the slicer" and authed.get("/api/queue").json() == []                          # "upload" does not queue
         inbox = authed.get("/api/slicer-inbox").json()
-        assert inbox["waiting"] == 0 and inbox["files"][0]["status"] == "filed" and inbox["files"][0]["model"] == "benchy.stl" and inbox["files"][0]["sent_by"] == "token:slicer"
-        again = _send(key, "benchy_other.gcode")                                                                              # the same file again: one kept copy
+        assert inbox["waiting"] == 0 and inbox["files"][0]["status"] == "filed" and inbox["files"][0]["model"] == f"benchy{u}.stl" and inbox["files"][0]["sent_by"] == "token:slicer"
+        again = _send(key, f"benchy{u}_other.gcode")                                                                              # the same file again: one kept copy
         assert again.status_code == 201 and len(authed.get("/api/print-files", params={"model_id": m["id"]}).json()) == 1
     finally:
         authed.delete(f"/api/library/models/{m['id']}")
 
 
 def test_upload_and_print_queues_it_and_never_starts_anything(authed, key):
-    m = _model(authed, "bracket.stl")
+    u = _u()
+    m = _model(authed, f"bracket{u}.stl")
     try:
-        r = _send(key, "bracket_PETG.gcode", print="true")
+        r = _send(key, f"bracket{u}_PETG.gcode", print="true")
         assert r.status_code == 201
         queue = authed.get("/api/queue").json()
         assert len(queue) == 1 and queue[0]["model_id"] == m["id"] and queue[0]["status"] == "queued" and queue[0]["estimated_grams"] == 12.5 and queue[0]["printer_id"] is None
@@ -131,15 +137,16 @@ def test_upload_and_print_queues_it_and_never_starts_anything(authed, key):
 
 
 def test_the_longest_matching_name_wins_and_an_unclear_name_waits(authed, key):
-    plain, small = _model(authed, "gear.stl"), _model(authed, "gear small.stl")
-    twin_a, twin_b = _model(authed, "twin.stl"), _model(authed, "twin.3mf")
+    u = _u()
+    plain, small = _model(authed, f"gear{u}.stl"), _model(authed, f"gear{u} small.stl")
+    twin_a, twin_b = _model(authed, f"twin{u}.stl"), _model(authed, f"twin{u}.3mf")
     try:
-        _send(key, "gear_small_0.2mm.gcode")
+        _send(key, f"gear{u}_small_0.2mm.gcode")
         assert len(authed.get("/api/print-files", params={"model_id": small["id"]}).json()) == 1 and authed.get("/api/print-files", params={"model_id": plain["id"]}).json() == []
-        r = _send(key, "twin_0.2mm.gcode", GCODE + b"; other\n")
+        r = _send(key, f"twin{u}_0.2mm.gcode", GCODE + b"; other\n")
         assert r.status_code == 201
         waiting = [f for f in authed.get("/api/slicer-inbox").json()["files"] if f["status"] == "waiting"]
-        assert [f["filename"] for f in waiting] == ["twin_0.2mm.gcode"]                                                    # two models fit equally: it asks
+        assert [f["filename"] for f in waiting] == [f"twin{u}_0.2mm.gcode"]                                                    # two models fit equally: it asks
         assert authed.get("/api/print-files", params={"model_id": twin_a["id"]}).json() == [] and authed.get("/api/print-files", params={"model_id": twin_b["id"]}).json() == []
         _send(key, "zz.gcode", GCODE + b"; short name\n")
         assert [f["filename"] for f in authed.get("/api/slicer-inbox").json()["files"] if f["status"] == "waiting"][0] == "zz.gcode"          # a name too short to trust
@@ -149,16 +156,17 @@ def test_the_longest_matching_name_wins_and_an_unclear_name_waits(authed, key):
 
 
 def test_a_waiting_file_can_be_filed_by_hand_once(authed, key):
-    m = _model(authed, "tool holder.stl")
+    u = _u()
+    m = _model(authed, f"tool holder{u}.stl")
     try:
-        _send(key, "mystery.gcode", print="true")
+        _send(key, f"mystery{u}.gcode", print="true")
         waiting = authed.get("/api/slicer-inbox").json()
         assert waiting["waiting"] == 1
         up = waiting["files"][0]
         assert authed.post(f"/api/slicer-inbox/{up['id']}/file", json={"model_id": 987654}).status_code == 400
         assert authed.post(f"/api/slicer-inbox/{up['id']}/file", json={}).status_code == 400
         filed = authed.post(f"/api/slicer-inbox/{up['id']}/file", json={"model_id": m["id"]}).json()
-        assert filed["status"] == "filed" and filed["model"] == "tool holder.stl"
+        assert filed["status"] == "filed" and filed["model"] == f"tool holder{u}.stl"
         assert len(authed.get("/api/print-files", params={"model_id": m["id"]}).json()) == 1 and len(authed.get("/api/queue").json()) == 1       # it had asked to print
         assert authed.post(f"/api/slicer-inbox/{up['id']}/file", json={"model_id": m["id"]}).status_code == 409
         assert authed.post("/api/slicer-inbox/999999/file", json={"model_id": m["id"]}).status_code == 404
@@ -211,12 +219,13 @@ def test_the_moonraker_interface_answers_and_accepts_uploads(authed, key):
     info = c.get("/server/info", headers=headers).json()["result"]
     assert info["klippy_state"] == "ready" and info["klippy_connected"] is True and info["api_version"]
     assert c.get("/printer/info", headers=headers).json()["result"]["state"] == "ready"
-    m = _model(authed, "vase.stl")
+    u = _u()
+    m = _model(authed, f"vase{u}.stl")
     try:
-        r = _send(key, "vase_0.2.gcode", path="/server/files/upload", root="gcodes", print="true")
+        r = _send(key, f"vase{u}_0.2.gcode", path="/server/files/upload", root="gcodes", print="true")
         assert r.status_code == 200
         body = r.json()
-        assert body["item"]["path"] == "vase_0.2.gcode" and body["item"]["root"] == "gcodes" and body["print_started"] is False and body["print_queued"] is True
+        assert body["item"]["path"] == f"vase{u}_0.2.gcode" and body["item"]["root"] == "gcodes" and body["print_started"] is False and body["print_queued"] is True
         assert len(authed.get("/api/print-files", params={"model_id": m["id"]}).json()) == 1 and len(authed.get("/api/queue").json()) == 1
     finally:
         authed.delete(f"/api/library/models/{m['id']}")
