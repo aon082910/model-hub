@@ -40,6 +40,15 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.20.0
+Starts can be kept apart: set a number of minutes between starts and/or a most
+printers printing at once (Settings, Print planning) and Model Hub says why it
+is waiting before it starts a print, with a way to start anyway. A watched
+printer can optionally be paused (never cancelled) after three bad camera looks
+in a row. Phones with NFC (Chrome on Android) can write a spool's link to an
+NFC tag and scan it to open the spool. No new settings are required; new
+columns are added automatically on first start.
+
 ### 2.19.0
 A printer's smart plug (Tasmota or Shelly) can measure what each print used,
 shown in kWh in the print history. When a printer reports a failed print, the

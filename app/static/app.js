@@ -3194,6 +3194,42 @@ $('#add-smart-btn').addEventListener('click', async () => {
 });
 
 // ---------- Filament ----------
+// ---------- NFC tags on spools (Chrome on Android, over https) ----------
+const NFC_OK = typeof window.NDEFReader === 'function';
+function nfcProblem(e) {
+  if (e && e.name === 'NotAllowedError') return 'Allow NFC for this page (and switch NFC on in the phone), then try again.';
+  if (e && e.name === 'NotSupportedError') return 'This phone has no NFC, or it is switched off.';
+  return `NFC did not work (${e && e.name ? e.name : 'unknown error'}).`;
+}
+async function nfcWriteSpool(id, out) {
+  out.textContent = 'Hold a blank tag to the back of the phone...';
+  try {
+    await new NDEFReader().write({ records: [{ recordType: 'url', data: `${location.origin}/#/spool/${id}` }] });
+    out.textContent = 'Tag written. Hold it to a phone to open this spool.';
+  } catch (e) { out.textContent = nfcProblem(e); }
+}
+let nfcReader = null;
+async function nfcScanSpool(out) {
+  if (nfcReader) { nfcReader.abort.abort(); nfcReader = null; out.textContent = 'Stopped scanning.'; return; }
+  try {
+    const reader = new NDEFReader();
+    const abort = new AbortController();
+    await reader.scan({ signal: abort.signal });
+    nfcReader = { abort };
+    out.textContent = 'Scanning: hold a spool tag to the phone (press Scan again to stop).';
+    reader.onreading = (event) => {
+      for (const record of event.message.records) {
+        if (record.recordType !== 'url') continue;
+        try {
+          const url = new URL(new TextDecoder().decode(record.data));
+          if (url.origin === location.origin && /^#\/spool\/\d+$/.test(url.hash)) { abort.abort(); nfcReader = null; location.hash = url.hash; return; }
+        } catch (err) { /* not a link */ }
+      }
+      out.textContent = "That tag is not one of this Model Hub's spool tags.";
+    };
+  } catch (e) { out.textContent = nfcProblem(e); }
+}
+
 function dryingText(d) {
   if (!d) return '';
   const age = d.days_since === 0 ? 'today' : `${d.days_since} day${d.days_since === 1 ? '' : 's'} ago`;
@@ -3214,9 +3250,12 @@ async function loadFilament() {
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
       <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
         ${f.cost != null && f.spool_weight_g ? `<small class="muted">$${(f.cost / f.spool_weight_g * 1000).toFixed(2)}/kg</small>` : ''}</td>
-      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="fil-opened" title="Note that this spool was opened today">opened</button> <button data-id="${f.id}" class="fil-dried" title="Note that this spool was dried today">dried</button> <button data-id="${f.id}" class="del-fil">delete</button></td>
+      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="fil-opened" title="Note that this spool was opened today">opened</button> <button data-id="${f.id}" class="fil-dried" title="Note that this spool was dried today">dried</button> ${NFC_OK ? `<button data-id="${f.id}" class="fil-nfc" title="Write this spool's link to an NFC tag">NFC tag</button> ` : ''}<button data-id="${f.id}" class="del-fil">delete</button></td>
     </tr>
     <tr class="fil-history-row hidden" data-for="${f.id}"><td colspan="6"></td></tr>`).join('');
+  if (NFC_OK && !$('#nfc-bar')) $('#filament-table').insertAdjacentHTML('beforebegin', '<p id="nfc-bar"><button id="nfc-scan">Scan a spool tag</button> <span id="nfc-msg" class="muted"></span></p>');
+  if ($('#nfc-scan')) $('#nfc-scan').onclick = () => nfcScanSpool($('#nfc-msg'));
+  $$('.fil-nfc').forEach(b => b.onclick = () => nfcWriteSpool(b.dataset.id, $('#nfc-msg')));
   if (!$('#fil-labels-link')) $('#filament-table').insertAdjacentHTML('beforebegin', '<p><a id="fil-labels-link" class="button-link" href="#/labels/filament">Print QR labels for spools</a></p>');
   $$('.fil-price').forEach(input => input.onchange = async () => {
     const value = input.value.trim();
@@ -3305,6 +3344,7 @@ async function loadPrinters() {
         <div class="printer-snapshot-result muted"></div>
         <label class="inline-check"><input type="checkbox" class="printer-watch" ${p.watch_failures ? 'checked' : ''}> Look at the camera now and then and warn me about a failed print</label>
         <p class="muted">Every two minutes while it prints, one picture goes to your own vision model (Settings, AI: local with a vision model). It only warns you and never stops the printer. A warning needs two bad looks in a row and the model can be wrong, so take it as a hint.</p>
+        <label class="inline-check"><input type="checkbox" class="printer-pause-watch" ${p.pause_on_failure ? 'checked' : ''} ${p.watch_failures ? '' : 'disabled'}> Also pause the print after three bad looks in a row</label>
         <div class="row"><button class="printer-watch-try">Ask the model about the picture now</button><span class="printer-watch-result muted"></span></div>
       </details>
       <details class="printer-plug"><summary>Smart plug${p.plug_kind ? ` (${esc(p.plug_kind)})` : ''}</summary>
@@ -3406,10 +3446,20 @@ $('#printers-list').addEventListener('click', async (e) => {
 });
 $('#printers-list').addEventListener('change', async (e) => {
   const row = e.target.closest('.printer-row');
-  if (!row || !e.target.classList.contains('printer-watch')) return;
+  if (!row) return;
   const out = row.querySelector('.printer-watch-result');
+  if (e.target.classList.contains('printer-pause-watch')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { pause_on_failure: e.target.checked });
+    if (!res.ok) { e.target.checked = !e.target.checked; out.textContent = await sourceErrorText(res); return; }
+    out.textContent = e.target.checked ? 'It will pause the print when it is sure enough.' : 'It will only tell you.';
+    return;
+  }
+  if (!e.target.classList.contains('printer-watch')) return;
   const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { watch_failures: e.target.checked });
   if (!res.ok) { e.target.checked = !e.target.checked; out.textContent = await sourceErrorText(res); return; }
+  const pause = row.querySelector('.printer-pause-watch');
+  pause.disabled = !e.target.checked;
+  if (!e.target.checked) pause.checked = false;
   out.textContent = e.target.checked ? 'Watching.' : 'Not watching.';
 });
 $('#send-go').addEventListener('click', async () => {
@@ -3679,7 +3729,11 @@ async function loadQueue() {
   $$('.queue-send').forEach(b => b.onclick = async () => {
     const start = confirm('Start printing as soon as the file arrives? (Cancel sends it without starting.) Check that the bed is clear.');
     b.disabled = true;
-    const res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start });
+    let res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start });
+    if (res.status === 409 && start) {
+      const detail = (await res.clone().json().catch(() => ({}))).detail || '';
+      if (detail.startsWith('Wait: ') && confirm(`${detail.slice(6)}.\n\nStart it anyway?`)) res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start, force: true });
+    }
     showNotice(res.ok ? (start ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.') : await sourceErrorText(res));
     loadQueue();
   });
@@ -4472,6 +4526,10 @@ $('#cal-status').addEventListener('click', async (e) => {
   if (await undoActivity(e.target.dataset.id)) { $('#cal-status').textContent = 'Undone.'; loadCalendar(); }
 });
 
+$('#stagger-save').addEventListener('click', async () => {
+  const ok = await saveSetting({ stagger_minutes: $('#stagger-minutes').value.trim(), max_printing: $('#max-printing').value.trim() });
+  $('#stagger-status').textContent = ok ? 'Saved.' : 'Could not save.';
+});
 $('#calendar-hours-save').addEventListener('click', async () => {
   const ok = await saveSetting({ calendar_hours_per_day: $('#calendar-hours').value.trim() });
   $('#calendar-hours-status').textContent = ok ? 'Saved.' : 'Could not save.';
@@ -4642,6 +4700,8 @@ async function loadSettings() {
   loadUsers();
   loadMqttSettings(s);
   $('#calendar-hours').value = s.calendar_hours_per_day || '';
+  $('#stagger-minutes').value = s.stagger_minutes || '';
+  $('#max-printing').value = s.max_printing || '';
   renderSharePanel('#library-share-panel', 'library', 0);
   loadVersion();
   loadTokens();

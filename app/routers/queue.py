@@ -303,6 +303,11 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
     if not kept or not path.is_file():
         raise HTTPException(400, "Keep a sliced G-code file with this model first (its page, Sliced files)")
     start = payload.get("start") is True
+    if start and payload.get("force") is not True:
+        from app import stagger
+        wait = stagger.reason_to_wait(session, printer)
+        if wait:
+            raise HTTPException(409, "Wait: " + wait)
     state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
     if not state["online"]:
         raise HTTPException(502, state.get("message") or "The printer cannot be reached")

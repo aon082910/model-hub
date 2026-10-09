@@ -20,6 +20,7 @@ PROMPT = ("You are watching a 3D printer's camera while it prints. Decide whethe
           "A normal print in progress, even a half-finished or messy-looking one, is NOT a failure. "
           'Reply ONLY with JSON: {"failed": true or false, "reason": "a few words"}')
 STRIKES_NEEDED = 2
+PAUSE_STRIKES = 3             # a pause (when asked for) needs one more bad look than a warning
 
 _state: dict = {}          # printer id -> {"strikes": int, "told": bool, "last": {...}}
 
@@ -68,10 +69,10 @@ def scheduled(session: Session) -> list:
     """Look at every watched printer that is printing. Returns the names of printers a warning was sent for."""
     warned = []
     for printer in session.exec(select(Printer).where(Printer.watch_failures.is_(True))).all():
-        state = _state.setdefault(printer.id, {"strikes": 0, "told": False, "last": None})
+        state = _state.setdefault(printer.id, {"strikes": 0, "told": False, "paused": False, "last": None})
         latest = printwatch.latest.get(printer.id) or {}
         if latest.get("state") != "printing":
-            state.update(strikes=0, told=False)                  # a new print starts with a clean slate
+            state.update(strikes=0, told=False, paused=False)                  # a new print starts with a clean slate
             continue
         try:
             result = check(session, printer)
@@ -86,4 +87,13 @@ def scheduled(session: Session) -> list:
             notify_event(session, "failure_suspected", f"Model Hub: {printer.name} may have a failed print",
                          f"The camera shows what looks like a failure ({result['reason'] or 'no reason given'}). {latest.get('file') or 'The print'} is at {latest.get('progress')}%. Please take a look.")
             warned.append(printer.name)
+        if printer.pause_on_failure and state["strikes"] >= PAUSE_STRIKES and not state["paused"]:
+            state["paused"] = True
+            try:
+                printing.control(printer.kind, printer.url, printer.api_key, printer.serial, "pause")
+                outcome = "It has been paused: check the print, then resume or cancel it from Model Hub."
+            except printing.PrinterError as e:
+                outcome = f"It could not be paused ({e}); please go and look."
+            notify_event(session, "failure_suspected", f"Model Hub: {printer.name} paused after a suspected failure" if outcome.startswith("It has") else f"Model Hub: {printer.name} still printing a suspected failure",
+                         f"Three looks in a row showed what seems to be a failure ({result['reason'] or 'no reason given'}). {outcome}")
     return warned

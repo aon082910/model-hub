@@ -19,7 +19,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
             "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
@@ -83,6 +83,15 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
         if payload["watch_failures"] and not snapshot:
             raise HTTPException(400, "Watching needs the printer's camera picture address first")
         out["watch_failures"] = payload["watch_failures"]
+        if not payload["watch_failures"]:
+            out["pause_on_failure"] = False
+    if "pause_on_failure" in payload:
+        if not isinstance(payload["pause_on_failure"], bool):
+            raise HTTPException(400, "pause_on_failure must be true or false")
+        watching = out["watch_failures"] if "watch_failures" in out else bool(existing and existing.watch_failures)
+        if payload["pause_on_failure"] and not watching:
+            raise HTTPException(400, "Switch watching on first: pausing is only done for a printer that is watched")
+        out["pause_on_failure"] = payload["pause_on_failure"]
     if "plug_kind" in payload or "plug_host" in payload:
         from app import plugs
         kind = payload["plug_kind"] if "plug_kind" in payload else (existing.plug_kind if existing else None)
@@ -226,11 +235,16 @@ def printer_status(printer_id: int, session: Session = Depends(get_session)):
 
 @router.post("/{printer_id}/send")
 def send(printer_id: int, file: Optional[UploadFile] = File(None), model_id: Optional[int] = Form(None),
-         print_file_id: Optional[int] = Form(None), start: bool = Form(False), infill: float = Form(0.15),
+         print_file_id: Optional[int] = Form(None), start: bool = Form(False), infill: float = Form(0.15), force: bool = Form(False),
          session: Session = Depends(get_session)):
     """Send a G-code file (uploaded), a sliced file kept with a model, or a model (sliced here first) to the printer.
     start=true also starts the print."""
     printer = _get(session, printer_id)
+    if start and not force:
+        from app import stagger
+        wait = stagger.reason_to_wait(session, printer)
+        if wait:
+            raise HTTPException(409, "Wait: " + wait + ". Send it without starting and start it on the printer, or change the limit in Settings")
     if file is None and model_id is None and print_file_id is None:
         raise HTTPException(400, "Choose a G-code file, a kept sliced file, or a model to slice")
     if not (0.0 <= infill <= 1.0):

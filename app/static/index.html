@@ -695,6 +695,10 @@
       <p class="muted">How many hours a day each printer may run. The calendar warns about days that need more than your printers have, and plans waiting prints into days with room.</p>
       <div class="row"><input id="calendar-hours" type="number" min="1" max="24" step="0.5" placeholder="12" aria-label="Hours per printer per day">
         <button id="calendar-hours-save">Save</button><span id="calendar-hours-status" class="muted"></span></div>
+      <p class="muted">Keep the power supply from being hit at once (both off when empty). They apply when Model Hub is asked to start a print; you can always start anyway.</p>
+      <div class="row"><label>Minutes between starts <input id="stagger-minutes" type="number" min="0" max="240" step="1" placeholder="0"></label>
+        <label>Most printers printing at once <input id="max-printing" type="number" min="0" max="50" step="1" placeholder="no limit"></label>
+        <button id="stagger-save">Save</button><span id="stagger-status" class="muted"></span></div>
     </div>
 
     <h2>Share the whole library</h2>

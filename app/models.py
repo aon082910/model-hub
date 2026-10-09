@@ -293,6 +293,7 @@ class Printer(SQLModel, table=True):
     bed_z: Optional[float] = None
     plug_kind: Optional[str] = None      # a smart plug that measures its power: tasmota or shelly
     plug_host: Optional[str] = None      # its address on your network
+    pause_on_failure: Optional[bool] = None   # with watching on: pause the print after three bad looks in a row
     watch_failures: Optional[bool] = None   # look at its camera now and then for a failing print (needs a camera and a local vision model)
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes

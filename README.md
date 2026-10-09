@@ -225,8 +225,7 @@ farms with limited power.
 
 **Research for versions 2.16 to 2.19:** I asked what else people want from a self-hosted 3D-print library and what other tools are praised for, and built the
 ones that fit this program: every spool of a multicolour print, pause/resume/cancel, bed sizes and "will it fit", off-site backups, a cost calculator, orders for people who sell prints, choosing the printer, Spoolman, watching a camera for a failed print (with your own local vision model,
-not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models and collection covers. Looked at and left for later: NFC tags for spools (the QR labels do the job from a phone camera),
-staggered starts for farms with limited power, and automatic pausing when the camera sees a failure (a wrong guess would ruin a good print, so it only tells you). More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
+not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models, collection covers, NFC tags for spools, staggered starts with a power limit, and an optional pause when the camera sees a failure (it never cancels, because a wrong guess would ruin a good print). More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
 their models are mostly made for screens, not for printing, or need an account or a key, so none was added.
 
 Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
@@ -528,6 +527,21 @@ A waiting print with no printer shows the printer that suits it best and why: it
 On a printer's card, **Camera**, tick *Look at the camera now and then*. While that printer is printing, every two minutes one picture goes to your own **local vision model** (Settings, AI mode *local*, the vision model you set; nothing goes to a paid service), which says whether the print
 looks failed (loose strings, a part knocked off, a blob). Two bad looks in a row send one **A camera thinks a print may have failed** notification (and not again for that print). It only tells you; it never pauses or stops a printer. A vision model can be wrong both ways, so it is a hint.
 **Ask the model about the picture now** tests it. It is off for every printer until you switch it on, and needs the camera picture address.
+
+### Pausing a suspected failure
+
+Under the watching switch, *Also pause the print after three bad looks in a row* lets Model Hub pause the print (Klipper, OctoPrint or Bambu), never cancel it. The warning still comes after two bad looks; the pause after a third, six minutes in, and you are told it
+was paused (or that it could not be, and why). Resume or cancel from the printer card once you have looked. It is off by default and can only be switched on for a printer that is watched; a vision model can be wrong, so a pause costs you a click, never a print.
+
+## Staggered starts and a power limit
+
+**Settings → Print planning** has two limits for farms on a small supply, both off until set: *Minutes between starts* (a print cannot be started within that time of another printer's start) and *Most printers printing at once*. They apply when Model Hub is asked to start a print (the queue's *Send*, or
+*Send to printer* with start ticked): it says why it is waiting and, from the queue, asks whether to start anyway; you are always allowed to. Sending a file without starting it, and prints you start on the printer itself, are not affected.
+
+## NFC tags on spools
+
+On a phone that has NFC and runs Chrome (Android), over https, the Filament page gets an *NFC tag* button on each spool, which writes the spool's link to a blank NFC tag, and a *Scan a spool tag* button that opens the spool when you hold a tag to the phone. The tag only holds the link
+(like the QR labels), so it works for any phone with the app installed and nothing is lost if a tag is damaged. iPhones and other browsers do not offer the buttons.
 
 ## Is the mesh sound, and repairing it
 
