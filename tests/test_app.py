@@ -45,7 +45,7 @@ def test_health(client):
 
 def test_not_configured_initially(client):
     r = client.get("/api/auth/status")
-    assert r.json() == {"configured": False}
+    assert r.json()["configured"] is False and r.json()["sso"] is False
 
 
 def test_protected_endpoint_blocked_before_login(client):
@@ -63,7 +63,7 @@ def test_setup_rejects_short_password(client):
 def test_setup_creates_account(client):
     r = client.post("/api/auth/setup", json={"username": "admin", "password": ADMIN_PASSWORD})
     assert r.status_code == 200
-    assert client.get("/api/auth/status").json() == {"configured": True}
+    assert client.get("/api/auth/status").json()["configured"] is True
 
 
 def test_setup_twice_rejected(client):

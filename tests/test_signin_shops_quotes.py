@@ -441,7 +441,7 @@ def test_a_shop_order_becomes_one_order_and_is_never_made_twice(authed, tidy):
     m = _model(authed, "shopbenchy_%s.stl" % uuid.uuid4().hex[:5])
     sku = m["filename"].rsplit(".", 1)[0]
     with Session(engine) as s:
-        report = shop_orders.ingest(s, [shop_orders.from_woocommerce(_woo(2001, sku)), shop_orders.from_woocommerce(_woo(2002, "", "A thing nobody has"))], "WooCommerce")
+        report = shop_orders.ingest(s, [shop_orders.from_woocommerce(_woo(2001, sku)), shop_orders.from_woocommerce(_woo(2002, "", "Zzqx unmatchable gadget"))], "WooCommerce")
         assert [o["order"] for o in report["orders"]] == ["woo-2001", "woo-2002"] and report["matched"] == 1 and report["lines"] == 2
         again = shop_orders.ingest(s, [shop_orders.from_woocommerce(_woo(2001, sku))], "WooCommerce")
         assert again["orders"] == [] and again["skipped"] == ["woo-2001"]
