@@ -517,6 +517,36 @@ A waiting print with no printer shows the printer that suits it best and why: it
 **Settings → Spoolman**: enter its address (like `http://192.168.1.20:7912`). **Import** brings its spools in (once each; a later import refreshes the remaining weight), **Send mine to it** creates Model Hub's spools there (a vendor, a filament and a spool each, once each), and with
 *Report each print's grams* ticked every finished print also tells Spoolman how much it used, so both keep the same count (do not also let a printer report usage to Spoolman, or it is counted twice). Nothing is deleted on either side.
 
+## Watching a camera for a failed print
+
+On a printer's card, **Camera**, tick *Look at the camera now and then*. While that printer is printing, every two minutes one picture goes to your own **local vision model** (Settings, AI mode *local*, the vision model you set; nothing goes to a paid service), which says whether the print
+looks failed (loose strings, a part knocked off, a blob). Two bad looks in a row send one **A camera thinks a print may have failed** notification (and not again for that print). It only tells you; it never pauses or stops a printer. A vision model can be wrong both ways, so it is a hint.
+**Ask the model about the picture now** tests it. It is off for every printer until you switch it on, and needs the camera picture address.
+
+## Is the mesh sound, and repairing it
+
+A model's page has **Mesh check**: it looks for open edges (holes), edges shared by more than two faces, flipped or inside-out faces, zero-area and duplicate faces and separate pieces, and says so in plain words. If something can be fixed, **Make a repaired copy** merges duplicates, turns
+faces the right way and fills holes flat, saves the result as a new STL next to the original (never replacing it) and groups the two as versions (*original* and *repaired*). It cannot repair what needs design judgement, such as a model that is not really solid. STEP files cannot be checked.
+
+## Sharing a file to Model Hub from your phone
+
+With Model Hub installed on your phone (see *On your phone*), **Share** on an STL, 3MF, OBJ, STEP, FBX or ZIP file offers *Model Hub*, which puts it in the library and opens it (up to 10 files at once). It needs the signed-in account to be allowed to add models, and works on Android
+and any browser that supports installed-app sharing; iPhones do not offer this, so use the browser extension or the Import button there.
+
+## Creators
+
+**Creators** lists everyone named as a model's designer (set automatically when a model is linked to a listing, or by hand), with how many models of theirs you have and how much space they take. Opening one shows their models, how many you have printed, which sites they came from and the
+licences. A model's page links to *More by* its designer.
+
+## Drying spools
+
+On **Filament**, *opened* and *dried* note the date on a spool. Each material has a rule of thumb (PLA 90 days, PETG, ABS and ASA 60, TPU 30, PC 14, nylon and PA 7, PVA 3, others 90); the spool shows how long ago, *drying due in N days*, or *due for drying*. Once a day, a spool that is **loaded in a printer** and
+due sends one **A spool in a printer is due for drying** notification (and again only after it was dried and became due once more). These are general guides: some brands need more or less.
+
+## Storage
+
+**Settings → Storage** shows where the disk space goes: the library by file type, the biggest models, the space taken by duplicates, Model Hub's own folders (thumbnails, source pictures, print photos, kept sliced files, backups, downloads) and the database, and the free space on both disks.
+
 ## Multicolour prints
 
 A kept sliced file (a sliced `.3mf` from Bambu Studio or Orca, or G-code from PrusaSlicer or OrcaSlicer) lists every filament it uses, with its type, colour and grams. On a waiting queue entry, **colours** shows them and lets you say which
@@ -618,6 +648,8 @@ One timer runs in the background (it wakes every half minute and runs whatever i
 | Printers | every 30 seconds | see below |
 | Planned prints that the spools cannot cover | every 6 hours | notification only; Settings → Notifications has a switch |
 | MQTT / Home Assistant | every 30 seconds, only if a broker is set | Settings → Home Assistant and MQTT |
+| Cameras of printers you chose to watch | every 2 minutes, only while that printer is printing | printer card → Camera; needs a local vision model; notification only |
+| Spools in a printer due for drying | daily | Filament → opened / dried; notification only |
 
 **Printer finished:** when a printer that was printing stops, Model Hub notices (Klipper reports *complete*; for OctoPrint a print that ended at 100% counts as finished).
 If the file was one Model Hub sent for a model, the print is recorded for that model: the waiting print-queue entry is completed (which takes the filament off the spool) or, with no
@@ -625,7 +657,7 @@ queue entry, a print-log entry with the print time is written. A cancelled or fa
 restarting is not noticed (the state is kept in memory).
 
 **Notifications** go to the webhook you set (ntfy, Discord, Slack...). **Settings → Notifications** has a *Send a test message* button and a switch for every kind: new files, AI tagging finished,
-new uploads, listing changes, low stock, print finished or stopped, backup failed.
+new uploads, listing changes, low stock, print finished or stopped, backup failed, a camera thinking a print failed, a spool due for drying.
 
 ## Auth
 

@@ -108,6 +108,8 @@ class Filament(SQLModel, table=True):
     notes: Optional[str] = None
     cost: Optional[float] = None   # what the spool cost; with spool_weight_g it gives the price per gram
     external_id: Optional[str] = None   # the same spool elsewhere, like "spoolman:12"
+    opened_at: Optional[datetime] = None    # when the spool was opened, for the drying reminder
+    dried_at: Optional[datetime] = None     # when it was last dried
 
 
 class QueueItem(SQLModel, table=True):
@@ -287,6 +289,7 @@ class Printer(SQLModel, table=True):
     bed_x: Optional[float] = None        # its print bed in mm, for the "will it fit" checks
     bed_y: Optional[float] = None
     bed_z: Optional[float] = None
+    watch_failures: Optional[bool] = None   # look at its camera now and then for a failing print (needs a camera and a local vision model)
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
     created_at: datetime = Field(default_factory=datetime.utcnow)

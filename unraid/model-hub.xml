@@ -38,8 +38,18 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Date>2026-10-08</Date>
+  <Date>2026-10-09</Date>
   <Changes>
+### 2.18.0
+A printer's camera can be watched for a failed print by your own local vision
+model (off until you switch it on; it only tells you, it never stops a
+printer). A model's page has a mesh check and can make a repaired copy (holes
+filled, faces turned the right way) as a new version. Share a model file to
+Model Hub from your phone's share menu. A Creators page lists everyone who
+designed something in your library. Spools loaded in a printer remind you when
+they are due for drying. Settings shows where your disk space goes. No new
+settings are required; new columns are added automatically on first start.
+
 ### 2.17.0
 New Orders tab for prints made for other people (customers, due dates, prices,
 progress from the queue, profit, spreadsheet export). A cost calculator on each

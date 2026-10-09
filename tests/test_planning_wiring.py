@@ -91,3 +91,13 @@ def test_stage_17_controls_are_in_the_page():
         assert f'id="{element}"' in HTML, element
     assert "/api/costs/quote" in JS and "renderCostPanel" in JS and "/api/orders" in JS and "order-queue" in JS
     assert "/api/queue/suggestions" in JS and "queue-assign-all" in JS and "/api/spoolman/" in JS
+
+
+def test_stage_18_controls_are_in_the_page():
+    assert 'data-tab="creators"' in HTML and 'id="tab-creators"' in HTML and re.search(r"creators:\s*\(\)\s*=>\s*loadCreators\(''\)", JS)
+    for element in ("creators-q", "creators-body", "model-health-panel", "storage-body", "storage-refresh"):
+        assert f'id="{element}"' in HTML, element
+    assert "/api/creators" in JS and "/api/storage" in JS and "loadStorage" in JS
+    assert "renderHealthPanel" in JS and "/health" in JS and "/repair" in JS
+    assert "printer-watch" in JS and "watch-test" in JS and "watch_failures" in JS
+    assert "fil-dried" in JS and "fil-opened" in JS and "/api/filament/drying/overview" in JS

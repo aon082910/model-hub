@@ -19,7 +19,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial,
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures),
             "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
@@ -76,6 +76,13 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
             out["snapshot_url"] = printing.clean_snapshot_url(payload["snapshot_url"])
         except printing.PrinterError as e:
             raise HTTPException(400, str(e))
+    if "watch_failures" in payload:
+        if not isinstance(payload["watch_failures"], bool):
+            raise HTTPException(400, "watch_failures must be true or false")
+        snapshot = out.get("snapshot_url") if "snapshot_url" in out else (existing.snapshot_url if existing else None)
+        if payload["watch_failures"] and not snapshot:
+            raise HTTPException(400, "Watching needs the printer's camera picture address first")
+        out["watch_failures"] = payload["watch_failures"]
     if "api_key" in payload:                       # "" clears it; leaving it out keeps the current one
         key = payload["api_key"]
         if key is not None and not isinstance(key, str):
@@ -167,6 +174,17 @@ def control_printer(printer_id: int, payload: dict, request: Request, session: S
         raise HTTPException(502, str(e))
     activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: {action} sent" + (f" ({state['file']})" if state.get("file") else ""))
     return {"status": "sent", "action": action, "was": state["state"]}
+
+
+@router.post("/{printer_id}/watch-test")
+def watch_test(printer_id: int, session: Session = Depends(get_session)):
+    """Take one picture from the camera and ask the vision model about it now (nothing is sent to you or the printer)."""
+    from app import failure_watch
+    printer = _get(session, printer_id)
+    try:
+        return failure_watch.check(session, printer)
+    except failure_watch.WatchError as e:
+        raise HTTPException(502, str(e))
 
 
 @router.get("/{printer_id}/status")

@@ -68,7 +68,7 @@ const TAB_LOADERS = {
   library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(), activity: () => loadActivity(),
   collections: () => { loadRules(); return loadCollections(); }, projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
-  queue: () => loadQueue(), orders: () => loadOrders(), calendar: () => loadCalendar(), settings: () => loadSettings(),
+  queue: () => loadQueue(), orders: () => loadOrders(), creators: () => loadCreators(''), calendar: () => loadCalendar(), settings: () => loadSettings(),
 };
 
 function showSection(sectionId, activeTab) {
@@ -102,6 +102,11 @@ function route() {
   if (listing) {
     showSection('page-listing', 'search');
     return openListingPage(listing[1], listing[2], token);
+  }
+  const creator = hash.match(/^#\/creators(?:\/(.*))?$/);
+  if (creator) {
+    showSection('tab-creators', 'creators');
+    return loadCreators(creator[1] ? decodeURIComponent(creator[1]) : '');
   }
   const detail = hash.match(/^#\/(model|project)\/(\d+)$/);
   if (detail && detail[1] === 'model') {
@@ -547,6 +552,7 @@ function renderModelPage(model) {
   renderPrintSettings(model);
   renderSlicerPanel(model);
   renderCostPanel(model);
+  renderHealthPanel(model);
   renderVersions(model);
   renderSlicedFiles(model);
   renderSharePanel('#model-share-panel', 'model', model.id);
@@ -593,6 +599,37 @@ async function renderCostPanel(model) {
   };
   panel.querySelectorAll('input, select').forEach(el => el.addEventListener('change', run));
   run();
+}
+
+// ---------- Is the mesh sound, and a repaired copy ----------
+function renderHealthPanel(model) {
+  const panel = $('#model-health-panel');
+  if (!panel) return;
+  const meshy = ['.stl', '.3mf', '.obj', '.fbx'].includes(model.extension);
+  const more = model.designer ? `<p><a href="#/creators/${encodeURIComponent(model.designer)}">More by ${esc(model.designer)}</a></p>` : '';
+  panel.innerHTML = `<h3>Mesh check</h3>` + (meshy ? `<p class="muted">Looks for holes, flipped or duplicate faces and other things that make a slicer print a model wrongly. A repair makes a new copy next to this one (never replacing it) and groups the two as versions.</p>
+    <div class="row"><button id="health-check">Check it</button><button id="health-repair" class="hidden">Make a repaired copy</button><span id="health-msg" class="muted"></span></div>
+    <div id="health-result"></div>` : '<p class="muted">Only STL, 3MF, OBJ and FBX meshes can be checked.</p>') + more;
+  if (!meshy) return;
+  const msg = $('#health-msg');
+  $('#health-check').onclick = async () => {
+    msg.textContent = 'Checking...';
+    const res = await fetch(`/api/library/models/${model.id}/health`);
+    if (!res.ok) { msg.textContent = await sourceErrorText(res); return; }
+    const h = await res.json();
+    msg.textContent = '';
+    $('#health-result').innerHTML = (h.ok === true ? '<p><b>Looks sound.</b></p>' : h.ok === false ? '<p><b>Problems found:</b></p>' : '')
+      + (h.issues.length ? `<ul class="issue-list">${h.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '')
+      + `<p class="muted">${Number(h.faces).toLocaleString()} faces.</p>`;
+    $('#health-repair').classList.toggle('hidden', !h.fixable);
+  };
+  $('#health-repair').onclick = async () => {
+    msg.textContent = 'Repairing...';
+    const res = await fetch(`/api/library/models/${model.id}/repair`, { method: 'POST' });
+    if (!res.ok) { msg.textContent = await sourceErrorText(res); return; }
+    const d = await res.json();
+    location.hash = `#/model/${d.model.id}`;
+  };
 }
 
 // ---------- Open a model in a slicer on this computer ----------
@@ -3113,18 +3150,27 @@ $('#add-smart-btn').addEventListener('click', async () => {
 });
 
 // ---------- Filament ----------
+function dryingText(d) {
+  if (!d) return '';
+  const age = d.days_since === 0 ? 'today' : `${d.days_since} day${d.days_since === 1 ? '' : 's'} ago`;
+  if (d.status === 'due') return `<br><small class="dry-due">Due for drying (${age}; every ${d.every_days} days for this material)</small>`;
+  if (d.status === 'soon') return `<br><small class="muted">Drying due in ${d.days_left} day${d.days_left === 1 ? '' : 's'} (last opened or dried ${age})</small>`;
+  return `<br><small class="muted">Opened or dried ${age}</small>`;
+}
+
 async function loadFilament() {
   const items = await (await fetch('/api/filament')).json();
   const loadedIn = {};
+  const dry = await fetch('/api/filament/drying/overview').then(r => (r.ok ? r.json() : {}));
   const slotInfo = await fetch('/api/slots').then(r => (r.ok ? r.json() : { printers: [] }));
   for (const p of slotInfo.printers) for (const sl of p.slots) if (sl.filament_id) loadedIn[sl.filament_id] = `${p.name} slot ${sl.slot}${sl.label ? ' (' + sl.label + ')' : ''}`;
   $('#filament-table tbody').innerHTML = items.map(f => `
     <tr data-id="${f.id}">
-      <td>${f.material}</td><td>${f.brand || ''}</td><td>${f.color || ''}${loadedIn[f.id] ? `<br><small class="muted">loaded in ${esc(loadedIn[f.id])}</small>` : ''}</td>
+      <td>${f.material}</td><td>${f.brand || ''}</td><td>${f.color || ''}${loadedIn[f.id] ? `<br><small class="muted">loaded in ${esc(loadedIn[f.id])}</small>` : ''}${dryingText(dry[f.id])}</td>
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
       <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
         ${f.cost != null && f.spool_weight_g ? `<small class="muted">$${(f.cost / f.spool_weight_g * 1000).toFixed(2)}/kg</small>` : ''}</td>
-      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="del-fil">delete</button></td>
+      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="fil-opened" title="Note that this spool was opened today">opened</button> <button data-id="${f.id}" class="fil-dried" title="Note that this spool was dried today">dried</button> <button data-id="${f.id}" class="del-fil">delete</button></td>
     </tr>
     <tr class="fil-history-row hidden" data-for="${f.id}"><td colspan="6"></td></tr>`).join('');
   if (!$('#fil-labels-link')) $('#filament-table').insertAdjacentHTML('beforebegin', '<p><a id="fil-labels-link" class="button-link" href="#/labels/filament">Print QR labels for spools</a></p>');
@@ -3143,6 +3189,9 @@ async function loadFilament() {
       : '<div class="muted">No prices recorded yet. Set a price on the spool to start the history.</div>';
     row.classList.remove('hidden');
   });
+  for (const [cls, action] of [['.fil-opened', 'opened'], ['.fil-dried', 'dried']]) {
+    $$(cls).forEach(b => b.onclick = async () => { await fetch(`/api/filament/${b.dataset.id}/${action}`, { method: 'POST' }); loadFilament(); });
+  }
   $$('.del-fil').forEach(b => b.onclick = async () => { await fetch(`/api/filament/${b.dataset.id}`, { method: 'DELETE' }); loadFilament(); });
 }
 $('#add-filament-btn').addEventListener('click', async () => {
@@ -3210,6 +3259,9 @@ async function loadPrinters() {
         <div class="row"><input class="printer-snapshot-url" value="${esc(p.snapshot_url || '')}" placeholder="http://192.168.1.60/webcam/?action=snapshot" aria-label="Camera picture address">
           <button class="printer-snapshot-save">Save</button><button class="printer-snapshot-try">Take a picture now</button></div>
         <div class="printer-snapshot-result muted"></div>
+        <label class="inline-check"><input type="checkbox" class="printer-watch" ${p.watch_failures ? 'checked' : ''}> Look at the camera now and then and warn me about a failed print</label>
+        <p class="muted">Every two minutes while it prints, one picture goes to your own vision model (Settings, AI: local with a vision model). It only warns you and never stops the printer. A warning needs two bad looks in a row and the model can be wrong, so take it as a hint.</p>
+        <div class="row"><button class="printer-watch-try">Ask the model about the picture now</button><span class="printer-watch-result muted"></span></div>
       </details>
     </div>`).join('') : '<p class="muted">No printers yet.</p>';
   $('#send-printer').innerHTML = printerInfo.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
@@ -3274,10 +3326,27 @@ $('#printers-list').addEventListener('click', async (e) => {
     out.innerHTML = `<img src="${url}" alt="Picture from the printer camera" style="max-width:320px;border-radius:6px">`;
     return;
   }
+  if (row && e.target.classList.contains('printer-watch-try')) {
+    const out = row.querySelector('.printer-watch-result');
+    out.textContent = 'Asking... (a local model can take a minute)';
+    const res = await fetch(`/api/printers/${row.dataset.id}/watch-test`, { method: 'POST' });
+    if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+    const d = await res.json();
+    out.textContent = d.failed ? `It thinks the print has failed: ${d.reason || 'no reason given'}` : `It thinks the print is fine${d.reason ? ': ' + d.reason : ''}.`;
+    return;
+  }
   if (!e.target.classList.contains('printer-delete')) return;
   if (!confirm('Remove this printer from Model Hub? (The printer itself is not touched.)')) return;
   await fetch(`/api/printers/${e.target.closest('.printer-row').dataset.id}`, { method: 'DELETE' });
   loadPrinters();
+});
+$('#printers-list').addEventListener('change', async (e) => {
+  const row = e.target.closest('.printer-row');
+  if (!row || !e.target.classList.contains('printer-watch')) return;
+  const out = row.querySelector('.printer-watch-result');
+  const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { watch_failures: e.target.checked });
+  if (!res.ok) { e.target.checked = !e.target.checked; out.textContent = await sourceErrorText(res); return; }
+  out.textContent = e.target.checked ? 'Watching.' : 'Not watching.';
 });
 $('#send-go').addEventListener('click', async () => {
   const file = $('#send-file').files[0];
@@ -3579,6 +3648,34 @@ async function loadQueue() {
 }
 
 // ---------- Settings ----------
+// ---------- Creators ----------
+async function loadCreators(name) {
+  const body = $('#creators-body');
+  if (name) return loadCreator(name);
+  $('#creators-q').parentElement.classList.remove('hidden');
+  const res = await fetch('/api/creators?q=' + encodeURIComponent($('#creators-q').value.trim()));
+  if (!res.ok) { body.innerHTML = `<p class="error-text">${esc(await sourceErrorText(res))}</p>`; return; }
+  const list = (await res.json()).creators;
+  body.innerHTML = list.length ? list.map(c => `<div class="creator-row"><a href="#/creators/${encodeURIComponent(c.name)}"><b>${esc(c.name)}</b></a>
+      <span class="muted">${c.models} model${c.models === 1 ? '' : 's'} &middot; ${formatBytes(c.size_bytes)}</span></div>`).join('')
+    : '<p class="muted">No model names a designer yet. Models imported from a listing get one automatically; you can also set it on a model.</p>';
+}
+$('#creators-q').addEventListener('input', debounce(() => { if ((location.hash || '').startsWith('#/creators')) loadCreators(''); }, 300));
+
+async function loadCreator(name) {
+  const body = $('#creators-body');
+  $('#creators-q').parentElement.classList.add('hidden');
+  const res = await fetch('/api/creators/detail?name=' + encodeURIComponent(name));
+  if (!res.ok) { body.innerHTML = `<p><a href="#/creators">All creators</a></p><p class="error-text">${esc(await sourceErrorText(res))}</p>`; return; }
+  const d = await res.json();
+  body.innerHTML = `<p><a href="#/creators">All creators</a></p><h3>${esc(d.name)}</h3>
+    <p class="muted">${d.total} model${d.total === 1 ? '' : 's'} here &middot; ${d.printed} printed (${d.prints} print${d.prints === 1 ? '' : 's'} in all) &middot; ${formatBytes(d.size_bytes)}
+      ${d.providers.length ? ' &middot; from ' + d.providers.map(p => `${esc(PROVIDER_LABELS[p.provider] || p.provider)} (${p.models})`).join(', ') : ''}
+      ${d.licenses.length ? ' &middot; licences: ' + d.licenses.map(esc).join(', ') : ''}</p>
+    <div class="creator-models">${d.models.map(m => `<a href="#/model/${m.id}">${m.thumbnail_path ? `<img src="/api/library/thumbnails/${esc(m.thumbnail_path)}" alt="" loading="lazy">` : '<img alt="">'}<span>${esc(m.filename)}</span></a>`).join('')}</div>
+    ${d.total > d.models.length ? `<p class="muted">Showing the first ${d.models.length}.</p>` : ''}`;
+}
+
 // ---------- Following designers ----------
 async function refreshFollowBadge() {
   const res = await fetch('/api/designers');
@@ -4423,7 +4520,24 @@ async function makeStepThumbnails() {
 }
 $('#step-thumbs-btn').addEventListener('click', makeStepThumbnails);
 
+async function loadStorage() {
+  const body = $('#storage-body');
+  const res = await fetch('/api/storage');
+  if (!res.ok) { body.textContent = await sourceErrorText(res); return; }
+  const d = await res.json();
+  const top = Math.max(1, d.database_bytes, ...d.by_type.map(t => t.bytes), ...d.folders.map(f => f.bytes));
+  const bar = (label, bytes, note) => `<div class="bar-row"><span>${esc(label)}</span><span><span class="bar" style="display:block;width:${Math.max(1, Math.round(bytes / top * 100))}%"></span></span><span>${formatBytes(bytes)}${note ? ` <small class="muted">${note}</small>` : ''}</span></div>`;
+  const disk = x => (x.total ? `${formatBytes(x.free)} free of ${formatBytes(x.total)}` : 'unknown');
+  body.innerHTML = `<p><b>${d.models}</b> models, <b>${formatBytes(d.library_bytes)}</b> in the library &middot; library disk: ${disk(d.library_disk)} &middot; Model Hub's own disk: ${disk(d.config_disk)}</p>
+    <h4>Library by file type</h4>${d.by_type.map(t => bar(t.extension, t.bytes, `${t.models} model${t.models === 1 ? '' : 's'}`)).join('')}
+    <h4>Model Hub's own folders</h4>${d.folders.map(f => bar(f.name, f.bytes)).join('')}${bar('database', d.database_bytes)}
+    <p class="muted">${d.duplicates.models ? `${d.duplicates.models} model${d.duplicates.models === 1 ? ' is a duplicate' : 's are duplicates'} taking ${formatBytes(d.duplicates.bytes)}: see the Duplicates page.` : 'No duplicate files.'}</p>
+    <h4>Biggest models</h4>${d.biggest.map(b => `<div class="creator-row"><a href="#/model/${b.id}">${esc(b.filename)}</a><span class="muted">${formatBytes(b.bytes || 0)}</span></div>`).join('')}`;
+}
+$('#storage-refresh').addEventListener('click', loadStorage);
+
 async function loadSettings() {
+  loadStorage();
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
   $('#ollama-host').value = s.ollama_host || '';

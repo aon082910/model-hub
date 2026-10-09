@@ -334,6 +334,65 @@ def estimate_model_print(
     return estimate_print(model, full_path, material=material, infill=infill)
 
 
+@router.get("/models/{model_id}/health")
+def model_health(model_id: int, session: Session = Depends(get_session)):
+    """Is this model's mesh sound enough to print (holes, flipped faces, duplicates...)? Checked in the mesh worker."""
+    from app import mesh_worker
+    model = session.get(Model3D, model_id)
+    if not model:
+        raise HTTPException(404, "Model not found")
+    path = LIBRARY_PATH / model.path
+    if model.extension not in MESH_EXTENSIONS:
+        raise HTTPException(400, "Only STL, 3MF, OBJ and FBX meshes can be checked (not STEP)")
+    if not path.is_file():
+        raise HTTPException(404, "File missing on disk")
+    pool = mesh_worker.scan_worker_pool()
+    try:
+        return pool.run(mesh_worker.health_file, str(path), pool.budget_bytes)
+    except mesh_worker.MeshWorkerError as e:
+        raise HTTPException(502, f"The check could not be done ({e})")
+    except Exception as e:
+        raise HTTPException(502, f"The check could not be done ({e.__class__.__name__}: {str(e)[:120]})")
+
+
+@router.post("/models/{model_id}/repair")
+def repair_model(model_id: int, session: Session = Depends(get_session)):
+    """Make a repaired copy next to the original (never replacing it) and group the two as versions."""
+    import tempfile
+    from app import families, mesh_worker
+    from app.scanner import import_model_from_path
+    model = session.get(Model3D, model_id)
+    if not model:
+        raise HTTPException(404, "Model not found")
+    path = LIBRARY_PATH / model.path
+    if model.extension not in MESH_EXTENSIONS:
+        raise HTTPException(400, "Only STL, 3MF, OBJ and FBX meshes can be repaired (not STEP)")
+    if not path.is_file():
+        raise HTTPException(404, "File missing on disk")
+    pool = mesh_worker.scan_worker_pool()
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / f"{path.stem} (repaired).stl"
+        try:
+            report = pool.run(mesh_worker.repair_file, str(path), str(out), pool.budget_bytes)
+        except Exception as e:
+            raise HTTPException(502, f"The repair could not be done ({str(e)[:140]})")
+        try:
+            copy = import_model_from_path(session, out, path.parent, out.name, source_url=model.source_url, designer=model.designer, license=model.license)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    families.group(session, [model.id, copy.id])
+    session.refresh(copy)
+    session.refresh(model)
+    copy.version_label = "repaired"
+    if not model.version_label:
+        model.version_label = "original"
+    session.add(copy)
+    session.add(model)
+    session.commit()
+    session.refresh(copy)
+    return {"model": copy.model_dump(exclude={"embedding"}), "before": report["before"], "after": report["after"]}
+
+
 @router.get("/thumbnails/{filename}")
 def get_thumbnail(filename: str):
     path = THUMB_DIR / filename

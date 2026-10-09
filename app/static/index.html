@@ -25,6 +25,7 @@
       <button data-tab="search">Search</button>
       <button data-tab="wishlist">Wishlist</button>
       <button data-tab="following">Following</button>
+      <button data-tab="creators">Creators</button>
       <button data-tab="collections">Collections</button>
       <button data-tab="projects">Projects</button>
       <button data-tab="supplies">Supplies</button>
@@ -434,6 +435,13 @@
     <div id="orders-list"></div>
   </section>
 
+  <section id="tab-creators" class="tab">
+    <h2>Creators</h2>
+    <p class="muted">Everyone named as the designer of a model in your library, with what you have of theirs. Open a creator to see their models and where they came from.</p>
+    <div class="row"><input id="creators-q" placeholder="Find a creator" aria-label="Find a creator"></div>
+    <div id="creators-body"></div>
+  </section>
+
   <section id="tab-stats" class="tab">
     <h2>Stats</h2>
     <div class="row"><label>Show the last
@@ -610,6 +618,13 @@
       <button id="regen-key-btn">Regenerate Key</button>
     </div>
 
+    <h2>Storage</h2>
+    <div class="settings-form">
+      <p class="muted">Where the disk space goes: the library by file type, the biggest models, duplicates, and Model Hub's own folders.</p>
+      <div id="storage-body" class="muted">Loading...</div>
+      <div class="row"><button id="storage-refresh">Refresh</button></div>
+    </div>
+
     <h2>Backup</h2>
     <div class="settings-form">
       <p class="muted">A backup holds everything Model Hub knows apart from the model files themselves: tags, collections, projects, supplies,
@@ -762,6 +777,7 @@
         <div class="panel" id="model-links-panel"></div>
         <div class="panel" id="model-slicer-panel"></div>
         <div class="panel" id="model-cost-panel"></div>
+        <div class="panel" id="model-health-panel"></div>
         <div class="panel" id="model-prints-panel"></div>
         <div class="panel admin-only hidden" id="model-printer-panel"></div>
       </div>

@@ -24,6 +24,8 @@ EVENTS = {
     "low_stock": "A spool or supply is running low",
     "plan_short": "A planned print needs more filament than you have",
     "maintenance_due": "A printer needs maintenance",
+    "failure_suspected": "A camera thinks a print may have failed",
+    "dry_due": "A spool in a printer is due for drying",
     "weekly_summary": "The weekly summary (only sent if you switch it on)",
     "print_done": "A printer finished a print",
     "backup_failed": "A scheduled backup failed",

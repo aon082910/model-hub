@@ -49,6 +49,43 @@ def _note_price(session: Session, f: Filament) -> None:
         session.commit()
 
 
+@router.get("/drying/overview")
+def drying_overview(session: Session = Depends(get_session)):
+    """{spool id: how dry it should be} for spools that have an opened or dried date."""
+    from app import drying
+    return {str(k): v for k, v in drying.overview(session).items()}
+
+
+@router.post("/{filament_id}/dried")
+def mark_dried(filament_id: int, session: Session = Depends(get_session)):
+    """The spool was dried now."""
+    from datetime import datetime
+    from app import drying
+    f = session.get(Filament, filament_id)
+    if not f:
+        raise HTTPException(404, "Not found")
+    f.dried_at = datetime.utcnow()
+    session.add(f)
+    session.commit()
+    session.refresh(f)
+    return drying.describe(f)
+
+
+@router.post("/{filament_id}/opened")
+def mark_opened(filament_id: int, session: Session = Depends(get_session)):
+    """The spool was opened now."""
+    from datetime import datetime
+    from app import drying
+    f = session.get(Filament, filament_id)
+    if not f:
+        raise HTTPException(404, "Not found")
+    f.opened_at = datetime.utcnow()
+    session.add(f)
+    session.commit()
+    session.refresh(f)
+    return drying.describe(f)
+
+
 @router.get("/{filament_id}/prices")
 def price_history(filament_id: int, session: Session = Depends(get_session)):
     """Every price this spool has had, newest first, with the price per kilogram."""

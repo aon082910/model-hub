@@ -153,6 +153,30 @@ def render_thumbnail(path_str: str, color: str, budget_bytes: int):
         _release_memory()
 
 
+def health_file(path_str: str, budget_bytes: int) -> dict:
+    """Worker entry point: how sound one model's mesh is."""
+    from app.mesh_health import health_of_file
+
+    try:
+        return health_of_file(Path(path_str), budget_bytes)
+    except Exception as exc:
+        raise _portable(exc) from None
+    finally:
+        _release_memory()
+
+
+def repair_file(src_str: str, dest_str: str, budget_bytes: int) -> dict:
+    """Worker entry point: write a repaired copy of one mesh, and say how it was before and after."""
+    from app.mesh_health import repair_to_file
+
+    try:
+        return repair_to_file(Path(src_str), Path(dest_str), budget_bytes)
+    except Exception as exc:
+        raise _portable(exc) from None
+    finally:
+        _release_memory()
+
+
 class MeshWorkerPool:
     """A small pool of memory-capped worker processes, replaced if one dies or hangs."""
 

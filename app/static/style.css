@@ -389,3 +389,15 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 
 .order-card { margin: 10px 0; }
 .order-head { align-items: center; }
+
+/* creators, storage, mesh check */
+.creator-row a, #model-health-panel a, #creators-body > p > a { color: var(--accent); }
+.creator-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+.creator-models { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+.creator-models a { display: block; text-decoration: none; color: inherit; }
+.creator-models img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: #1b1e24; }
+.creator-models span { display: block; font-size: 0.85em; overflow-wrap: anywhere; }
+.bar-row { display: grid; grid-template-columns: 8em 1fr 8em; gap: 8px; align-items: center; margin: 4px 0; }
+.bar-row .bar { height: 10px; border-radius: 5px; background: var(--accent); min-width: 2px; }
+.issue-list { margin: 6px 0 0 18px; padding: 0; }
+.dry-due { color: #ff6b6b; }
