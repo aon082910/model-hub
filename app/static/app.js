@@ -4692,8 +4692,21 @@ async function renderOrderBody(id) {
       <label class="inline-check"><input type="checkbox" class="order-paid" ${o.paid ? 'checked' : ''}> paid</label>
       ${centres.length ? `<select class="order-centre" aria-label="Budget" title="Its prints are charged to this budget"><option value="">no budget</option>${centres.map(c => `<option value="${c.id}" ${c.id === o.cost_centre_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
       <button class="order-shelf" title="Fill what is still needed from finished parts on the shelf">Take from the shelf</button><button class="order-queue primary">Put the prints in the queue</button><button class="order-delete danger">Delete</button><span class="order-msg muted"></span></div>
-      ${o.suggested_status !== o.status ? `<div class="muted">Looks like it is <b>${esc(o.suggested_status)}</b> now.</div>` : ''}`}`;
+      ${o.suggested_status !== o.status ? `<div class="muted">Looks like it is <b>${esc(o.suggested_status)}</b> now.</div>` : ''}
+      ${o.status === 'quote' || o.quote_path ? '<div class="row order-quote-box"></div>' : ''}`}`;
   const body = card.querySelector('.order-body');
+  const quoteBox = body.querySelector('.order-quote-box');
+  if (quoteBox) {
+    const draw = (path) => {
+      quoteBox.innerHTML = path ? `<input class="quote-url" readonly value="${esc(location.origin + path)}" aria-label="The quote link" style="min-width:22em"><button class="quote-copy">Copy</button><a class="button-link" href="${esc(path)}" target="_blank" rel="noopener">Open it</a>${o.status === 'quote' ? '<button class="quote-new">New link</button>' : ''}<button class="quote-off">Remove the link</button>` : '<button class="quote-make">Make a link for the customer</button>';
+      const call = async (method, payload) => { const r = await jsonRequest(method, `/api/orders/${id}/quote-link`, payload); if (r.ok) draw((await r.json()).quote_path); else showNotice(await sourceErrorText(r)); };
+      const make = quoteBox.querySelector('.quote-make'); if (make) make.onclick = () => call('POST', {});
+      const fresh = quoteBox.querySelector('.quote-new'); if (fresh) fresh.onclick = () => { if (confirm('The old link stops working. Make a new one?')) call('POST', { rotate: true }); };
+      const off = quoteBox.querySelector('.quote-off'); if (off) off.onclick = () => call('DELETE');
+      const copy = quoteBox.querySelector('.quote-copy'); if (copy) copy.onclick = async () => { quoteBox.querySelector('.quote-url').select(); try { await navigator.clipboard.writeText(location.origin + path); } catch (e) { /* selected: copy by hand */ } };
+    };
+    draw(o.quote_path);
+  }
   const msg = text => { const el = body.querySelector('.order-msg'); if (el) el.textContent = text; };
   const reload = async () => { await loadOrders(); };
   body.querySelectorAll('.oi-qty, .oi-price').forEach(input => input.onchange = async () => {
@@ -5238,6 +5251,110 @@ async function loadDatasets() {
   });
 }
 
+// ---------- Sign-in security and shops (Settings) ----------
+const SIGNIN_PLAIN = ['oidc_issuer', 'oidc_client_id', 'oidc_name', 'oidc_allowed_domains', 'oidc_public_url', 'ldap_url', 'ldap_dn'];
+function hintedSecret(el, isSet, savedText) {
+  el.value = '';
+  if (!el.dataset.hint) el.dataset.hint = el.placeholder;
+  el.placeholder = isSet ? savedText : el.dataset.hint;
+}
+async function loadTwoStep() {
+  const box = $('#twostep-box');
+  const res = await fetch('/api/auth/me');
+  if (!res.ok) return;
+  const me = await res.json();
+  if (!me.can_two_step) { box.textContent = 'Sign in with your own login to use two-step sign-in.'; return; }
+  if (me.totp) {
+    box.innerHTML = `<p><b>Two-step sign-in is on</b> for ${esc(me.username)}.</p><div class="row"><input id="twostep-off-password" type="password" autocomplete="current-password" placeholder="Your password"><input id="twostep-off-code" placeholder="A current code or a backup code" autocomplete="one-time-code"><button id="twostep-off" class="danger">Switch it off</button><span id="twostep-msg" class="muted"></span></div>`;
+    $('#twostep-off').onclick = async () => {
+      const r = await jsonRequest('POST', '/api/auth/2fa/disable', { password: $('#twostep-off-password').value, code: $('#twostep-off-code').value.trim() });
+      if (r.ok) loadTwoStep(); else $('#twostep-msg').textContent = await sourceErrorText(r);
+    };
+    return;
+  }
+  box.innerHTML = '<button id="twostep-start">Set up two-step sign-in</button> <span id="twostep-msg" class="muted"></span>';
+  $('#twostep-start').onclick = async () => {
+    const r = await jsonRequest('POST', '/api/auth/2fa/begin', {});
+    if (!r.ok) { $('#twostep-msg').textContent = await sourceErrorText(r); return; }
+    const d = await r.json();
+    box.innerHTML = `<p>Scan this with your authenticator app, or type the key into it by hand, then enter the code it shows.</p>
+      <div class="row"><div id="twostep-qr" style="width:180px;background:#fff;padding:4px;border-radius:6px">${d.qr || ''}</div><div><code style="word-break:break-all">${esc(d.secret)}</code></div></div>
+      <div class="row"><input id="twostep-code" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code" maxlength="8"><button id="twostep-confirm">Turn it on</button><span id="twostep-msg" class="muted"></span></div>`;
+    const svg = $('#twostep-qr svg'); if (svg) { svg.setAttribute('width', '172'); svg.setAttribute('height', '172'); }
+    $('#twostep-confirm').onclick = async () => {
+      const c = await jsonRequest('POST', '/api/auth/2fa/enable', { code: $('#twostep-code').value.trim() });
+      if (!c.ok) { $('#twostep-msg').textContent = await sourceErrorText(c); return; }
+      const codes = (await c.json()).backup_codes;
+      box.innerHTML = `<p><b>Two-step sign-in is on.</b> Keep these backup codes somewhere safe. Each works once, and they are not shown again.</p><pre>${codes.map(esc).join('\n')}</pre><button id="twostep-done">I have saved them</button>`;
+      $('#twostep-done').onclick = loadTwoStep;
+    };
+  };
+}
+function loadSignin(s) {
+  $('#sso-redirect').textContent = location.origin + '/api/auth/oidc/callback';
+  for (const k of SIGNIN_PLAIN) $('#' + k.replace(/_/g, '-')).value = s[k] || '';
+  hintedSecret($('#oidc-client-secret'), !!s.oidc_client_secret, 'Saved (type a new one to replace it)');
+  $('#oidc-role').value = s.oidc_role === 'member' ? 'member' : 'viewer';
+  $('#oidc-auto-create').checked = s.oidc_auto_create === 'true';
+  $('#ldap-role').value = s.ldap_role === 'member' ? 'member' : 'viewer';
+  $('#ldap-auto-create').checked = s.ldap_auto_create !== 'false';
+  loadTwoStep();
+}
+$('#signin-save').addEventListener('click', async () => {
+  const body = { oidc_role: $('#oidc-role').value, oidc_auto_create: $('#oidc-auto-create').checked ? 'true' : '', ldap_role: $('#ldap-role').value, ldap_auto_create: $('#ldap-auto-create').checked ? 'true' : 'false' };
+  for (const k of SIGNIN_PLAIN) body[k] = $('#' + k.replace(/_/g, '-')).value.trim();
+  if ($('#oidc-client-secret').value) body.oidc_client_secret = $('#oidc-client-secret').value;
+  $('#signin-status').textContent = (await saveSetting(body)) ? 'Saved.' : 'Could not save.';
+});
+
+async function loadShops(s) {
+  $('#woo-url').value = s.woo_url || '';
+  hintedSecret($('#woo-key'), !!s.woo_key, 'Saved (type a new one to replace it)');
+  hintedSecret($('#shipstation-key'), !!s.shipstation_key, 'Saved (type a new one to replace it)');
+  hintedSecret($('#woo-secret'), !!s.woo_secret, 'Saved (type a new one to replace it)');
+  hintedSecret($('#shipstation-secret'), !!s.shipstation_secret, 'Saved (type a new one to replace it)');
+  hintedSecret($('#shop-hook-secret'), !!s.shop_hook_secret, 'Saved (type a new one to replace it)');
+  $('#shop-sync').checked = s.shop_sync === 'true';
+  $('#shop-name').value = s.shop_name || '';
+  $('#quote-currency').value = s.quote_currency || '';
+  $('#stock-auto-restock').checked = s.stock_auto_restock === 'true';
+  const res = await fetch('/api/settings/shops');
+  if (!res.ok) return;
+  const info = await res.json();
+  $('#shop-hook-url').value = info.hook_url ? location.origin + new URL(info.hook_url).pathname : '';
+  if (info.last_sync) {
+    try { $('#shops-status').textContent = 'Last check: ' + Object.entries(JSON.parse(info.last_sync)).map(([k, v]) => `${k} ${v === 'error' ? 'failed' : v + ' new'}`).join(', '); } catch (e) { /* not worth showing */ }
+  }
+}
+async function saveShops() {
+  const body = { woo_url: $('#woo-url').value.trim(), shop_sync: $('#shop-sync').checked ? 'true' : '' };
+  for (const [id, key] of [['#woo-key', 'woo_key'], ['#shipstation-key', 'shipstation_key'], ['#woo-secret', 'woo_secret'], ['#shipstation-secret', 'shipstation_secret'], ['#shop-hook-secret', 'shop_hook_secret']]) if ($(id).value) body[key] = $(id).value;
+  return saveSetting(body);
+}
+$('#shops-save').addEventListener('click', async () => { $('#shops-status').textContent = (await saveShops()) ? 'Saved.' : 'Could not save.'; });
+$('#shops-sync').addEventListener('click', async () => {
+  await saveShops();
+  $('#shops-status').textContent = 'Asking the shops...';
+  const res = await fetch('/api/settings/shops/sync', { method: 'POST' });
+  if (!res.ok) { $('#shops-status').textContent = await sourceErrorText(res); return; }
+  const r = (await res.json()).results;
+  $('#shops-status').textContent = Object.entries(r).map(([k, v]) => v.error ? `${k}: ${v.error}` : `${k}: ${v.orders.length} new, ${v.skipped.length} already here`).join('; ');
+});
+for (const [id, rotate] of [['#shop-hook-make', false], ['#shop-hook-rotate', true]]) {
+  $(id).addEventListener('click', async () => {
+    if (rotate && !confirm('The old address stops working. Make a new one?')) return;
+    await saveShops();
+    const res = await jsonRequest('POST', '/api/settings/shops/hook-address', { rotate });
+    if (res.ok) $('#shop-hook-url').value = location.origin + new URL((await res.json()).hook_url).pathname;
+  });
+}
+$('#shop-hook-copy').addEventListener('click', async () => { $('#shop-hook-url').select(); try { await navigator.clipboard.writeText($('#shop-hook-url').value); } catch (e) { /* selected: copy by hand */ } });
+$('#quote-save').addEventListener('click', async () => {
+  const ok = await saveSetting({ shop_name: $('#shop-name').value.trim(), quote_currency: $('#quote-currency').value.trim(), stock_auto_restock: $('#stock-auto-restock').checked ? 'true' : '' });
+  $('#quote-status').textContent = ok ? 'Saved.' : 'Could not save.';
+});
+$('#stock-auto-restock').addEventListener('change', () => saveSetting({ stock_auto_restock: $('#stock-auto-restock').checked ? 'true' : '' }));
+
 const CHANNEL_SECRETS = ['telegram_token', 'pushover_token', 'pushover_user', 'gotify_token', 'matrix_token', 'bark_key'];
 const CHANNEL_PLAIN = ['telegram_chat_id', 'telegram_topic', 'gotify_url', 'matrix_url', 'matrix_room', 'bark_server'];
 function loadChannels(s) {
@@ -5370,6 +5487,8 @@ async function loadSettings() {
   $('#max-printing').value = s.max_printing || '';
   $('#strict-colour').checked = s.strict_colour === 'true';
   $('#plate-clear-gate').checked = s.plate_clear_gate === 'true';
+  loadSignin(s);
+  loadShops(s);
   loadChannels(s);
   loadMetrics();
   $('#notify-progress-step').value = s.notify_progress_step || '';
@@ -5545,9 +5664,9 @@ async function loadUsers() {
     <div class="user-row"><b>${esc(data.admin || '')}</b> <span class="status-badge status-done">administrator</span></div>
     ${data.users.map(u => `
       <div class="user-row" data-id="${u.id}">
-        <b>${esc(u.username)}</b>
+        <b>${esc(u.username)}</b>${u.source && u.source !== 'local' ? ` <span class="badge">${esc(u.source)}</span>` : ''}${u.two_step ? ' <span class="badge">two-step</span>' : ''}
         <select class="user-role">${data.roles.map(r => `<option value="${r}" ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>
-        <button class="user-reset">Set a new password</button>
+        ${u.source && u.source !== 'local' ? '' : '<button class="user-reset">Set a new password</button>'}${u.two_step ? '<button class="user-two-step-reset" title="They lost their phone and backup codes">Reset two-step</button>' : ''}
         <button class="user-delete danger">Remove</button>
       </div>`).join('')}`;
 }
@@ -5571,6 +5690,11 @@ $('#users-list').addEventListener('click', async (e) => {
     if (!confirm('Remove this login? They are signed out at once.')) return;
     await fetch(`/api/users/${row.dataset.id}`, { method: 'DELETE' });
     loadUsers();
+  } else if (e.target.classList.contains('user-two-step-reset')) {
+    if (!confirm('Take this person\'s two-step sign-in away? They can set it up again after signing in.')) return;
+    const res = await fetch(`/api/users/${row.dataset.id}/two-step-reset`, { method: 'POST' });
+    $('#users-status').textContent = res.ok ? 'Two-step sign-in reset.' : await sourceErrorText(res);
+    loadUsers();
   } else if (e.target.classList.contains('user-reset')) {
     const password = prompt('A new password for this person (8 or more characters):');
     if (password === null) return;
@@ -5580,8 +5704,10 @@ $('#users-list').addEventListener('click', async (e) => {
 });
 
 // ---------- Auth gate ----------
+let ssoInfo = { sso: false, sso_name: '' };
 async function boot() {
   const status = await (await fetch('/api/auth/status')).json();
+  ssoInfo = status;
   if (!status.configured) {
     showAuthOverlay('setup');
     return;
@@ -5589,6 +5715,8 @@ async function boot() {
   const who = await fetch('/api/auth/me');
   if (who.status === 401) {
     showAuthOverlay('login');
+    const problem = new URLSearchParams(location.search).get('sso_error');
+    if (problem) { $('#auth-status').textContent = problem; history.replaceState(null, '', location.pathname + location.hash); }
     return;
   }
   applyUser(await who.json());
@@ -5609,18 +5737,25 @@ function showAuthOverlay(mode) {
   overlay.classList.remove('hidden');
   $('#auth-title').textContent = mode === 'setup' ? 'Create admin account' : 'Sign in';
   $('#auth-submit-btn').textContent = mode === 'setup' ? 'Create account' : 'Sign in';
+  const sso = $('#auth-sso-btn');
+  sso.classList.toggle('hidden', !(mode === 'login' && ssoInfo.sso));
+  sso.textContent = `Sign in with ${ssoInfo.sso_name || 'single sign-on'}`;
+  sso.onclick = () => { location.href = '/api/auth/oidc/start'; };
 
   $('#auth-submit-btn').onclick = async () => {
     const username = $('#auth-username').value.trim();
     const password = $('#auth-password').value;
     const endpoint = mode === 'setup' ? '/api/auth/setup' : '/api/auth/login';
+    const body = { username, password };
+    if (mode === 'login' && !$('#auth-code-label').classList.contains('hidden')) body.code = $('#login-code').value.trim();
     const res = await fetch(endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       $('#auth-status').textContent = data.detail || 'Failed.';
+      if (data.totp_required) { $('#auth-code-label').classList.remove('hidden'); $('#login-code').focus(); }
       return;
     }
     if (mode === 'setup') {

@@ -99,7 +99,7 @@ def _order_json(session: Session, order: Order, with_items: bool = True) -> dict
     elif done and order.status == "accepted":
         suggested = "printing"
     out = {"id": order.id, "customer": order.customer, "contact": order.contact, "status": order.status, "due_date": order.due_date, "notes": order.notes,
-           "paid": order.paid, "cost_centre_id": order.cost_centre_id, "created_at": order.created_at.isoformat(), "units": wanted, "units_done": done,
+           "paid": order.paid, "cost_centre_id": order.cost_centre_id, "created_at": order.created_at.isoformat(), "quote_path": f"/quote/{order.public_token}" if order.public_token else None, "units": wanted, "units_done": done,
            "price": round(price, 2), "cost": round(cost, 2), "profit": round(price - cost, 2), "suggested_status": suggested,
            "overdue": bool(order.due_date and order.due_date < date.today().isoformat() and order.status in ("quote", "accepted", "printing"))}
     if with_items:
@@ -233,8 +233,6 @@ async def import_orders(request: Request, session: Session = Depends(get_session
     cols = _columns(reader.fieldnames or [])
     if "item" not in cols and "sku" not in cols:
         raise HTTPException(400, "No column for the item or its SKU was found. Expected headers like Lineitem name, Item Name or SKU")
-    models = session.exec(select(Model3D)).all()
-    existing = " ".join(n for n in session.exec(select(Order.notes).where(Order.notes.is_not(None))).all() if n)
     groups: dict = {}
     for n, row in enumerate(reader):
         if n >= MAX_IMPORT_ROWS:
@@ -246,35 +244,31 @@ async def import_orders(request: Request, session: Session = Depends(get_session
         g["contact"] = g["contact"] or get("contact")
         qty = _money(get("quantity")) or 1
         g["lines"].append({"item": get("item"), "sku": get("sku"), "quantity": max(1, min(10000, int(qty))), "price": _money(get("price"))})
-    report = {"orders": [], "skipped": [], "lines": 0, "matched": 0, "dry": dry}
-    for key, g in groups.items():
-        marker = f"[import:{key}]"
-        if marker in existing:
-            report["skipped"].append(key)
-            continue
-        matched, missing = [], []
-        for line in g["lines"]:
-            model = _match_model(models, line["sku"], line["item"])
-            if model:
-                matched.append((model, line))
-            else:
-                missing.append(f"{line['item'] or line['sku'] or 'an item'} x {line['quantity']}")
-        report["lines"] += len(g["lines"])
-        report["matched"] += len(matched)
-        report["orders"].append({"order": key, "customer": g["customer"] or f"Order {key}", "matched": [{"filename": m.filename, "quantity": l["quantity"], "unit_price": l["price"]} for m, l in matched], "unmatched": missing})
-        if dry:
-            continue
-        notes = f"Imported from a shop export {marker}" + (f". Not matched to a model: {'; '.join(missing)}" if missing else "")
-        order = Order(customer=(g["customer"] or f"Order {key}")[:120], contact=g["contact"][:200] or None, status="accepted", notes=notes[:4000])
-        session.add(order)
-        session.commit()
-        session.refresh(order)
-        for model, line in matched[:100]:
-            session.add(OrderItem(order_id=order.id, model_id=model.id, quantity=line["quantity"], unit_price=line["price"]))
-        session.commit()
+    from app import shop_orders
+    report = shop_orders.create_orders(session, groups, dry)
     if not dry and report["orders"]:
         activity.record(session, activity.actor_of(request), "order", f"Imported {len(report['orders'])} order(s) from a shop export")
     return report
+
+
+@router.post("/{order_id}/quote-link")
+def quote_link(order_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """A link the customer can open to see the quote and accept or decline it (rotate: true makes a new one; the old one stops working)."""
+    from app import quotes
+    order = _get(session, order_id)
+    if order.status != "quote":
+        raise HTTPException(409, "Only an order that is still a quote can have a quote link")
+    quotes.make_link(session, order, rotate=payload.get("rotate") is True)
+    activity.record(session, activity.actor_of(request), "order", f"Made a quote link for the order of {order.customer}")
+    return {"quote_path": f"/quote/{order.public_token}"}
+
+
+@router.delete("/{order_id}/quote-link")
+def remove_quote_link(order_id: int, request: Request, session: Session = Depends(get_session)):
+    from app import quotes
+    order = _get(session, order_id)
+    quotes.remove_link(session, order)
+    return {"quote_path": None}
 
 
 @router.get("/export.csv")
@@ -410,6 +404,8 @@ def take_from_stock(order_id: int, request: Request, session: Session = Depends(
         advance_order(session, order_id)
         session.commit()
         activity.record(session, activity.actor_of(request), "order", f"Took {taken} part(s) from the shelf for the order of {order.customer}")
+        from app import stock
+        stock.auto_restock(session)                   # the shelf is lower now: refill it if that is switched on
     return {"taken": taken, "lines": lines, "order": _order_json(session, order)}
 
 

@@ -232,7 +232,8 @@ def test_a_read_token_can_look_but_not_change_and_cannot_see_settings(authed):
     assert c.post("/api/collections", json={"name": "x"}, headers=headers).status_code == 403
     assert c.get("/api/settings", headers=headers).status_code == 403
     assert c.get("/api/tokens", headers=headers).status_code == 403
-    assert c.get("/api/auth/me", headers=headers).json() == {"username": "token:script", "role": "viewer"}
+    me = c.get("/api/auth/me", headers=headers).json()
+    assert (me["username"], me["role"], me["can_two_step"]) == ("token:script", "viewer", False)
 
 
 def test_a_write_token_acts_like_a_member(authed):

@@ -20,7 +20,7 @@ SECRET_KEY_PATH = CONFIG_PATH / "secret.key"
 # itself, static assets needed to render the login page, and the browser
 # extension's own upload endpoint (which authenticates via API key instead).
 PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js", "/metrics"}
-PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/", "/status/")
+PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/", "/status/", "/quote/", "/hooks/", "/api/auth/oidc/")
 
 # The extension API key is intentionally weaker than a full login session: it's
 # stored in a browser extension, a lower-trust place than the server admin's own
@@ -34,7 +34,9 @@ VIRTUAL_PRINTER_PATHS = {"/api/version", "/api/files/local", "/server/info", "/p
 # they have their own dedicated, access-controlled endpoints instead. Without
 # this, anyone holding only the (lower-trust) extension API key could read the
 # password hash or overwrite it outright via a plain PUT to /api/settings.
-RESERVED_SETTING_KEYS = {"auth_username", "auth_password_hash", "extension_api_key", "status_token"}
+RESERVED_SETTING_KEYS = {"auth_username", "auth_password_hash", "extension_api_key", "status_token", "shop_hook_token"}
+# Secrets for single sign-on and shops: shown as dots once saved, never put in a backup
+ACCESS_SECRETS = ("oidc_client_secret", "woo_key", "woo_secret", "shipstation_key", "shipstation_secret", "shop_hook_secret")
 
 
 def _secret_key() -> bytes:
@@ -141,7 +143,9 @@ ROLES = ("member", "viewer", "printer")
 ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens", "/api/spoolman", "/api/sensors")
 # ...and these they alone may change (members can still look): they delete files from disk
 ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
-ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-check"}
+ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-check", "/api/activity/export.csv"}
+# Everyone signed in may manage their own sign-in (password and second step), whatever their role
+SELF_SERVICE = ("/api/auth/me/password", "/api/auth/2fa/")
 # Share links are secrets: viewers may not even list them
 NO_VIEWER_PREFIXES = ("/api/shares",)
 
@@ -192,7 +196,7 @@ START_PRINT = re.compile(r"^/api/(queue/\d+/send|printers/\d+/(control|send|plat
 
 def printer_role_reason(method: str, path: str):
     """A login that may look at everything (but not the administrator's pages) and start, pause, resume and cancel prints, and nothing else."""
-    if path == "/api/auth/me/password":
+    if path.startswith(SELF_SERVICE):
         return None
     if method in ("GET", "HEAD"):
         return "Your account is not allowed to see that." if path.startswith(PRINTER_ROLE_DENIED_READS) else None
@@ -216,7 +220,7 @@ def forbidden_reason(user: dict, method: str, path: str):
         return "Only the administrator can do that."
     if role == "viewer" and path.startswith(NO_VIEWER_PREFIXES):
         return "Your account is read-only."
-    if role == "viewer" and writing and path != "/api/auth/me/password":
+    if role == "viewer" and writing and not path.startswith(SELF_SERVICE):
         return "Your account is read-only."
     return None
 

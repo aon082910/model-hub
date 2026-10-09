@@ -95,6 +95,8 @@ def adjust(stock_id: int, payload: dict, request: Request, session: Session = De
     session.commit()
     model = session.get(Model3D, row.model_id)
     activity.record(session, activity.actor_of(request), "stock", f"Stock of {model.filename if model else 'a part'}: {'+' if delta > 0 else ''}{delta} (now {row.on_hand})")
+    if delta < 0:
+        stock.auto_restock(session)                   # something left the shelf: refill it if that is switched on
     return stock.describe(session, row)
 
 
@@ -107,15 +109,6 @@ def make_more(stock_id: int, payload: dict, request: Request, session: Session =
     quantity = _int(quantity, "quantity", 1, MAX_MAKE) if quantity is not None else info["short"]
     if quantity <= 0:
         return {"queued": 0, "item": info}
-    defaults = costing.defaults_for(session, row.model_id)
-    suggestion = learned.suggest(session, row.model_id)
-    top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
-    position = (top.position + 1) if top else 0
-    for _ in range(min(quantity, MAX_MAKE)):
-        session.add(QueueItem(model_id=row.model_id, position=position, status="queued", filament_id=defaults["filament_id"], estimated_grams=defaults["grams"],
-                              estimated_minutes=suggestion["minutes"], estimate_basis=suggestion["basis"] if suggestion["minutes"] else None, to_stock_id=row.id,
-                              notes="For the shelf"))
-        position += 1
-    session.commit()
-    activity.record(session, activity.actor_of(request), "stock", f"Queued {min(quantity, MAX_MAKE)} print(s) for the shelf")
-    return {"queued": min(quantity, MAX_MAKE), "item": stock.describe(session, row)}
+    count = stock.queue_for_shelf(session, row, quantity)
+    activity.record(session, activity.actor_of(request), "stock", f"Queued {count} print(s) for the shelf")
+    return {"queued": count, "item": stock.describe(session, row)}

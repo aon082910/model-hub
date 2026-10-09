@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
+from app import costing, learned
 from app.models import Model3D, QueueItem, StockItem
 from app.notify import notify_event
 from app.settings_store import get_setting, set_setting
@@ -23,6 +24,49 @@ def describe(session: Session, row: StockItem, names: Optional[dict] = None) -> 
 def overview(session: Session) -> list:
     names = {m.id: m.filename for m in session.exec(select(Model3D)).all()}
     return [describe(session, r, names) for r in session.exec(select(StockItem).order_by(StockItem.id)).all() if r.model_id in names]
+
+
+MAX_MAKE = 100
+AUTO_RESTOCK_CAP = 50                     # most prints one automatic round puts in the queue, all parts together
+
+
+def queue_for_shelf(session: Session, row: StockItem, quantity: int) -> int:
+    """Put this many prints of the part in the queue; each adds one to the shelf when it finishes. Returns how many were queued."""
+    quantity = min(quantity, MAX_MAKE)
+    if quantity <= 0:
+        return 0
+    defaults = costing.defaults_for(session, row.model_id)
+    suggestion = learned.suggest(session, row.model_id)
+    top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
+    position = (top.position + 1) if top else 0
+    for _ in range(quantity):
+        session.add(QueueItem(model_id=row.model_id, position=position, status="queued", filament_id=defaults["filament_id"], estimated_grams=defaults["grams"],
+                              estimated_minutes=suggestion["minutes"], estimate_basis=suggestion["basis"] if suggestion["minutes"] else None, to_stock_id=row.id,
+                              notes="For the shelf"))
+        position += 1
+    session.commit()
+    return quantity
+
+
+def auto_restock(session: Session) -> int:
+    """With "stock_auto_restock" on: queue prints for every part whose shelf stock, counting what is already queued, is below its minimum.
+    The shortfall already counts what is queued, so running this again changes nothing until something sells."""
+    if get_setting(session, "stock_auto_restock", "") != "true":
+        return 0
+    from app import activity
+    budget, made = AUTO_RESTOCK_CAP, 0
+    for info in overview(session):
+        if budget <= 0:
+            break
+        if info["short"] > 0 and info["minimum"] > 0:
+            row = session.get(StockItem, info["id"])
+            count = queue_for_shelf(session, row, min(info["short"], budget))
+            budget -= count
+            made += count
+    if made:
+        activity.record(session, "Model Hub", "stock", f"Queued {made} print(s) to refill the shelf")
+        notify_event(session, "stock_low", "Model Hub: refilling the shelf", f"{made} print(s) were put in the queue to bring parts back to their minimum")
+    return made
 
 
 def on_item_done(session: Session, item: QueueItem) -> None:

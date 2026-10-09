@@ -25,7 +25,7 @@ from typing import Optional
 
 from sqlmodel import SQLModel
 
-from app.auth import RESERVED_SETTING_KEYS
+from app.auth import ACCESS_SECRETS, RESERVED_SETTING_KEYS
 from app.config import CONFIG_PATH, DB_PATH, LIBRARY_PATH
 from app.models import AppSettings
 from app.routers.prints import PHOTO_ROOT
@@ -37,7 +37,7 @@ FORMAT = 1
 PICTURE_FOLDERS = {"source_images": IMAGE_ROOT, "print_photos": PHOTO_ROOT}
 SETTINGS_TABLE = AppSettings.__tablename__
 # logins belong to this installation: never written into a backup, never replaced by a restore
-LOGIN_TABLES = ("appuser", "sharelink", "apitoken")
+LOGIN_TABLES = ("appuser", "sharelink", "apitoken", "usersecurity")
 MAX_UNPACKED_BYTES = 4 * 1024 ** 3
 MAX_FILES = 200_000
 KEEP_SAFETY_COPIES = 3
@@ -49,7 +49,7 @@ class BackupError(Exception):
 
 
 def sensitive_settings() -> set:
-    return set(RESERVED_SETTING_KEYS) | {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | secret_setting_keys()
+    return set(RESERVED_SETTING_KEYS) | {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | set(ACCESS_SECRETS) | secret_setting_keys()
 
 
 def _stamp() -> str:

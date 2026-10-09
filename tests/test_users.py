@@ -66,7 +66,8 @@ def test_names_cannot_collide_with_each_other_or_the_administrator(authed):
 def test_a_member_signs_in_and_uses_the_library_but_not_the_administration(authed):
     _new_user(authed, "memberone")
     member = _sign_in("memberone")
-    assert member.get("/api/auth/me").json() == {"username": "memberone", "role": "member"}
+    me = member.get("/api/auth/me").json()
+    assert (me["username"], me["role"], me["totp"], me["source"]) == ("memberone", "member", False, "local")
     assert member.get("/api/library/models").status_code == 200
     made = member.post("/api/collections", json={"name": "made by a member"})
     assert made.status_code == 200

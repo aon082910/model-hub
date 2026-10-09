@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlmodel import Session
 from app.db import get_session
 from app.settings_store import all_settings, set_setting
-from app.auth import RESERVED_SETTING_KEYS, ensure_extension_api_key
+from app.auth import ACCESS_SECRETS, RESERVED_SETTING_KEYS, ensure_extension_api_key
 from app.sources import secret_setting_keys
 import secrets
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Keys never echoed back in plaintext to the frontend after being set
-SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | secret_setting_keys()   # site tokens / API keys
+SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | set(ACCESS_SECRETS) | secret_setting_keys()   # site tokens / API keys
 
 
 @router.get("")

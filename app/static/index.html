@@ -786,6 +786,21 @@
       <div id="datasets-box"></div>
     </div>
 
+    <h2>Shop orders and quotes</h2>
+    <div class="settings-form" id="shops-box">
+      <p class="muted">Orders can come in by themselves: Model Hub asks <b>WooCommerce</b> or <b>ShipStation</b> for their waiting orders every ten minutes, or <b>Shopify</b> and <b>WooCommerce</b> can tell Model Hub through a signed web hook. Each shop order becomes one order (never twice), its lines matched to library models by SKU or title. Keys are only sent to the shop's own address and are left out of backups. Etsy, eBay and TikTok Shop are not offered because their order access needs an approved developer application; use the spreadsheet import on the Orders page for them.</p>
+      <div class="row"><input id="woo-url" placeholder="https://yourshop.com (WooCommerce)"><input id="woo-key" type="password" placeholder="Consumer key (ck_...)" autocomplete="new-password"><input id="woo-secret" type="password" autocomplete="new-password" placeholder="Consumer secret (cs_...)"></div>
+      <div class="row"><input id="shipstation-key" type="password" placeholder="ShipStation API key" autocomplete="new-password"><input id="shipstation-secret" type="password" autocomplete="new-password" placeholder="ShipStation API secret"></div>
+      <label class="inline-check"><input type="checkbox" id="shop-sync"> Check the shops by themselves every ten minutes</label>
+      <div class="row"><button id="shops-save">Save</button><button id="shops-sync">Check the shops now</button><span id="shops-status" class="muted"></span></div>
+      <p class="muted"><b>Web hook</b> (Shopify: Settings, Notifications, Webhooks, <i>Order creation</i>, JSON; WooCommerce: Settings, Advanced, Webhooks, <i>Order created</i>). Give both the address below and the same secret you type here.</p>
+      <div class="row"><input id="shop-hook-secret" type="password" autocomplete="new-password" placeholder="Shared secret"><button id="shop-hook-make">Make the web hook address</button><button id="shop-hook-rotate">Make a new one</button></div>
+      <div class="row"><input id="shop-hook-url" readonly placeholder="(not made yet)" style="min-width:24em"><button id="shop-hook-copy">Copy</button></div>
+      <p class="muted"><b>Quotes:</b> on an order that is still a quote, <i>Make a link for the customer</i> gives a page where they can look at the quote and accept or decline it, without signing in. It shows only the items, prices, total and date.</p>
+      <div class="row"><input id="shop-name" placeholder="Your shop name on the quote page" maxlength="80"><input id="quote-currency" placeholder="Currency sign, like $" maxlength="6" style="width:10em"><button id="quote-save">Save</button><span id="quote-status" class="muted"></span></div>
+      <label class="inline-check"><input type="checkbox" id="stock-auto-restock"> Keep the shelf stocked: when finished parts fall below their minimum (an order took them, or you sold some), put prints for them in the queue by themselves</label>
+    </div>
+
     <h2>Status page for a wall display</h2>
     <div class="settings-form">
       <p class="muted">A page that shows each printer's state and progress and how many prints are waiting, without anyone signing in, for a tablet or a monitor on the wall. It is off until you switch it on, the link holds a secret (anyone who has it can look), it only shows what Model Hub already knows, and never an address, a key or a serial number.</p>
@@ -866,6 +881,26 @@
       </div>
     </div>
 
+    <h2>Sign-in security</h2>
+    <div class="settings-form" id="signin-box">
+      <p class="muted"><b>Two-step sign-in</b> for your own login: after the password, Model Hub asks for a six-digit code from an authenticator app (any app that does TOTP: Aegis, 2FAS, Google or Microsoft Authenticator, a password manager). You get eight single-use backup codes, shown once. If someone loses their phone and codes, the administrator can reset it in the People list above.</p>
+      <div id="twostep-box" class="muted">Loading...</div>
+      <details><summary>Single sign-on (OpenID Connect: Authentik, Keycloak, Authelia, Google and others)</summary>
+        <p class="muted">Add a client in your provider with the redirect address <code id="sso-redirect"></code> and the scopes <code>openid profile email</code>. People who sign in this way get a <b>member</b> or <b>viewer</b> account (never the administrator). New accounts are only made if you allow it below; with a public provider such as Google, also limit the e-mail domains.</p>
+        <div class="row"><input id="oidc-issuer" placeholder="https://auth.example.com/application/o/model-hub/"><input id="oidc-client-id" placeholder="Client id"><input id="oidc-client-secret" type="password" autocomplete="new-password" placeholder="Client secret (if it has one)"></div>
+        <div class="row"><input id="oidc-name" placeholder="Button text, like Authentik" style="width:14em"><select id="oidc-role" aria-label="Role of new accounts"><option value="viewer">new accounts are viewers</option><option value="member">new accounts are members</option></select>
+          <label class="inline-check"><input type="checkbox" id="oidc-auto-create"> Make an account the first time someone signs in</label></div>
+        <div class="row"><input id="oidc-allowed-domains" placeholder="Only these e-mail domains (optional): example.com, corp.org"><input id="oidc-public-url" placeholder="Public address, if Model Hub is behind a proxy (optional)"></div>
+      </details>
+      <details><summary>LDAP / Active Directory</summary>
+        <p class="muted">A password that is not a local one is tried as a directory sign-in, using a DN pattern with <code>{username}</code>, such as <code>uid={username},ou=people,dc=example,dc=com</code> (Active Directory: <code>{username}@example.com</code> also works as the pattern). Use <code>ldaps://</code> where you can. An account made this way is never the administrator, and never replaces a local account of the same name.</p>
+        <div class="row"><input id="ldap-url" placeholder="ldaps://ldap.example.com"><input id="ldap-dn" placeholder="uid={username},ou=people,dc=example,dc=com"></div>
+        <div class="row"><select id="ldap-role" aria-label="Role of directory accounts"><option value="viewer">viewers</option><option value="member">members</option></select>
+          <label class="inline-check"><input type="checkbox" id="ldap-auto-create" checked> Make an account the first time someone signs in</label></div>
+      </details>
+      <div class="row"><button id="signin-save">Save</button><a class="button-link" href="/api/activity/export.csv" download>Download the activity record (CSV)</a><span id="signin-status" class="muted"></span></div>
+    </div>
+
     <h2>Account</h2>
     <div class="settings-form">
       <label>Current password <input id="cur-password" type="password"></label>
@@ -921,7 +956,9 @@
       <div class="settings-form">
         <label>Username <input id="auth-username" autocomplete="username"></label>
         <label>Password <input id="auth-password" type="password" autocomplete="current-password"></label>
+        <label id="auth-code-label" class="hidden">Code from your authenticator app <small>(or a backup code)</small> <input id="login-code" autocomplete="one-time-code" inputmode="numeric" maxlength="12"></label>
         <button id="auth-submit-btn">Sign in</button>
+        <button id="auth-sso-btn" type="button" class="hidden">Single sign-on</button>
         <span id="auth-status"></span>
       </div>
     </div>

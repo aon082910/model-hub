@@ -29,6 +29,8 @@ INTERVALS = {                     # seconds between runs of each job
     "watch": 120,
     "sensors": 30,
     "stock": 6 * 3600,
+    "restock": 900,
+    "shop_sync": 600,
     "plate": 120,
     "telegram_status": 60,
     "drying": 24 * 3600,
@@ -42,7 +44,7 @@ _last_run: dict = {}
 
 def _jobs() -> dict:
     from app import auto_backup, follow_watch, printwatch, source_updates_auto, stock_watch, update_check
-    from app import drying, failure_watch, plate, sensors, stock, telegram_bot, maintenance, mqtt_publish, offsite, plan_watch, weekly
+    from app import drying, failure_watch, plate, sensors, shop_orders, stock, telegram_bot, maintenance, mqtt_publish, offsite, plan_watch, weekly
     return {
         "printers": printwatch.poll,
         "backup": auto_backup.maybe_backup,
@@ -55,6 +57,8 @@ def _jobs() -> dict:
         "watch": failure_watch.scheduled,
         "sensors": sensors.poll,
         "stock": stock.check_and_notify,
+        "restock": stock.auto_restock,
+        "shop_sync": shop_orders.scheduled,
         "plate": plate.scheduled,
         "telegram_status": telegram_bot.update_status_message,
         "drying": drying.check_and_notify,

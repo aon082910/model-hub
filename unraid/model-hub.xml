@@ -40,6 +40,19 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.27.0
+Sign-in: two-step sign-in with an authenticator app and single-use backup
+codes, single sign-on (OpenID Connect: Authentik, Keycloak, Authelia and
+others) and LDAP, all in Settings under Sign-in security; single sign-on and
+LDAP accounts are never the administrator. Every sign-in and security change
+is recorded (administrator only) and the activity record can be exported as
+CSV. Shop orders: WooCommerce and ShipStation are checked every ten minutes,
+and Shopify or WooCommerce can send signed web hooks; each order is made
+once. Customers can open a quote link and accept or decline it. The shelf can
+refill itself by queueing prints when parts fall below their minimum. Etsy,
+eBay and TikTok Shop are not offered (they need approved developer apps). New
+tables and columns are added automatically; the image now includes ldap3.
+
 ### 2.26.0
 Prometheus and Grafana: switch on /metrics (Settings) and import the ready
 dashboard. More ways to be told: Telegram, Pushover, Gotify, Matrix and Bark

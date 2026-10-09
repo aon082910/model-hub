@@ -319,6 +319,7 @@ class Order(SQLModel, table=True):
     notes: Optional[str] = None
     paid: bool = False
     cost_centre_id: Optional[int] = None   # its prints are charged to this budget
+    public_token: Optional[str] = Field(default=None, index=True)    # the secret in the customer's quote link (empty: no link)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -476,6 +477,18 @@ class AppUser(SQLModel, table=True):
     username: str = Field(index=True, unique=True)
     password_hash: str
     role: str = "member"
+    source: str = "local"                  # local, ldap or oidc: where this account's identity is proved
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UserSecurity(SQLModel, table=True):
+    """The second sign-in step of an account (the administrator's included, by user name): an authenticator-app secret and hashed single-use backup codes."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(index=True, unique=True)
+    totp_secret: Optional[str] = None
+    totp_enabled: bool = False
+    last_counter: int = 0                  # the newest code step used, so a code cannot be used twice
+    backup_json: Optional[str] = None      # sha256 hashes of the unused backup codes
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
