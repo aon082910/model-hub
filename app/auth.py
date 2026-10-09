@@ -135,7 +135,7 @@ def ensure_extension_api_key(session: Session) -> str:
 ROLES = ("member", "viewer")
 
 # Only the administrator may use these at all (reading them included)...
-ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens")
+ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens", "/api/spoolman")
 # ...and these they alone may change (members can still look): they delete files from disk
 ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
 ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-check"}

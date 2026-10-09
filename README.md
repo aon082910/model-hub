@@ -495,6 +495,28 @@ Give a printer its camera's still-picture address (Print Queue, the printer's *C
 entry, unless the entry already has one. *Take a picture now* tests the address. The address must not contain a user name or password; redirects are not followed, the printer's API key is never sent to the camera, and a camera that is off or wrong never
 stops the print being recorded. Photos are kept in `/config/print_photos` and are part of backups.
 
+## Cost to print, and what to ask
+
+A model's page has **Cost to print**: grams and minutes (from its kept sliced file or last print, and the learned print time; type your own to replace them), how many, and which spool. It adds the filament (the spool's price per gram, or the average of that
+material's spools, or a default price per kg), electricity (the price per kWh and the printer's watts), machine time (what an hour of the printer is worth to you), an allowance for failed prints, and your margin, and shows the cost of one, the price to ask, and the same for
+several. The failure allowance is your own failure rate once you have logged 10 prints, otherwise 5%, unless you set a figure. All the numbers are set in **Settings → Costs**; anything missing (no spool price, no price per kWh) is said, not guessed.
+
+## Orders
+
+**Orders** keeps prints made for other people: a customer, contact, due date, notes, and the models with how many of each and the price (left empty, the cost calculator's suggestion is used). **Put the prints in the queue** adds one waiting print per unit not queued yet
+(planned for the due date; a failed print is made again), progress follows the queue (*3 of 5 printed*), the order says when it looks ready, and totals show price, cost and profit. Orders can be marked paid and delivered, late ones are flagged, and **Orders as a spreadsheet** downloads
+them (cells that look like formulas are stored as text). Deleting an order leaves its prints in the queue.
+
+## Choosing a printer
+
+A waiting print with no printer shows the printer that suits it best and why: it must fit the bed (when the bed size is known), a printer that has the print's spool loaded (in a slot) scores best, one with the same material next, and printers with less already waiting rank higher.
+*Use* assigns one (and its slot); *Give the waiting prints … the best one* assigns them all and can be undone.
+
+## Spoolman
+
+**Settings → Spoolman**: enter its address (like `http://192.168.1.20:7912`). **Import** brings its spools in (once each; a later import refreshes the remaining weight), **Send mine to it** creates Model Hub's spools there (a vendor, a filament and a spool each, once each), and with
+*Report each print's grams* ticked every finished print also tells Spoolman how much it used, so both keep the same count (do not also let a printer report usage to Spoolman, or it is counted twice). Nothing is deleted on either side.
+
 ## Multicolour prints
 
 A kept sliced file (a sliced `.3mf` from Bambu Studio or Orca, or G-code from PrusaSlicer or OrcaSlicer) lists every filament it uses, with its type, colour and grams. On a waiting queue entry, **colours** shows them and lets you say which

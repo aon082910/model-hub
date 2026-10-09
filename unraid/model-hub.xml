@@ -40,6 +40,16 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.17.0
+New Orders tab for prints made for other people (customers, due dates, prices,
+progress from the queue, profit, spreadsheet export). A cost calculator on each
+model's page works out the cost and a price to ask (filament, electricity,
+machine time, failed prints, margin). Waiting prints get a suggested printer
+(bed size, spool loaded, how busy), assignable in one click and undoable.
+Spoolman can be imported from and exported to, and finished prints can report
+their grams to it. No new settings are required; new columns and tables are
+added automatically on first start.
+
 ### 2.16.0
 Multicolour prints are counted properly: a sliced file's filaments can be
 mapped to the printer's slots and each spool loses its own grams. Printers can

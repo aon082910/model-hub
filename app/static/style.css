@@ -386,3 +386,6 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 
 .queue-colours-box { flex-basis: 100%; margin-top: 6px; padding: 8px; border: 1px solid var(--border, #2a2e37); border-radius: 8px; }
 .printer-controls { margin-left: 6px; }
+
+.order-card { margin: 10px 0; }
+.order-head { align-items: center; }

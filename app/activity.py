@@ -54,6 +54,20 @@ def _unplan(session: Session, planned: dict) -> int:
     return count
 
 
+def _unassign(session: Session, old: dict) -> int:
+    """Take the printers an automatic assignment gave back off, where nobody has changed them since."""
+    from app.models import QueueItem
+    count = 0
+    for item_id, before in old.items():
+        item = session.get(QueueItem, int(item_id)) if str(item_id).isdigit() else None
+        if item and item.printer_id == before.get("new_printer") and item.status == "queued":
+            item.printer_id, item.slot, item.filament_id = before.get("printer_id"), before.get("slot"), before.get("filament_id")
+            session.add(item)
+            count += 1
+    session.commit()
+    return count
+
+
 def _remove_created(session: Session, ids: list) -> int:
     """Take away queue entries that were added in bulk, but only ones still waiting (a print that has begun stays)."""
     from app.models import QueueItem
@@ -79,6 +93,8 @@ def undo(session: Session, entry: ActivityLog, actor: str) -> int:
         restored = bulk.undo(session, spec)
     elif spec.get("kind") == "multi":
         restored = sum(bulk.undo(session, one) for one in spec.get("specs", []) if isinstance(one, dict) and one.get("kind") == "bulk")
+    elif spec.get("kind") == "queue_assign":
+        restored = _unassign(session, spec.get("old") or {})
     elif spec.get("kind") == "created_queue":
         restored = _remove_created(session, spec.get("ids") or [])
     elif spec.get("kind") == "planned_dates":

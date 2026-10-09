@@ -68,7 +68,7 @@ const TAB_LOADERS = {
   library: () => loadModels(), search: () => openSearchPage(''), wishlist: () => loadWishlist(), duplicates: () => loadDuplicates(), following: () => loadFollowing(), stats: () => loadStats(), activity: () => loadActivity(),
   collections: () => { loadRules(); return loadCollections(); }, projects: () => loadProjects(),
   supplies: () => loadSupplies(), matches: () => loadMatches(), filament: () => loadFilament(),
-  queue: () => loadQueue(), calendar: () => loadCalendar(), settings: () => loadSettings(),
+  queue: () => loadQueue(), orders: () => loadOrders(), calendar: () => loadCalendar(), settings: () => loadSettings(),
 };
 
 function showSection(sectionId, activeTab) {
@@ -546,6 +546,7 @@ function renderModelPage(model) {
   renderModelPrinter(model);
   renderPrintSettings(model);
   renderSlicerPanel(model);
+  renderCostPanel(model);
   renderVersions(model);
   renderSlicedFiles(model);
   renderSharePanel('#model-share-panel', 'model', model.id);
@@ -559,6 +560,39 @@ async function fillFitPrinters() {
   $('#f-fits-printer').innerHTML = '<option value="">any</option>' + list.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   $('#f-fits-printer').value = keep;
   $('#f-fits-printer').parentElement.classList.toggle('hidden', !list.length);
+}
+
+// ---------- What a print costs, and what to ask for it ----------
+const money2 = v => (v == null ? '-' : `$${Number(v).toFixed(2)}`);
+async function renderCostPanel(model) {
+  const panel = $('#model-cost-panel');
+  if (!panel) return;
+  const [res, spools] = await Promise.all([fetch(`/api/costs/quote?model_id=${model.id}`), fetch('/api/filament').then(r => (r.ok ? r.json() : []))]);
+  if (!currentModel || currentModel.id !== model.id) return;
+  const first = res.ok ? await res.json() : null;
+  panel.innerHTML = `<h3>Cost to print</h3>
+    <div class="row"><label>Grams <input id="cost-grams" type="number" min="0" step="0.1" value="${first ? first.grams : ''}"></label>
+      <label>Minutes <input id="cost-minutes" type="number" min="0" step="1" value="${first ? first.minutes : ''}"></label>
+      <label>How many <input id="cost-qty" type="number" min="1" value="1" style="width:5em"></label>
+      <label>Spool <select id="cost-spool"><option value="">(none)</option>${spools.map(f => `<option value="${f.id}" ${first && f.id === first.filament_id ? 'selected' : ''}>${esc([f.material, f.brand, f.color].filter(Boolean).join(' '))}</option>`).join('')}</select></label></div>
+    <div id="cost-result" class="muted">${first ? '' : 'This model has no kept sliced file or print to take grams and minutes from: type them in.'}</div>`;
+  const run = async () => {
+    const g = $('#cost-grams').value, m = $('#cost-minutes').value;
+    if (g === '' || m === '') return;
+    const params = new URLSearchParams({ grams: g, minutes: m, quantity: $('#cost-qty').value || 1 });
+    if ($('#cost-spool').value) params.set('filament_id', $('#cost-spool').value);
+    const r = await fetch(`/api/costs/quote?${params}`);
+    if (!r.ok) { $('#cost-result').textContent = await sourceErrorText(r); return; }
+    const q = await r.json();
+    $('#cost-result').innerHTML = `<table class="facts"><tbody>
+      <tr><th>Filament</th><td>${money2(q.unit.filament)}</td></tr><tr><th>Electricity</th><td>${money2(q.unit.electricity)}</td></tr><tr><th>Machine time</th><td>${money2(q.unit.machine)}</td></tr>
+      <tr><th>Failed prints (${q.failure_pct}%)</th><td>${money2(q.unit.failures)}</td></tr><tr><th>Cost of one</th><td><b>${money2(q.unit.cost)}</b></td></tr>
+      <tr><th>Ask for (+${q.margin_pct}%)</th><td><b>${money2(q.unit.price)}</b></td></tr>
+      ${q.quantity > 1 ? `<tr><th>For ${q.quantity}: cost / price</th><td>${money2(q.total.cost)} / <b>${money2(q.total.price)}</b></td></tr>` : ''}</tbody></table>
+      <div class="muted">Failure allowance from ${esc(q.failure_from)}; filament price from ${esc(q.filament_from)}.${q.missing.length ? ` Not counted: ${q.missing.map(esc).join(', ')} (Settings, Costs).` : ''}</div>`;
+  };
+  panel.querySelectorAll('input, select').forEach(el => el.addEventListener('change', run));
+  run();
 }
 
 // ---------- Open a model in a slicer on this computer ----------
@@ -3398,6 +3432,7 @@ async function loadQueue() {
   ]);
   const slotsByPrinter = Object.fromEntries(slotData.printers.map(p => [p.id, p]));
   const fitData = await fetch('/api/fit/queue').then(r => (r.ok ? r.json() : {}));
+  const suggestions = await fetch('/api/queue/suggestions').then(r => (r.ok ? r.json() : {}));
   const [items, models, printerData, summary] = await Promise.all([
     (await fetch('/api/queue')).json(),
     (await fetch('/api/library/models?limit=1000')).json(),
@@ -3426,6 +3461,8 @@ async function loadQueue() {
       <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
         ${fitData[i.id] && !fitData[i.id].fits ? `<span class="warn-text" title="model ${fitData[i.id].model.map(v => Math.round(v)).join(' x ')} mm, bed ${fitData[i.id].bed.filter(Boolean).join(' x ')} mm">&#9888; too big for ${esc(fitData[i.id].printer)}'s bed</span>` : ''}
         ${i.uses ? `<span class="muted">${JSON.parse(i.uses).length} spools counted</span>` : ''}
+        ${suggestions[i.id] ? `<span class="muted" title="${esc(suggestions[i.id][0].reasons.join('; '))}">suggested: ${esc(suggestions[i.id][0].name)}${suggestions[i.id][0].slot ? ' slot ' + suggestions[i.id][0].slot : ''}
+          <button class="queue-suggest" data-id="${i.id}" data-printer="${suggestions[i.id][0].printer_id}" data-slot="${suggestions[i.id][0].slot || ''}">Use</button></span>` : ''}
         ${hints[i.model_id] && ['queued', 'printing'].includes(i.status) ? `<span class="warn-text" title="${esc(hints[i.model_id].tip || '')}">&#9888; ${esc(hintText(hints[i.model_id]))}</span>` : ''}</span>
       <span>
         ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
@@ -3446,6 +3483,24 @@ async function loadQueue() {
     const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { planned_date: input.value || null });
     if (!res.ok) showNotice(await sourceErrorText(res));
   });
+  $$('.queue-suggest').forEach(btn => btn.onclick = async () => {
+    const body = { printer_id: parseInt(btn.dataset.printer) };
+    const res = await jsonRequest('PATCH', `/api/queue/${btn.dataset.id}`, body);
+    if (res.ok && btn.dataset.slot) await jsonRequest('PATCH', `/api/queue/${btn.dataset.id}`, { slot: parseInt(btn.dataset.slot) });
+    loadQueue();
+  });
+  const waitingWithoutPrinter = Object.keys(suggestions).length;
+  $('#queue-summary').insertAdjacentHTML('beforeend', waitingWithoutPrinter ? ` <div><button id="queue-assign-all">Give the ${waitingWithoutPrinter} waiting print${waitingWithoutPrinter === 1 ? '' : 's'} without a printer the best one</button> <span id="queue-assign-msg" class="muted"></span></div>` : '');
+  const assignAll = $('#queue-assign-all');
+  if (assignAll) assignAll.onclick = async () => {
+    const res = await jsonRequest('POST', '/api/queue/auto-assign', {});
+    if (!res.ok) { showNotice(await sourceErrorText(res)); return; }
+    const r = await res.json();
+    await loadQueue();
+    $('#queue-summary').insertAdjacentHTML('beforeend', ` <div class="muted">Assigned ${r.assigned.length}. ${r.activity_id ? `<button id="queue-assign-undo" data-id="${r.activity_id}">Undo</button>` : ''}</div>`);
+    const undo = $('#queue-assign-undo');
+    if (undo) undo.onclick = async () => { if (await undoActivity(undo.dataset.id)) loadQueue(); };
+  };
   $$('.queue-colours').forEach(btn => btn.onclick = async () => {
     const item = items.find(x => x.id === parseInt(btn.dataset.id));
     const li = btn.closest('li');
@@ -3809,6 +3864,20 @@ for (const [id, url, label] of [['#offsite-test', '/api/backup/offsite/test', 'W
     $('#offsite-status').textContent = res.ok ? `${label} ${(await res.json()).where}` : await sourceErrorText(res);
   });
 }
+async function saveSpoolman() {
+  return saveSetting({ spoolman_url: $('#spoolman-url').value.trim(), spoolman_sync_usage: $('#spoolman-usage').checked ? 'true' : '' });
+}
+$('#spoolman-save').addEventListener('click', async () => { $('#spoolman-status').textContent = (await saveSpoolman()) ? 'Saved.' : 'Could not save.'; });
+for (const [id, path] of [['#spoolman-test', 'test'], ['#spoolman-import', 'import'], ['#spoolman-export', 'export']]) {
+  $(id).addEventListener('click', async () => {
+    await saveSpoolman();
+    $('#spoolman-status').textContent = 'Working...';
+    const res = await fetch(`/api/spoolman/${path}`, { method: 'POST' });
+    if (!res.ok) { $('#spoolman-status').textContent = await sourceErrorText(res); return; }
+    const d = await res.json();
+    $('#spoolman-status').textContent = d.message || (path === 'import' ? `Added ${d.added}, refreshed ${d.updated} (of ${d.seen}).` : `Sent ${d.created} spool${d.created === 1 ? '' : 's'}.`);
+  });
+}
 $('#weekly-summary').addEventListener('change', () => saveSetting({ weekly_summary: $('#weekly-summary').checked ? 'true' : '' }));
 $('#weekly-test-btn').addEventListener('click', async () => {
   await saveSetting({ notify_webhook_url: $('#notify-webhook-url').value });
@@ -3973,6 +4042,99 @@ $('#rules-run').addEventListener('click', () => runRules(false));
 $('#rules-status').addEventListener('click', async (e) => {
   if (e.target.id !== 'rules-undo') return;
   if (await undoActivity(e.target.dataset.id)) $('#rules-status').textContent = 'Undone.';
+});
+
+// ---------- Orders ----------
+let ordersOpen = new Set();
+async function loadOrders() {
+  const res = await fetch('/api/orders');
+  if (!res.ok) { $('#orders-list').innerHTML = '<p class="error-text">Could not load the orders.</p>'; return; }
+  const data = await res.json();
+  const readOnly = currentUser.role === 'viewer';
+  $('#order-new-box').classList.toggle('hidden', readOnly);
+  const badge = o => `<span class="status-badge ${o.status === 'delivered' ? '' : o.status === 'cancelled' ? 'status-failed' : 'status-printing'}">${esc(o.status)}</span>`;
+  $('#orders-list').innerHTML = data.orders.length ? data.orders.map(o => `
+    <div class="panel order-card" data-id="${o.id}">
+      <div class="row order-head"><b>${esc(o.customer)}</b> ${badge(o)} ${o.paid ? '<span class="status-badge">paid</span>' : ''}
+        ${o.due_date ? `<span class="${o.overdue ? 'warn-text' : 'muted'}">due ${esc(o.due_date)}${o.overdue ? ' (late)' : ''}</span>` : ''}
+        <span class="muted">${o.units_done} of ${o.units} printed &middot; ${money2(o.price)} for ${money2(o.cost)} cost &middot; profit ${money2(o.profit)}</span>
+        <button class="order-toggle">${ordersOpen.has(o.id) ? 'Close' : 'Open'}</button></div>
+      <div class="order-body ${ordersOpen.has(o.id) ? '' : 'hidden'}"></div></div>`).join('') : '<p class="muted">No orders yet.</p>';
+  for (const o of data.orders) if (ordersOpen.has(o.id)) renderOrderBody(o.id);
+}
+
+async function renderOrderBody(id) {
+  const card = document.querySelector(`.order-card[data-id="${id}"]`);
+  if (!card) return;
+  const res = await fetch(`/api/orders/${id}`);
+  if (!res.ok) return;
+  const o = await res.json();
+  const readOnly = currentUser.role === 'viewer';
+  const statuses = ['quote', 'accepted', 'printing', 'ready', 'delivered', 'cancelled'];
+  card.querySelector('.order-body').innerHTML = `
+    ${o.contact ? `<div class="muted">${esc(o.contact)}</div>` : ''}${o.notes ? `<div>${esc(o.notes)}</div>` : ''}
+    <table class="facts"><thead><tr><th>Model</th><th>How many</th><th>Price each</th><th>Line</th><th>Printed</th><th></th></tr></thead><tbody>
+      ${o.items.map(i => `<tr data-item="${i.id}"><td><a href="#/model/${i.model_id}">${esc(i.filename || 'model ' + i.model_id)}</a></td>
+        <td><input class="oi-qty" type="number" min="1" value="${i.quantity}" style="width:5em" ${readOnly ? 'disabled' : ''}></td>
+        <td><input class="oi-price" type="number" min="0" step="0.01" value="${i.unit_price ?? ''}" placeholder="${i.suggested_price != null ? i.suggested_price + ' (suggested)' : 'price'}" style="width:8em" ${readOnly ? 'disabled' : ''}></td>
+        <td>${money2(i.line_price)}</td><td>${i.units_done} / ${i.quantity}${i.units_queued < i.quantity ? ` <span class="muted">(${i.quantity - i.units_queued} not queued)</span>` : ''}</td>
+        <td>${readOnly ? '' : '<button class="oi-remove">Remove</button>'}</td></tr>`).join('')}</tbody></table>
+    ${readOnly ? '' : `<div class="row"><input class="oi-model" list="order-models-${id}" placeholder="Add a model (type to search)"><datalist id="order-models-${id}"></datalist>
+      <input class="oi-new-qty" type="number" min="1" value="1" style="width:5em" aria-label="How many"><button class="oi-add">Add</button>
+      <select class="order-status">${statuses.map(s => `<option value="${s}" ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <label class="inline-check"><input type="checkbox" class="order-paid" ${o.paid ? 'checked' : ''}> paid</label>
+      <button class="order-queue primary">Put the prints in the queue</button><button class="order-delete danger">Delete</button><span class="order-msg muted"></span></div>
+      ${o.suggested_status !== o.status ? `<div class="muted">Looks like it is <b>${esc(o.suggested_status)}</b> now.</div>` : ''}`}`;
+  const body = card.querySelector('.order-body');
+  const msg = text => { const el = body.querySelector('.order-msg'); if (el) el.textContent = text; };
+  const reload = async () => { await loadOrders(); };
+  body.querySelectorAll('.oi-qty, .oi-price').forEach(input => input.onchange = async () => {
+    const row = input.closest('tr');
+    const price = row.querySelector('.oi-price').value;
+    const r = await jsonRequest('PATCH', `/api/orders/${id}/items/${row.dataset.item}`, { quantity: parseInt(row.querySelector('.oi-qty').value), unit_price: price === '' ? null : parseFloat(price) });
+    if (r.ok) reload(); else msg(await sourceErrorText(r));
+  });
+  body.querySelectorAll('.oi-remove').forEach(b => b.onclick = async () => { await fetch(`/api/orders/${id}/items/${b.closest('tr').dataset.item}`, { method: 'DELETE' }); reload(); });
+  const modelInput = body.querySelector('.oi-model');
+  if (modelInput) modelInput.oninput = async () => {
+    if (modelInput.value.length < 2) return;
+    const found = await fetch(`/api/library/models?q=${encodeURIComponent(modelInput.value.replace(/\s*#\d+$/, ''))}&limit=15`).then(r => (r.ok ? r.json() : []));
+    body.querySelector('datalist').innerHTML = found.map(m => `<option value="${esc(m.filename)} #${m.id}"></option>`).join('');
+  };
+  const add = body.querySelector('.oi-add');
+  if (add) add.onclick = async () => {
+    const m = /#(\d+)\s*$/.exec(modelInput.value);
+    if (!m) { msg('Pick a model from the list.'); return; }
+    const r = await jsonRequest('POST', `/api/orders/${id}/items`, { model_id: parseInt(m[1]), quantity: parseInt(body.querySelector('.oi-new-qty').value) || 1 });
+    if (r.ok) reload(); else msg(await sourceErrorText(r));
+  };
+  const status = body.querySelector('.order-status');
+  if (status) status.onchange = async () => { await jsonRequest('PATCH', `/api/orders/${id}`, { status: status.value }); reload(); };
+  const paid = body.querySelector('.order-paid');
+  if (paid) paid.onchange = async () => { await jsonRequest('PATCH', `/api/orders/${id}`, { paid: paid.checked }); reload(); };
+  const queue = body.querySelector('.order-queue');
+  if (queue) queue.onclick = async () => {
+    const r = await jsonRequest('POST', `/api/orders/${id}/queue`, {});
+    if (r.ok) { const d = await r.json(); showNotice(d.queued ? `Queued ${d.queued} print${d.queued === 1 ? '' : 's'}.` : 'Everything is already in the queue.'); reload(); } else msg(await sourceErrorText(r));
+  };
+  const del = body.querySelector('.order-delete');
+  if (del) del.onclick = async () => { if (confirm('Delete this order? Its prints stay in the queue.')) { await fetch(`/api/orders/${id}`, { method: 'DELETE' }); ordersOpen.delete(id); reload(); } };
+}
+
+$('#orders-list').addEventListener('click', (e) => {
+  if (!e.target.classList.contains('order-toggle')) return;
+  const id = parseInt(e.target.closest('.order-card').dataset.id);
+  if (ordersOpen.has(id)) ordersOpen.delete(id); else ordersOpen.add(id);
+  loadOrders();
+});
+$('#order-create').addEventListener('click', async () => {
+  const res = await jsonRequest('POST', '/api/orders', { customer: $('#order-customer').value, contact: $('#order-contact').value, due_date: $('#order-due').value || null, notes: $('#order-notes').value });
+  if (!res.ok) { $('#order-status-msg').textContent = await sourceErrorText(res); return; }
+  const o = await res.json();
+  ordersOpen.add(o.id);
+  ['#order-customer', '#order-contact', '#order-due', '#order-notes'].forEach(sel => { $(sel).value = ''; });
+  $('#order-status-msg').textContent = '';
+  loadOrders();
 });
 
 // ---------- Calendar ----------
@@ -4278,6 +4440,12 @@ async function loadSettings() {
   $('#est-infill').value = s.est_infill || '15';
   $('#cost-kwh-price').value = s.cost_kwh_price || '';
   $('#cost-printer-watts').value = s.cost_printer_watts || '';
+  $('#cost-machine-hour').value = s.cost_machine_per_hour || '';
+  $('#cost-failure-pct').value = s.cost_failure_pct || '';
+  $('#cost-margin-pct').value = s.cost_margin_pct || '';
+  $('#cost-default-kg').value = s.cost_default_per_kg || '';
+  $('#spoolman-url').value = s.spoolman_url || '';
+  $('#spoolman-usage').checked = s.spoolman_sync_usage === 'true';
   $('#bed-x').value = s.bed_x || '';
   $('#bed-y').value = s.bed_y || '';
   $('#bed-z').value = s.bed_z || '';
@@ -4349,6 +4517,8 @@ $('#save-estimate-settings-btn').addEventListener('click', async () => {
       est_infill: $('#est-infill').value,
       cost_kwh_price: $('#cost-kwh-price').value,
       cost_printer_watts: $('#cost-printer-watts').value,
+      cost_machine_per_hour: $('#cost-machine-hour').value, cost_failure_pct: $('#cost-failure-pct').value,
+      cost_margin_pct: $('#cost-margin-pct').value, cost_default_per_kg: $('#cost-default-kg').value,
       bed_x: $('#bed-x').value, bed_y: $('#bed-y').value, bed_z: $('#bed-z').value,
     }),
   });

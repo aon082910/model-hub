@@ -31,6 +31,7 @@
       <button data-tab="matches">Matches</button>
       <button data-tab="filament">Filament</button>
       <button data-tab="stats">Stats</button>
+      <button data-tab="orders">Orders</button>
       <button data-tab="queue">Print Queue</button>
       <button data-tab="calendar">Calendar</button>
       <button data-tab="settings">Settings</button>
@@ -422,6 +423,17 @@
     </div>
   </section>
 
+  <section id="tab-orders" class="tab">
+    <h2>Orders</h2>
+    <p class="muted">Prints made for other people: who, what, how many, by when, and what it brings in. Prices you do not set use the cost calculator's suggestion (Settings, Costs).</p>
+    <details id="order-new-box"><summary>New order</summary>
+      <div class="row"><input id="order-customer" placeholder="Customer"><input id="order-contact" placeholder="Contact (optional)"><input id="order-due" type="date" aria-label="Due date"></div>
+      <div class="row"><input id="order-notes" placeholder="Notes"><button id="order-create" class="primary">Create</button><span id="order-status-msg" class="muted"></span></div>
+    </details>
+    <div class="row"><a class="button-link" href="/api/orders/export.csv" download>Orders as a spreadsheet</a></div>
+    <div id="orders-list"></div>
+  </section>
+
   <section id="tab-stats" class="tab">
     <h2>Stats</h2>
     <div class="row"><label>Show the last
@@ -537,6 +549,10 @@
       <label>Default infill (0-1) <input id="est-infill" placeholder="0.15"></label>
       <label>Electricity price per kWh <small>(adds electricity to a project's cost; leave empty to leave it out)</small> <input id="cost-kwh-price" type="number" min="0" step="0.001" placeholder="0.15"></label>
       <label>Printer power draw (watts) <input id="cost-printer-watts" type="number" min="0" step="1" placeholder="150"></label>
+      <label>Machine time per hour <small>(what an hour of the printer is worth to you: wear, upkeep, your time)</small> <input id="cost-machine-hour" type="number" min="0" step="0.01" placeholder="0"></label>
+      <label>Allowance for failed prints % <small>(empty: your own record once there are 10 prints, else 5%)</small> <input id="cost-failure-pct" type="number" min="0" step="0.5" placeholder="auto"></label>
+      <label>Margin on top % <input id="cost-margin-pct" type="number" min="0" step="1" placeholder="30"></label>
+      <label>Price per kg when a spool has none <input id="cost-default-kg" type="number" min="0" step="0.5" placeholder="20"></label>
       <label>Printer build volume (mm) <small>(for the library's "fits my printer's bed" filter; a model may be turned flat)</small>
         <span class="row"><input id="bed-x" type="number" min="0" placeholder="X"><input id="bed-y" type="number" min="0" placeholder="Y"><input id="bed-z" type="number" min="0" placeholder="Z"></span>
       </label>
@@ -650,6 +666,13 @@
       <div id="io-result" class="muted"></div>
     </div>
 
+    <h2>Spoolman</h2>
+    <div class="settings-form">
+      <p class="muted">Share spools with a Spoolman server. <b>Import</b> brings its spools in (once each, refreshing the weight later), <b>Export</b> creates Model Hub's spools there, and with the box ticked every print's grams are also reported to Spoolman.</p>
+      <div class="row"><input id="spoolman-url" placeholder="http://192.168.1.20:7912"><label class="inline-check"><input type="checkbox" id="spoolman-usage"> Report each print's grams to it</label></div>
+      <div class="row"><button id="spoolman-save">Save</button><button id="spoolman-test">Test</button><button id="spoolman-import">Import its spools</button><button id="spoolman-export">Send mine to it</button><span id="spoolman-status" class="muted"></span></div>
+    </div>
+
     <h2>Print planning</h2>
     <div class="settings-form">
       <p class="muted">How many hours a day each printer may run. The calendar warns about days that need more than your printers have, and plans waiting prints into days with room.</p>
@@ -738,6 +761,7 @@
         <div id="viewer-info"></div>
         <div class="panel" id="model-links-panel"></div>
         <div class="panel" id="model-slicer-panel"></div>
+        <div class="panel" id="model-cost-panel"></div>
         <div class="panel" id="model-prints-panel"></div>
         <div class="panel admin-only hidden" id="model-printer-panel"></div>
       </div>

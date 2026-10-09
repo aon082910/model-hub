@@ -107,6 +107,7 @@ class Filament(SQLModel, table=True):
     purchase_url: Optional[str] = None
     notes: Optional[str] = None
     cost: Optional[float] = None   # what the spool cost; with spool_weight_g it gives the price per gram
+    external_id: Optional[str] = None   # the same spool elsewhere, like "spoolman:12"
 
 
 class QueueItem(SQLModel, table=True):
@@ -123,6 +124,8 @@ class QueueItem(SQLModel, table=True):
     estimate_basis: Optional[str] = None       # manual, history, adjusted, estimate: where estimated_minutes came from
     planned_date: Optional[str] = None         # YYYY-MM-DD, for the calendar
     slot: Optional[int] = None                 # the spool slot of printer_id the job is printed from
+    order_id: Optional[int] = Field(default=None, index=True)       # the order this print is for
+    order_item_id: Optional[int] = None
     uses: Optional[str] = None                 # JSON [{slot|filament_id, grams}]: a multicolour job's spools (else filament_id/slot above)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -287,6 +290,26 @@ class Printer(SQLModel, table=True):
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Order(SQLModel, table=True):
+    """Prints made for someone: who, what, how many, by when, and what it brings in."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    customer: str
+    contact: Optional[str] = None
+    status: str = "quote"                  # quote, accepted, printing, ready, delivered, cancelled
+    due_date: Optional[str] = None         # YYYY-MM-DD
+    notes: Optional[str] = None
+    paid: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class OrderItem(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_id: int = Field(index=True)
+    model_id: int
+    quantity: int = 1
+    unit_price: Optional[float] = None     # empty: the price the cost calculator suggests
 
 
 class MaintenanceTask(SQLModel, table=True):

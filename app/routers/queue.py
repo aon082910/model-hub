@@ -136,6 +136,8 @@ def _on_done(session: Session, item: QueueItem, printer_id: Optional[int] = None
         if spool:
             spool.remaining_g = max(0.0, spool.remaining_g - grams)
             session.add(spool)
+            from app import spoolman
+            spoolman.report_usage(session, spool, grams)
     spool_id = max(parts, key=lambda p: p[1])[0] if parts else slots.effective_filament(session, item)
     from app.routers.prints import log_print
     for earlier in session.exec(select(PrintLog).where(PrintLog.queue_item_id == item.id, PrintLog.outcome == "failed")).all():
@@ -196,6 +198,43 @@ def uses_from_file(model_id: int, printer_id: Optional[int] = None, session: Ses
             taken.add(suggestion)
         out.append({**f, "suggested_slot": suggestion})
     return {"file": {"id": file.id, "filename": file.filename}, "filaments": out}
+
+
+@router.get("/suggestions")
+def printer_suggestions(session: Session = Depends(get_session)):
+    """For waiting entries without a printer: the printers that would suit them, best first, and why."""
+    from app import routing
+    return routing.suggestions(session)
+
+
+@router.post("/auto-assign")
+def auto_assign(payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Give waiting entries that have no printer the best printer (and slot) suggested for them. dry_run only shows the choice;
+    a real run can be undone from Recent changes."""
+    from app import activity, routing
+    ids = payload.get("item_ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        raise HTTPException(400, "item_ids must be a list of queue entry ids")
+    dry = payload.get("dry_run") is True
+    chosen = {i: c[0] for i, c in routing.suggestions(session, ids).items()}
+    old = {}
+    if not dry:
+        for item_id, best in chosen.items():
+            item = session.get(QueueItem, item_id)
+            old[str(item_id)] = {"printer_id": item.printer_id, "slot": item.slot, "filament_id": item.filament_id, "new_printer": best["printer_id"]}
+            item.printer_id, item.slot = best["printer_id"], best["slot"]
+            if best["slot"] and not item.filament_id:
+                from app import slots as slot_mod
+                item.filament_id = slot_mod.loaded(session, best["printer_id"], best["slot"])
+            session.add(item)
+        session.commit()
+    activity_id = None
+    if not dry and chosen:
+        entry = activity.record(session, activity.actor_of(request), "queue", f"Gave {len(chosen)} waiting print(s) a printer",
+                                undo={"kind": "queue_assign", "old": old})
+        activity_id = entry.id
+    return {"assigned": [{"id": i, "printer_id": b["printer_id"], "printer": b["name"], "slot": b["slot"], "reasons": b["reasons"]} for i, b in chosen.items()],
+            "dry_run": dry, "activity_id": activity_id}
 
 
 @router.get("/summary")

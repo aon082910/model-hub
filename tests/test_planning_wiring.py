@@ -82,3 +82,12 @@ def test_stage_16_controls_are_in_the_page():
     for element in ("offsite-kind", "offsite-path", "offsite-url", "offsite-user", "offsite-password", "offsite-keep", "offsite-save", "offsite-test", "offsite-now", "offsite-status"):
         assert f'id="{element}"' in HTML, element
     assert "/api/backup/offsite/test" in JS and "/api/backup/offsite/now" in JS
+
+
+def test_stage_17_controls_are_in_the_page():
+    assert 'data-tab="orders"' in HTML and 'id="tab-orders"' in HTML and re.search(r"orders:\s*\(\)\s*=>\s*loadOrders\(\)", JS)
+    for element in ("order-customer", "order-create", "orders-list", "model-cost-panel", "cost-machine-hour", "cost-failure-pct", "cost-margin-pct", "cost-default-kg",
+                    "spoolman-url", "spoolman-usage", "spoolman-save", "spoolman-test", "spoolman-import", "spoolman-export"):
+        assert f'id="{element}"' in HTML, element
+    assert "/api/costs/quote" in JS and "renderCostPanel" in JS and "/api/orders" in JS and "order-queue" in JS
+    assert "/api/queue/suggestions" in JS and "queue-assign-all" in JS and "/api/spoolman/" in JS

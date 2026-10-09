@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, engine
 from app.config import SCAN_INTERVAL_SECONDS
-from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, queue, settings, ai, slicer, auth_router
+from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, costs, orders, spoolman_router, queue, settings, ai, slicer, auth_router
 from app.auth import path_requires_auth, current_user, forbidden_reason, bootstrap_from_env, ensure_extension_api_key
 
 logging.basicConfig(level=logging.INFO)
@@ -86,6 +86,9 @@ app.include_router(maintenance.router)
 app.include_router(slicer_links.router)
 app.include_router(fit.router)
 app.include_router(offsite_router.router)
+app.include_router(costs.router)
+app.include_router(orders.router)
+app.include_router(spoolman_router.router)
 app.include_router(slicer_links.public_router)
 app.include_router(queue.router)
 app.include_router(settings.router)
