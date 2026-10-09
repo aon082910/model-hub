@@ -68,6 +68,11 @@ def _smithsonian_host_ok(host: Optional[str]) -> bool:
     return sources.host_in_domains(host, sources.SMITHSONIAN_DOMAINS)
 
 
+def _huggingface_host_ok(host: Optional[str]) -> bool:
+    from app import dataset_sources
+    return dataset_sources.host_ok(host)
+
+
 def _archive_host_ok(host: Optional[str]) -> bool:
     return sources.host_in_domains(host, sources.ARCHIVE_DOMAINS)
 
@@ -75,7 +80,22 @@ def _archive_host_ok(host: Optional[str]) -> bool:
 HOST_CHECKS = {
     "printables": _printables_host_ok, "thingiverse": _thingiverse_host_ok,
     "commons": _commons_host_ok, "nasa3d": _nasa_host_ok, "smithsonian": _smithsonian_host_ok, "archive": _archive_host_ok,
+    "thingi10k": _huggingface_host_ok, "objaverse": _huggingface_host_ok,
 }
+
+
+def convert_to_stl(path: Path) -> Path:
+    """A downloaded GLB becomes an STL next to it (in the mesh worker, whose memory is capped); the GLB is removed."""
+    from app import mesh_worker
+    out = path.with_suffix(".stl")
+    pool = mesh_worker.scan_worker_pool()
+    try:
+        pool.run(mesh_worker.convert_file, str(path), str(out), pool.budget_bytes)
+    except Exception as e:
+        text = str(e)
+        raise sources.SourceError(text.split(": ", 1)[-1][:200] if "surface" in text or "faces" in text or "size" in text else f"The model could not be converted ({e.__class__.__name__})")
+    path.unlink(missing_ok=True)
+    return out
 
 
 def safe_name(text: str, fallback: str = "listing") -> str:
@@ -182,6 +202,10 @@ def provider_files(client: httpx.Client, provider: str, source_id: str, credenti
         files = sources.nasa_files(client, source_id)
     elif provider == "archive":
         files = sources.archive_files(client, source_id)
+    elif provider == "thingi10k":
+        files = sources.thingi10k_files(source_id)
+    elif provider == "objaverse":
+        files = sources.objaverse_files(client, source_id)
     elif provider == "smithsonian":
         files = sources.smithsonian_files(client, source_id)
         ready = [f for f in files if f["print_ready"]]
@@ -254,6 +278,9 @@ def download_listing(session: Session, item: dict, credentials: Optional[dict],
                     path = download_file(client, f["url"], temp, f["name"], host_ok, progress=progress, cancelled=cancelled)
                 set_status("importing", f"Adding {path.name} to the library")
                 suffix = path.suffix.lower()
+                if suffix in (".glb", ".gltf"):
+                    path = convert_to_stl(path)
+                    suffix = ".stl"
                 try:
                     if suffix in ARCHIVE_EXTENSIONS:
                         result = import_archive_from_path(session, path, folder, source_url=details["url"])

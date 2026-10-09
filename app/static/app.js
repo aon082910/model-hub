@@ -1584,6 +1584,7 @@ function frameCameraOn(object3d) {
 const PROVIDER_LABELS = {
   printables: 'Printables', makerworld: 'MakerWorld', sketchfab: 'Sketchfab', thingiverse: 'Thingiverse',
   myminifactory: 'MyMiniFactory', cults3d: 'Cults3D', commons: 'Wikimedia Commons', nasa3d: 'NASA 3D Resources', smithsonian: 'Smithsonian 3D', archive: 'Internet Archive (Thingiverse)',
+  thingi10k: 'Thingi10K (research dataset)', objaverse: 'Objaverse (research dataset)',
 };
 
 function parseJsonList(value) {
@@ -3823,6 +3824,7 @@ function renderTimeline(data) {
 
 async function loadQueue() {
   loadPrinters();
+  loadSlicerInbox();
   const [slotData, hints] = await Promise.all([
     fetch('/api/slots').then(r => (r.ok ? r.json() : { printers: [] })),
     loadHints(),
@@ -5136,6 +5138,86 @@ $('#ha-save').addEventListener('click', async () => {
   if (ok) { $('#ha-token').value = ''; loadSensors(); }
 });
 
+async function loadVirtualPrinter() {
+  const box = $('#virtual-printer-box');
+  if (!box) return;
+  const res = await fetch('/api/settings/virtual-printer');
+  if (!res.ok) { box.textContent = ''; return; }
+  const d = await res.json();
+  box.innerHTML = `<label class="inline-check"><input type="checkbox" id="vp-enabled" ${d.enabled ? 'checked' : ''}> Accept files from slicers</label>
+    ${d.enabled ? `<p>Address: <code>${esc(d.address)}</code></p><ul>${d.how.map(h => `<li>${esc(h)}</li>`).join('')}</ul>
+      <p class="muted">Make the API key under <b>API tokens</b> below: give it a name like "PrusaSlicer" and the <b>write</b> scope, and copy it when it is shown (it is shown once).</p>` : ''}`;
+  $('#vp-enabled').onchange = async (e) => { await jsonRequest('POST', '/api/settings/virtual-printer', { enabled: e.target.checked }); loadVirtualPrinter(); };
+}
+
+async function loadSlicerInbox() {
+  const box = $('#slicer-inbox-box');
+  if (!box) return;
+  const res = await fetch('/api/slicer-inbox');
+  if (!res.ok) { box.classList.add('hidden'); return; }
+  const data = await res.json();
+  const waiting = data.files.filter(f => f.status === 'waiting');
+  if (!data.files.length) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const readOnly = currentUser.role === 'viewer';
+  box.innerHTML = `<h3>From the slicer${waiting.length ? ` (${waiting.length} waiting)` : ''}</h3>
+    <p class="muted">Sliced files that a slicer sent to Model Hub. Those whose name matches a model are already kept with it; the others wait here until you say which model they are for.</p>
+    ${data.files.slice(0, 12).map(f => `<div class="file-row" data-id="${f.id}"><b>${esc(f.filename)}</b> <span class="muted">${formatBytes(f.size_bytes)} &middot; ${esc(String(f.sent_at).slice(0, 16).replace('T', ' '))}${f.print_requested ? ' &middot; asked to print' : ''}</span>
+      ${f.status === 'filed' ? `<span>kept with <a href="#/model/${f.model_id}">${esc(f.model || 'a model')}</a></span>`
+        : (readOnly ? '' : `<input class="inbox-model" list="inbox-models-${f.id}" placeholder="Which model? (type to search)"><datalist id="inbox-models-${f.id}"></datalist><button class="inbox-file">Keep with it</button>
+          ${f.kind === '3mf' ? '<button class="inbox-new">Make a new model from it</button>' : ''}<button class="inbox-delete">Delete</button>`)}</div>`).join('')}
+    <span id="inbox-msg" class="muted"></span>`;
+  const msg = text => { $('#inbox-msg').textContent = text; };
+  box.querySelectorAll('.file-row').forEach(row => {
+    const id = row.dataset.id, input = row.querySelector('.inbox-model');
+    if (input) input.oninput = async () => {
+      if (input.value.length < 2) return;
+      const found = await fetch(`/api/library/models?q=${encodeURIComponent(input.value.replace(/\s*#\d+$/, ''))}&limit=15`).then(r => (r.ok ? r.json() : []));
+      row.querySelector('datalist').innerHTML = found.map(m => `<option value="${esc(m.filename)} #${m.id}"></option>`).join('');
+    };
+    const file = row.querySelector('.inbox-file');
+    if (file) file.onclick = async () => {
+      const m = /#(\d+)\s*$/.exec(input.value);
+      if (!m) { msg('Pick a model from the list.'); return; }
+      const r = await jsonRequest('POST', `/api/slicer-inbox/${id}/file`, { model_id: parseInt(m[1]) });
+      if (r.ok) loadSlicerInbox(); else msg(await sourceErrorText(r));
+    };
+    const made = row.querySelector('.inbox-new');
+    if (made) made.onclick = async () => {
+      const r = await jsonRequest('POST', `/api/slicer-inbox/${id}/new-model`, {});
+      if (r.ok) loadSlicerInbox(); else msg(await sourceErrorText(r));
+    };
+    const del = row.querySelector('.inbox-delete');
+    if (del) del.onclick = async () => { if (confirm('Delete this file?')) { await fetch(`/api/slicer-inbox/${id}`, { method: 'DELETE' }); loadSlicerInbox(); } };
+  });
+}
+
+async function loadDatasets() {
+  const box = $('#datasets-box');
+  if (!box) return;
+  const res = await fetch('/api/settings/datasets');
+  if (!res.ok) { box.textContent = ''; return; }
+  const data = await res.json();
+  const label = { thingi10k: 'Thingi10K', objaverse: 'Objaverse' };
+  box.innerHTML = Object.keys(label).map(name => {
+    const d = data[name];
+    return `<div class="budget-row" data-name="${name}"><span class="budget-name">${label[name]}</span>
+      <span class="muted">${d.present ? `${d.items.toLocaleString()} ${name === 'objaverse' ? 'objects' : 'things'}, downloaded ${d.age_days < 1 ? 'today' : Math.round(d.age_days) + ' days ago'}` : 'Not downloaded: it is left out of searches.'}</span>
+      <button class="dataset-update">${d.present ? 'Update the list' : 'Download the list'}</button>${d.present ? '<button class="dataset-remove">Remove it</button>' : ''}
+      <span class="dataset-msg muted"></span></div>`;
+  }).join('');
+  box.querySelectorAll('.budget-row').forEach(row => {
+    const name = row.dataset.name, msg = row.querySelector('.dataset-msg');
+    row.querySelector('.dataset-update').onclick = async () => {
+      msg.textContent = name === 'objaverse' ? 'Downloading about 20 MB... this takes a little while' : 'Downloading...';
+      const r = await fetch(`/api/settings/datasets/${name}/update`, { method: 'POST' });
+      if (r.ok) loadDatasets(); else msg.textContent = await sourceErrorText(r);
+    };
+    const remove = row.querySelector('.dataset-remove');
+    if (remove) remove.onclick = async () => { await fetch(`/api/settings/datasets/${name}`, { method: 'DELETE' }); loadDatasets(); };
+  });
+}
+
 async function loadStatusPage() {
   const box = $('#status-page-box');
   if (!box) return;
@@ -5176,6 +5258,8 @@ $('#storage-refresh').addEventListener('click', loadStorage);
 
 async function loadSettings() {
   loadStorage();
+  loadVirtualPrinter();
+  loadDatasets();
   loadSensors();
   loadBudgetsBox();
   loadStatusPage();

@@ -40,6 +40,18 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.25.0
+Slicers can now send sliced files straight to Model Hub: switch on the
+virtual printer (Settings, Slicer) and add it in PrusaSlicer, OrcaSlicer or
+Cura as an OctoPrint or Moonraker printer with an API token. The file is kept
+with the model it is named after and queued if the slicer says upload and
+print; nothing is ever started, and files it cannot place wait in an inbox.
+Thingi10K and Objaverse can be added as sources (Settings, Dataset sources:
+each list is downloaded once on request): Thingi10K is searched by name,
+designer and tag; Objaverse by category, with names and licences from
+Sketchfab and models converted to an STL scaled to 80 mm. No new settings are
+required; new tables are added automatically on first start.
+
 ### 2.24.0
 From a third round of research: a Report under Stats (jobs, success rate,
 print time, filament and cost by printer, material and customer, with filters

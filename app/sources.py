@@ -67,12 +67,14 @@ NASA_TREE_API = f"https://api.github.com/repos/{NASA_REPO}/git/trees/master?recu
 NASA_RAW = f"https://raw.githubusercontent.com/{NASA_REPO}/master/"
 NASA_WEB = f"https://github.com/{NASA_REPO}/tree/master/"
 
-PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d", "smithsonian", "archive")
+PROVIDERS = ("printables", "makerworld", "sketchfab", "thingiverse", "myminifactory", "cults3d", "commons", "nasa3d", "smithsonian", "archive", "thingi10k", "objaverse")
+# Research datasets: searched from a list downloaded once on request (Settings, Dataset sources), so they only take part in a search once that list is here
+DATASET_PROVIDERS = ("thingi10k", "objaverse")
 PROVIDER_LABELS = {
     "printables": "Printables", "makerworld": "MakerWorld", "sketchfab": "Sketchfab", "thingiverse": "Thingiverse",
     "myminifactory": "MyMiniFactory", "cults3d": "Cults3D",
     "commons": "Wikimedia Commons", "nasa3d": "NASA 3D Resources", "smithsonian": "Smithsonian 3D",
-    "archive": "Internet Archive (Thingiverse)",
+    "archive": "Internet Archive (Thingiverse)", "thingi10k": "Thingi10K (research dataset)", "objaverse": "Objaverse (research dataset)",
 }
 # Providers that need credentials: the fields to enter in Settings (each is stored
 # as the setting "<provider>_<field>"), a label, whether it is secret, and where to get one.
@@ -88,7 +90,7 @@ CREDENTIAL_HELP = {
 }
 KEYLESS_PROVIDERS = tuple(p for p in PROVIDERS if p not in CREDENTIAL_FIELDS)
 # Where model files can be downloaded by this server (see the module docstring)
-DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d", "smithsonian", "archive")
+DOWNLOAD_PROVIDERS = ("printables", "thingiverse", "commons", "nasa3d", "smithsonian", "archive", "thingi10k", "objaverse")
 DOWNLOAD_NOTES = {
     "makerworld": "MakerWorld only gives model files to logged-in users. Open the listing, then use the Model Hub browser extension while logged in.",
     "sketchfab": "Sketchfab only gives downloads to logged-in users, and as glTF rather than printable formats.",
@@ -187,6 +189,8 @@ def valid_source_id(provider: str, source_id) -> bool:
         return re.fullmatch(r"[0-9a-f]{12}", source_id) is not None
     if provider == "archive":
         return re.fullmatch(r"thingiverse-\d{1,12}", source_id) is not None
+    if provider == "objaverse":
+        return re.fullmatch(r"[0-9a-f]{32}", source_id) is not None
     if provider == "smithsonian":
         return re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source_id) is not None
     return provider in PROVIDERS and source_id.isdigit()
@@ -212,7 +216,8 @@ def available_providers(credentials: Optional[dict] = None) -> tuple:
     """Providers to search by default: the keyless ones plus any with a credential."""
     def complete(provider):
         return all(_credential(credentials, provider, field) for field, _, _ in CREDENTIAL_FIELDS[provider])
-    return tuple(p for p in PROVIDERS if p in KEYLESS_PROVIDERS or complete(p))
+    from app import dataset_sources
+    return tuple(p for p in PROVIDERS if (p in DATASET_PROVIDERS and dataset_sources.present(p)) or (p not in DATASET_PROVIDERS and (p in KEYLESS_PROVIDERS or complete(p))))
 
 
 def html_to_text(value: Optional[str]) -> str:
@@ -320,6 +325,10 @@ def fetch_details(provider: str, source_id: str, credentials: Optional[dict] = N
             return _smithsonian_details(client, source_id)
         if provider == "archive":
             return _archive_details(client, source_id)
+        if provider == "thingi10k":
+            return _thingi10k_details(source_id)
+        if provider == "objaverse":
+            return _objaverse_details(client, source_id)
         return _thingiverse_details(client, source_id, _thingiverse_token(credentials))
 
 
@@ -1125,6 +1134,84 @@ def archive_files(client: httpx.Client, source_id: str) -> list:
     return out
 
 
+# ---------- research datasets: Thingi10K and Objaverse (see app/dataset_sources.py) ----------
+
+def _dataset(call, *args):
+    from app import dataset_sources
+    try:
+        return call(*args)
+    except dataset_sources.DatasetError as e:
+        raise SourceError(str(e))
+
+
+def _thingi10k_result(t: dict) -> dict:
+    return {"provider": "thingi10k", "source_id": t["source_id"], "url": f"https://www.thingiverse.com/thing:{t['source_id']}", "title": t["name"], "designer": t["author"],
+            "license": t["license"], "thumbnail": None}
+
+
+def _search_thingi10k(query: str, limit: int, page: int = 1) -> list:
+    from app import dataset_sources
+    return [_thingi10k_result(t) for t in _dataset(dataset_sources.thingi10k_search, query, limit, page)]
+
+
+def _thingi10k_details(source_id: str) -> dict:
+    from app import dataset_sources
+    t = _dataset(dataset_sources.thingi10k_thing, source_id)
+    return {"provider": "thingi10k", "source_id": source_id, "url": f"https://www.thingiverse.com/thing:{source_id}", "title": t["name"], "designer": t["author"],
+            "license": t["license"], "description": "From the Thingi10K research dataset: a snapshot of Thingiverse things made between 2009 and 2015. Each model keeps the licence it had there, "
+                                                      "and some licences forbid commercial use.", "tags": t["tags"][:12], "category": t["category"], "images": [], "likes": None, "downloads": None,
+            "parts": [], "filaments": []}
+
+
+def thingi10k_files(source_id: str) -> list:
+    from app import dataset_sources
+    t = _dataset(dataset_sources.thingi10k_thing, source_id)
+    return [{"id": f["id"], "name": f["name"] if f["name"].lower().endswith(".stl") else f["name"] + ".stl", "size": None, "url": dataset_sources.thingi10k_file_url(f["id"]),
+             "closed": f.get("closed")} for f in t["files"]]
+
+
+def _objaverse_listing(client: httpx.Client, entry: dict) -> dict:
+    """What Sketchfab says about the same object (its name, designer, picture, licence); a deleted object still gets a plain listing."""
+    uid = entry["uid"]
+    try:
+        details = _sketchfab_details(client, uid)
+    except SourceError:
+        details = {"url": f"https://sketchfab.com/3d-models/{uid}", "title": "", "designer": "", "license": "", "description": "", "tags": [], "images": [], "designer_handle": ""}
+    category = entry["category"].replace("_", " ")
+    return {**details, "provider": "objaverse", "source_id": uid, "title": details.get("title") or f"{category.capitalize()} ({uid[:8]})", "category": category,
+            "license": details.get("license") or "Creative Commons (see the listing)", "likes": None, "downloads": None, "parts": [], "filaments": [],
+            "description": (details.get("description") or "")[:3000] + ("\n\n" if details.get("description") else "") +
+                           "From Objaverse. It is a textured model made for screens: it is converted to an STL scaled to 80 mm along its longest side, so check its size and whether it can be printed. "
+                           "Creative Commons licences may forbid commercial use or changes (NC, ND)."}
+
+
+def _search_objaverse(client: httpx.Client, query: str, limit: int, page: int = 1) -> list:
+    from app import dataset_sources
+    entries = _dataset(dataset_sources.objaverse_search, query, limit, page)
+    if not entries:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(entries))) as pool:
+        listings = list(pool.map(lambda e: _objaverse_listing(client, e), entries))
+    return [{"provider": "objaverse", "source_id": d["source_id"], "url": d["url"], "title": d["title"], "designer": d["designer"], "license": d["license"],
+             "thumbnail": d["images"][0] if d.get("images") else None} for d in listings]
+
+
+def _objaverse_details(client: httpx.Client, source_id: str) -> dict:
+    from app import dataset_sources
+    entry = _dataset(dataset_sources.objaverse_entry, source_id)
+    if not entry:
+        raise SourceError("That object is not in the Objaverse list you downloaded")
+    return _objaverse_listing(client, entry)
+
+
+def objaverse_files(client: httpx.Client, source_id: str) -> list:
+    from app import dataset_sources
+    entry = _dataset(dataset_sources.objaverse_entry, source_id)
+    if not entry:
+        raise SourceError("That object is not in the Objaverse list you downloaded")
+    return [{"id": source_id, "name": f"{source_id}.glb", "size": None, "url": dataset_sources.objaverse_file_url(source_id, entry["shard"]), "convert": True}]
+
+
 # ---------- model files (Printables, Thingiverse) ----------
 # Only these two sites let a server fetch the files; see the module docstring.
 
@@ -1361,7 +1448,7 @@ query($q: String!, $limit: Int!, $offset: Int!) { result: searchPrints2(query: $
 
 # Collections of reference models rather than designers' marketplaces: a personal file
 # is unlikely to come from there, and a wrong automatic link is worse than none.
-NOT_FOR_MATCHING = ("commons", "nasa3d", "smithsonian", "archive")
+NOT_FOR_MATCHING = ("commons", "nasa3d", "smithsonian", "archive", "thingi10k", "objaverse")
 
 
 def matching_providers(credentials: Optional[dict] = None) -> tuple:
@@ -1400,6 +1487,10 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
             return _search_smithsonian(client, query, limit, page)
         if provider == "archive":
             return _search_archive(client, query, limit, page)
+        if provider == "thingi10k":
+            return _search_thingi10k(query, limit, page)
+        if provider == "objaverse":
+            return _search_objaverse(client, query, limit, page)
         return _search_cults3d(client, query, limit, _cults3d_auth(credentials), page)
 
     # every site at once: one slow site delays the answer, it does not add up

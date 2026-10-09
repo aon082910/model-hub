@@ -177,6 +177,18 @@ def repair_file(src_str: str, dest_str: str, budget_bytes: int) -> dict:
         _release_memory()
 
 
+def convert_file(src_str: str, dest_str: str, budget_bytes: int) -> dict:
+    """Worker entry point: a GLB converted to a scaled STL."""
+    from app.mesh_convert import glb_to_stl
+
+    try:
+        return glb_to_stl(Path(src_str), Path(dest_str))
+    except Exception as exc:
+        raise _portable(exc) from None
+    finally:
+        _release_memory()
+
+
 class MeshWorkerPool:
     """A small pool of memory-capped worker processes, replaced if one dies or hangs."""
 

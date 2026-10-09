@@ -32,6 +32,7 @@ EVENTS = {
     "failure_suspected": "A camera thinks a print may have failed",
     "dry_due": "A spool in a printer is due for drying",
     "stock_low": "Finished parts on the shelf are at or below their minimum",
+    "slicer_upload": "A sliced file arrived from a slicer (the virtual printer)",
     "print_started": "A print started (off until you switch it on)",
     "print_progress": "A print passed another step of its progress (off until you switch it on)",
     "print_paused": "A print was paused or resumed (off until you switch it on)",

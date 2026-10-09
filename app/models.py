@@ -563,3 +563,19 @@ class ModelAttachment(SQLModel, table=True):
     size_bytes: int = 0
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SlicerUpload(SQLModel, table=True):
+    """A sliced file that a slicer sent to Model Hub's virtual printer. It is filed with the model it belongs to, or waits here until you say which."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    filename: str
+    stored_name: Optional[str] = None       # where it waits in CONFIG_PATH/print_files (empty once it has been filed)
+    kind: str                               # gcode, gco, g, bgcode, 3mf
+    size_bytes: int = 0
+    sha256: str = ""
+    print_requested: bool = False           # the slicer pressed "upload and print": it is queued, never started
+    status: str = "waiting"                 # waiting, filed
+    model_id: Optional[int] = None
+    sent_by: Optional[str] = None           # the API token it came with
+    note: Optional[str] = None
+    sent_at: datetime = Field(default_factory=datetime.utcnow)

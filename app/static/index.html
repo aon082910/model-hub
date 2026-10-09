@@ -527,6 +527,7 @@
     </div>
     <div id="slots-panel" class="panel hidden"></div>
     <div id="maintenance-panel" class="panel"></div>
+    <div id="slicer-inbox-box" class="panel hidden"></div>
     <h2>Print Queue</h2>
     <div id="queue-summary" class="muted"></div>
     <div class="row"><button id="queue-view-list" class="active">List</button><button id="queue-view-timeline">Timeline</button></div>
@@ -735,6 +736,22 @@
         <label>Most printers printing at once <input id="max-printing" type="number" min="0" max="50" step="1" placeholder="no limit"></label>
         <button id="stagger-save">Save</button><span id="stagger-status" class="muted"></span></div>
       <label class="inline-check"><input type="checkbox" id="strict-colour"> Only suggest or send to a printer that has exactly the spool's material and colour loaded (a single print can opt in or out on the queue)</label>
+    </div>
+
+    <h2>Slicer: a virtual printer</h2>
+    <div class="settings-form">
+      <p class="muted">Let a slicer (PrusaSlicer, OrcaSlicer, Cura) <b>send</b> its sliced file straight to Model Hub, as if Model Hub were an OctoPrint or Klipper printer. The file is kept with the model it belongs to (matched by its name) and, if the slicer says <i>upload and print</i>, put in the queue. Nothing is ever printed from here: there is no machine behind it. A file it cannot place waits in the inbox on the Print Queue page.</p>
+      <div id="virtual-printer-box"></div>
+    </div>
+
+    <h2>Dataset sources</h2>
+    <div class="settings-form">
+      <p class="muted">Two research collections you can search and download from, once their list is here (the lists come from Hugging Face only; nothing else is contacted, and nothing is sent).
+        <b>Thingi10K</b> is about 2 000 Thingiverse things from 2009 to 2015 (a small download of three CSV files); each model keeps the licence it had, and about half of the meshes are not solid.
+        <b>Objaverse</b> is a very large collection of textured models, mostly from Sketchfab: the labelled part (about 46 000 objects) is searched by category (chair, teddy bear...), the name, designer and licence come from Sketchfab,
+        and a model is converted to an STL scaled to 80 mm when you download it. Many of them were made for screens, not printers, and some licences forbid selling prints or changing the model (NC, ND): the licence is shown on every result.
+        Objaverse's list is about 20 MB to download once.</p>
+      <div id="datasets-box"></div>
     </div>
 
     <h2>Status page for a wall display</h2>

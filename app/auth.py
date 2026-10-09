@@ -27,6 +27,8 @@ PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/", "/status/")
 # session cookie, so it must only ever unlock this one endpoint -- never settings,
 # never account changes, never the rest of the library.
 API_KEY_ALLOWED_PATHS = {"/api/library/import"}
+# A slicer's "upload to OctoPrint / Moonraker" (Model Hub's virtual printer) sends an API token as X-Api-Key, on these paths only
+VIRTUAL_PRINTER_PATHS = {"/api/version", "/api/files/local", "/server/info", "/printer/info", "/server/files/upload"}
 
 # Settings never writable/readable through the generic /api/settings blob --
 # they have their own dedicated, access-controlled endpoints instead. Without
@@ -162,6 +164,11 @@ def current_user(request: Request, session: Session):
         stored_key = get_setting(session, "extension_api_key")
         if api_key and stored_key and hmac.compare_digest(api_key, stored_key):
             return {"username": "extension", "role": "importer"}
+    if request.url.path in VIRTUAL_PRINTER_PATHS and request.headers.get("x-api-key"):
+        from app import tokens                        # a slicer sends the token as an OctoPrint/Moonraker API key
+        row = tokens.lookup(session, request.headers["x-api-key"].strip())
+        if row and tokens.SCOPE_ROLES.get(row.scope) in ("member", "viewer"):
+            return {"username": f"token:{row.name}", "role": tokens.SCOPE_ROLES[row.scope]}
     bearer = request.headers.get("authorization", "")
     if bearer.lower().startswith("bearer "):
         from app import tokens
