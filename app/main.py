@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db import init_db, engine
 from app.config import SCAN_INTERVAL_SECONDS
 from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, costs, orders, spoolman_router, share_target, creators, storage_router, favorites, queue, settings, ai, slicer, auth_router
+from app.routers import bambu_send
 from app.auth import path_requires_auth, current_user, forbidden_reason, bootstrap_from_env, ensure_extension_api_key
 
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,7 @@ app.include_router(designers.router)
 app.include_router(source_updates.router)
 app.include_router(users.router)
 app.include_router(printers.router)
+app.include_router(bambu_send.router)
 app.include_router(bulk.router)
 app.include_router(saved_searches.router)
 app.include_router(families.router)
