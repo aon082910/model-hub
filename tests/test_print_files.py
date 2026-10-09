@@ -47,7 +47,7 @@ def test_bambu_and_cura_comments_are_read():
     b = print_files.parse_gcode_text(BAMBU)
     assert b["est_minutes"] == round(59 + 2 / 60, 1) and b["est_grams"] == 8.31 and b["filament_type"] == "PLA" and b["layer_height"] == "0.16"
     c = print_files.parse_gcode_text(CURA)
-    assert c["est_minutes"] == round(3725 / 60, 1) and c["layer_height"] == "0.15" and "Cura" in c["slicer"] and c["est_grams"] is None
+    assert c["est_minutes"] == round(3725 / 60, 1) and c["layer_height"] == "0.15" and "Cura" in c["slicer"] and c["est_grams"] == 4.53        # Cura writes only the length (metres): the weight is worked out from it
 
 
 def test_a_file_without_comments_has_no_metadata():
