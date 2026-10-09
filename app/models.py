@@ -133,6 +133,8 @@ class QueueItem(SQLModel, table=True):
     priority: Optional[int] = None             # -1 low, 0 or empty normal, 1 high
     held: Optional[bool] = None                # waiting for someone to look at it: not suggested, assigned or sent until released
     printer_tag: Optional[str] = None          # only a printer with this tag may print it
+    cost_centre_id: Optional[int] = None      # the budget this print is charged to
+    strict_match: Optional[bool] = None       # True: only a printer with exactly this material and colour loaded; None: follow Settings
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -313,6 +315,7 @@ class Order(SQLModel, table=True):
     due_date: Optional[str] = None         # YYYY-MM-DD
     notes: Optional[str] = None
     paid: bool = False
+    cost_centre_id: Optional[int] = None   # its prints are charged to this budget
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -427,6 +430,7 @@ class PrintFile(SQLModel, table=True):
     layer_height: Optional[str] = None
     filaments: Optional[str] = None       # JSON [{index, type, color, grams}]: each filament the file uses
     notes: Optional[str] = None
+    printer_id: Optional[int] = None      # sliced for this printer (a file for one machine is never sent to another)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -496,3 +500,34 @@ class PrintProfile(SQLModel, table=True):
     name: str = Field(index=True)
     settings: str                           # JSON, the same fields as a model's "what worked"
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CostCentre(SQLModel, table=True):
+    """A budget prints are charged to: a project, a customer, a club account."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    budget: float = 0
+    period: str = "total"                   # total, or month (the spent part starts again each month)
+    hard_stop: bool = False                 # refuse to queue or send what would go over
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class LedgerEntry(SQLModel, table=True):
+    """Money spent from a budget: a finished print, the filament of a failed one, or something you wrote in."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    cost_centre_id: int = Field(index=True)
+    queue_item_id: Optional[int] = None
+    amount: float                           # negative is a credit
+    kind: str = "print"                     # print, failed, manual
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PrinterSensor(SQLModel, table=True):
+    """A Home Assistant sensor tied to a printer: while it is alerting, prints for that printer wait."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(index=True)
+    entity_id: str                          # like binary_sensor.printer_door
+    condition: str                          # on, off, above, below
+    threshold: Optional[float] = None       # for above and below
+    label: Optional[str] = None

@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.23.0
+From a second round of research: budgets that reserve money when a print is
+queued, charge it when it finishes and can stop a dispatch once spent; a
+sliced file kept for one printer; an exact-colour switch for routing; orders
+that move to printing and ready by themselves; queued prints held while a Home
+Assistant sensor is alerting (door open, chamber hot); pause, resume or cancel
+on several printers at once; a queue timeline with when each print would
+finish if started now; a printer login that can start and stop prints but
+change nothing else; and a most-used sort for the library. No new settings
+are required; new columns and tables are added automatically on first start.
+
 ### 2.22.0
 Maintenance keeps a history of what was done, with an optional note for each.
 Print settings can be saved as named profiles and put on any model. A status

@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from app import print_files
 from app.db import get_session
-from app.models import Model3D, PrintFile
+from app.models import Model3D, PrintFile, Printer
 
 router = APIRouter(prefix="/api/print-files", tags=["print-files"])
 
@@ -42,11 +42,13 @@ def list_files(model_id: int, session: Session = Depends(get_session)):
 
 
 @router.post("")
-def upload(model_id: int = Form(...), file: UploadFile = File(...), notes: Optional[str] = Form(None),
+def upload(model_id: int = Form(...), file: UploadFile = File(...), notes: Optional[str] = Form(None), printer_id: Optional[int] = Form(None),
            session: Session = Depends(get_session)):
     """Keep a sliced file with a model. G-code (.gcode .gco .g .bgcode) or a sliced .3mf."""
     if not session.get(Model3D, model_id):
         raise HTTPException(404, "Model not found")
+    if printer_id is not None and not session.get(Printer, printer_id):
+        raise HTTPException(400, "That printer does not exist")
     kind = Path(file.filename or "").suffix.lower().lstrip(".")
     if kind not in print_files.KINDS:
         raise HTTPException(400, "Only G-code (.gcode .gco .g .bgcode) or a sliced .3mf can be kept here")
@@ -66,14 +68,14 @@ def upload(model_id: int = Form(...), file: UploadFile = File(...), notes: Optio
                 out.write(chunk)
         if size == 0:
             raise HTTPException(400, "That file is empty")
-        same = session.exec(select(PrintFile).where(PrintFile.model_id == model_id, PrintFile.sha256 == digest.hexdigest())).first()
+        same = session.exec(select(PrintFile).where(PrintFile.model_id == model_id, PrintFile.sha256 == digest.hexdigest(), PrintFile.printer_id == printer_id)).first()
         if same:
             path.unlink(missing_ok=True)
             return {**_json(same), "duplicate": True}
         meta = print_files.read_metadata(path, kind)
         name = Path(file.filename).name[:200]
         row = PrintFile(model_id=model_id, filename=name, stored_name=stored, kind=kind, size_bytes=size, sha256=digest.hexdigest(),
-                        notes=(notes or "").strip()[:1000] or None, **meta)
+                        notes=(notes or "").strip()[:1000] or None, printer_id=printer_id, **meta)
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -97,6 +99,10 @@ def update(file_id: int, payload: dict, session: Session = Depends(get_session))
     row = session.get(PrintFile, file_id)
     if not row:
         raise HTTPException(404, "Not found")
+    if "printer_id" in payload:
+        if payload["printer_id"] is not None and (isinstance(payload["printer_id"], bool) or not isinstance(payload["printer_id"], int) or not session.get(Printer, payload["printer_id"])):
+            raise HTTPException(400, "That printer does not exist")
+        row.printer_id = payload["printer_id"]
     if "notes" in payload:
         notes = payload["notes"]
         if notes is not None and not isinstance(notes, str):

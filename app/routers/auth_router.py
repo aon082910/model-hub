@@ -78,7 +78,7 @@ def me(request: Request):
 def change_own_password(payload: dict, request: Request, session: Session = Depends(get_session)):
     """A member's or viewer's own password (the administrator uses /change-password)."""
     user = getattr(request.state, "user", None) or {}
-    if user.get("role") not in ("member", "viewer"):
+    if user.get("role") not in ("member", "viewer", "printer"):
         raise HTTPException(400, "The administrator changes their password with the Account section")
     row = session.exec(select(AppUser).where(AppUser.username == user["username"])).first()
     if not row or not verify_password(payload.get("current_password") or "", row.password_hash):

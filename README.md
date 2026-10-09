@@ -225,9 +225,7 @@ farms with limited power.
 
 **Research for versions 2.16 to 2.19:** I asked what else people want from a self-hosted 3D-print library and what other tools are praised for, and built the
 ones that fit this program: every spool of a multicolour print, pause/resume/cancel, bed sizes and "will it fit", off-site backups, a cost calculator, orders for people who sell prints, choosing the printer, Spoolman, watching a camera for a failed print (with your own local vision model,
-not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models, collection covers, NFC tags for spools, staggered starts with a power limit, and an optional pause when the camera sees a failure (it never cancels, because a wrong guess would ruin a good print). A further research round (a multi-source search checked claim by claim) added queue priority, hold and tags, the low-spool check, filament weight from G-code length, the spool database and the shop-order import. Left out on purpose: *ActivityPub federation* (a large project with no sign of demand here), mounting external folders (the library folder is already read in place) and direct shop connections (credentials I cannot test). *NIH 3D* has no documented interface (its site runs on private calls), so it was not added; *Sketchfab* and *MyMiniFactory* downloads need your own login, which is what the existing sources already ask of you. A second round (also checked claim by claim, mostly from Bambuddy's and Manyfold's release notes and issue trackers) found these that are not built yet, in the order I would do them: budgets and cost centres that reserve money when a print is queued and can stop a dispatch once spent; a file per printer model on one queue entry
-("any X1C or H2D"); a strict colour-match switch for routing; holding queued prints while a Home Assistant sensor (a door, a chamber temperature) is alerting; bulk pause/resume/stop over several printers; a queue timeline with "finishes at ... if started now"; a "printer" role that may start prints but not administer; and a popularity sort. On the source side it looked at
-*Thingi10K* (10 000 meshes, but a frozen 2009-2015 Thingiverse subset, so it adds little) and *Objaverse* (800 000 objects, 8.9 TB, mostly textured Sketchfab models with a licence field each: usable only as a metadata index). No other site with a usable interface was verified. More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
+not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models, collection covers, NFC tags for spools, staggered starts with a power limit, and an optional pause when the camera sees a failure (it never cancels, because a wrong guess would ruin a good print). A further research round (a multi-source search checked claim by claim) added queue priority, hold and tags, the low-spool check, filament weight from G-code length, the spool database and the shop-order import. Left out on purpose: *ActivityPub federation* (a large project with no sign of demand here), mounting external folders (the library folder is already read in place) and direct shop connections (credentials I cannot test). *NIH 3D* has no documented interface (its site runs on private calls), so it was not added; *Sketchfab* and *MyMiniFactory* downloads need your own login, which is what the existing sources already ask of you. A second round (also checked claim by claim, mostly from Bambuddy's and Manyfold's release notes and issue trackers) produced the budgets, a sliced file per printer, the exact-colour switch, sensor holds, bulk printer actions, the queue timeline with "if started now", the printer role and the most-used sort, all described above. On the source side it looked at *Thingi10K* (10 000 meshes, but a frozen 2009-2015 Thingiverse subset, so it adds little) and *Objaverse* (800 000 objects, 8.9 TB, mostly textured Sketchfab models with a licence field each: usable only as a metadata index, so it was not added). No other site with a usable interface was verified. Not done: per-user wallets (budgets are shared cost centres) and a slicer-facing virtual printer. More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
 their models are mostly made for screens, not for printing, or need an account or a key, so none was added.
 
 Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
@@ -534,6 +532,47 @@ looks failed (loose strings, a part knocked off, a blob). Two bad looks in a row
 
 Under the watching switch, *Also pause the print after three bad looks in a row* lets Model Hub pause the print (Klipper, OctoPrint or Bambu), never cancel it. The warning still comes after two bad looks; the pause after a third, six minutes in, and you are told it
 was paused (or that it could not be, and why). Resume or cancel from the printer card once you have looked. It is off by default and can only be switched on for a printer that is watched; a vision model can be wrong, so a pause costs you a click, never a print.
+
+## Budgets
+
+**Settings → Budgets** keeps cost centres: a project, a customer, a club account, each with an amount (in all, or a month) and an optional *stop when spent*. Choose a budget on a waiting print (or on an order, which gives it to every print it queues). A queued print **reserves** its expected cost (from the cost calculator: grams and minutes
+set on the entry), a finished print is **charged** what it cost, a failed one only the filament that went into it, and you can write in anything else (*Add spending*, or a credit as a negative number). What is left is the amount minus what was spent minus what is reserved. A budget set to stop refuses to queue, assign or send what would take it
+over, and starting a print for an over-budget budget cannot be forced; raise the amount instead. A budget that is not set to stop only shows the figure. Prints with no known grams or time reserve nothing and are counted as "not priced". Deleting a budget frees its prints and forgets its ledger.
+
+## A sliced file for one printer
+
+When you keep a sliced file with a model you can say it is **for a printer** (a file made for one machine should never go to another). Sending from the queue uses the printer's own file first, else a file made for any printer, and refuses a model whose files are all made for other printers; suggestions only name printers that have a file.
+Removing a printer turns its files back into files for any printer.
+
+## Exact colour
+
+A waiting print can ask for an **exact colour**: only a printer with a spool of exactly the same material and colour (by name or hex) loaded is suggested, and starting it elsewhere asks first. Each print chooses *as in Settings*, *exact* or *any*; **Settings → Print planning** has the default.
+
+## Orders move on by themselves
+
+An order that is *accepted* becomes *printing* when its first unit is done and *ready* when every unit is (with a notification); a delivered or cancelled order is left alone.
+
+## Holding prints while a sensor alerts
+
+**Settings → Printer sensors** takes your Home Assistant address and a long-lived access token (kept out of backups), and binds sensors to printers: a door contact that is *on*, a chamber thermometer *above* a number. Every half minute Model Hub reads them; while one is alerting, that printer is not suggested for new prints and sending to it waits (the queue says why), and you can still start anyway.
+If Home Assistant cannot be reached or a sensor is unavailable, nothing is held.
+
+## Several printers at once
+
+Tick printers in the printers list and use **Pause**, **Resume** or **Cancel the print** on all of them (or *Tick the printing ones*). Each printer is looked at on its own: only a printing one is paused, only a paused one resumed, and one that cannot be reached does not stop the rest.
+
+## Queue timeline
+
+The queue has a **Timeline** view: for each printer, its running print (taking what is left of its estimate) and the waiting prints one after another in queue order, grouped by the hour they finish; held prints and prints without an estimate are listed but not placed. Waiting prints that could start right now show **finishes about HH:MM if started now**.
+It is arithmetic over the estimates, so it is only as good as they are.
+
+## A printer login
+
+A **printer** login (Settings → People) can look at everything except the administrator's pages and can start, pause, resume and cancel prints, send files to printers and change its own password, but change nothing else: for the person who runs the farm without being its administrator.
+
+## Most used first
+
+The Library sort **most used** puts the models you print most first: each print that worked counts three, each star two and each time it was queued one.
 
 ## Maintenance history
 

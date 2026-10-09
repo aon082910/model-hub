@@ -13,7 +13,7 @@ from app.settings_store import get_setting
 
 FILTER_KEYS = ("q", "tag", "extension", "duplicates_only", "printed", "designer", "license", "collection_id",
                "project_id", "linked", "fits_bed", "has_notes", "latest_only", "failed_before", "fits_printer", "favorite")
-SORT_KEYS = ("id", "name", "newest", "oldest", "largest", "smallest", "last_printed")
+SORT_KEYS = ("id", "name", "newest", "oldest", "largest", "smallest", "last_printed", "popular")
 
 
 class FilterError(ValueError):
@@ -116,6 +116,12 @@ def order_by(sort: Optional[str]):
         return [Model3D.size_bytes.desc(), Model3D.id], None
     if sort == "smallest":
         return [Model3D.size_bytes, Model3D.id], None
+    if sort == "popular":                    # prints that worked count most, then stars, then times it was queued
+        from app.models import Favorite, QueueItem
+        prints = select(func.count()).select_from(PrintLog).where(PrintLog.model_id == Model3D.id, print_outcomes.ok()).correlate(Model3D).scalar_subquery()
+        stars = select(func.count()).select_from(Favorite).where(Favorite.model_id == Model3D.id).correlate(Model3D).scalar_subquery()
+        queued = select(func.count()).select_from(QueueItem).where(QueueItem.model_id == Model3D.id).correlate(Model3D).scalar_subquery()
+        return [(prints * 3 + stars * 2 + queued).desc(), Model3D.id], None
     if sort == "last_printed":
         last = select(PrintLog.model_id, func.max(PrintLog.printed_at).label("last")).where(print_outcomes.ok()).group_by(PrintLog.model_id).subquery()
         return [last.c.last.desc(), Model3D.id], last

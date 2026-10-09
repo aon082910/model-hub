@@ -171,8 +171,12 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     name = printer.name
     from app import slots
     slots.forget_printer(session, printer_id)
-    from app import maintenance
+    from app import maintenance, sensors
     maintenance.forget_printer(session, printer_id)
+    sensors.forget_printer(session, printer_id)
+    for kept in session.exec(select(PrintFile).where(PrintFile.printer_id == printer_id)).all():
+        kept.printer_id = None                         # a file made for a printer that is gone suits any printer again (ids are reused)
+        session.add(kept)
     session.delete(printer)
     session.commit()
     activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")
@@ -193,14 +197,8 @@ def printer_snapshot(printer_id: int, session: Session = Depends(get_session)):
         raise HTTPException(502, str(e))
 
 
-@router.post("/{printer_id}/control")
-def control_printer(printer_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
-    """Pause, resume or cancel what the printer is printing now (administrator only). It first looks at what the printer is doing:
-    a pause is only sent to a printer that is printing, a resume to one that is paused, a cancel to either."""
-    printer = _get(session, printer_id)
-    action = payload.get("action")
-    if action not in printing.CONTROL_ACTIONS:
-        raise HTTPException(400, "action must be pause, resume or cancel")
+def _control_one(session: Session, printer: Printer, action: str, request: Request) -> dict:
+    """Look at what the printer is doing, then pause (only if printing), resume (only if paused) or cancel (either). Raises HTTPException."""
     state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
     if not state["online"]:
         raise HTTPException(502, state.get("message") or "The printer cannot be reached")
@@ -213,6 +211,57 @@ def control_printer(printer_id: int, payload: dict, request: Request, session: S
         raise HTTPException(502, str(e))
     activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: {action} sent" + (f" ({state['file']})" if state.get("file") else ""))
     return {"status": "sent", "action": action, "was": state["state"]}
+
+
+MAX_BULK = 50
+
+
+@router.post("/bulk-control")
+def bulk_control(payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Pause, resume or cancel on several printers at once: the ones you name (printer_ids), or every printer in a state (state: printing or paused) or with a tag.
+    Each printer is checked on its own, so one that cannot be reached or is not in the right state does not stop the others."""
+    from app import printwatch
+    action = payload.get("action")
+    if action not in printing.CONTROL_ACTIONS:
+        raise HTTPException(400, "action must be pause, resume or cancel")
+    everyone = session.exec(select(Printer).order_by(Printer.name)).all()
+    chosen = {}
+    ids, state, tag = payload.get("printer_ids"), payload.get("state"), payload.get("tag")
+    if ids is None and state is None and tag is None:
+        raise HTTPException(400, "Say which printers: printer_ids, a state or a tag")
+    if ids is not None:
+        if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            raise HTTPException(400, "printer_ids must be a list of printer ids")
+        chosen.update({p.id: p for p in everyone if p.id in ids})
+    if state is not None:
+        if state not in ("printing", "paused"):
+            raise HTTPException(400, "state must be printing or paused")
+        chosen.update({p.id: p for p in everyone if (printwatch.latest.get(p.id) or {}).get("state") == state})
+    if tag is not None:
+        if not isinstance(tag, str) or not tag.strip():
+            raise HTTPException(400, "tag must be text")
+        chosen.update({p.id: p for p in everyone if tag.strip().lower() in (p.tags or "").split(",")})
+    if len(chosen) > MAX_BULK:
+        raise HTTPException(400, f"At most {MAX_BULK} printers at once")
+    results = []
+    for printer in chosen.values():
+        try:
+            done = _control_one(session, printer, action, request)
+            results.append({"id": printer.id, "name": printer.name, "ok": True, "message": f"{action} sent", "was": done["was"]})
+        except HTTPException as e:
+            results.append({"id": printer.id, "name": printer.name, "ok": False, "message": str(e.detail)})
+    return {"action": action, "results": results, "sent": sum(1 for r in results if r["ok"])}
+
+
+@router.post("/{printer_id}/control")
+def control_printer(printer_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Pause, resume or cancel what the printer is printing now. It first looks at what the printer is doing:
+    a pause is only sent to a printer that is printing, a resume to one that is paused, a cancel to either."""
+    printer = _get(session, printer_id)
+    action = payload.get("action")
+    if action not in printing.CONTROL_ACTIONS:
+        raise HTTPException(400, "action must be pause, resume or cancel")
+    return _control_one(session, printer, action, request)
 
 
 @router.post("/{printer_id}/plug-test")

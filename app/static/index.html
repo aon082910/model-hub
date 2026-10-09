@@ -76,7 +76,7 @@
         <select id="f-linked"><option value="">linked or not</option><option value="true">linked to a listing</option><option value="false">not linked</option></select>
         <select id="f-sort">
           <option value="">sort: oldest first (default)</option><option value="name">name</option><option value="newest">newest added</option>
-          <option value="largest">largest file</option><option value="smallest">smallest file</option><option value="last_printed">last printed</option>
+          <option value="largest">largest file</option><option value="smallest">smallest file</option><option value="last_printed">last printed</option><option value="popular">most used</option>
         </select>
         <label class="inline-check"><input type="checkbox" id="f-fits"> Fits my printer's bed</label>
         <label class="inline-check"><input type="checkbox" id="f-notes"> Has notes</label>
@@ -484,6 +484,8 @@
       <h3>Printers</h3>
       <p class="muted">Klipper (Moonraker) and OctoPrint printers on your network: see what they are doing and send them a G-code file
         (or a model, if a slicer is set up). Nothing is ever started unless you tick <b>Start printing</b>.</p>
+      <div id="printers-bulk" class="row hidden"><span class="muted">Ticked printers:</span><button id="bulk-pause">Pause</button><button id="bulk-resume">Resume</button><button id="bulk-cancel" class="danger">Cancel the print</button>
+        <button id="bulk-select-printing">Tick the printing ones</button><button id="bulk-select-none">Tick none</button><span id="printers-bulk-msg" class="muted"></span></div>
       <div id="printers-list"></div>
       <details id="printers-add-box">
         <summary>Add a printer</summary>
@@ -518,6 +520,8 @@
     <div id="maintenance-panel" class="panel"></div>
     <h2>Print Queue</h2>
     <div id="queue-summary" class="muted"></div>
+    <div class="row"><button id="queue-view-list" class="active">List</button><button id="queue-view-timeline">Timeline</button></div>
+    <div id="queue-timeline" class="panel hidden"></div>
     <div class="row" id="queue-sort-row"><span class="muted">Order the waiting prints:</span><button id="queue-sort-priority">By priority</button><button id="queue-sort-shortest">Shortest first, inside each priority</button>
       <span class="muted">(anything waiting two days or more goes first of its priority)</span></div>
     <ul id="queue-list"></ul>
@@ -696,6 +700,12 @@
       <div id="io-result" class="muted"></div>
     </div>
 
+    <h2>Budgets</h2>
+    <div class="settings-form">
+      <p class="muted">Money to spend on prints, for a project, a customer or a club. A print that is put in the queue <b>reserves</b> its expected cost (from the cost calculator), a finished print is <b>charged</b>, and a failed one only costs the filament that went into it. A budget set to <b>stop</b> refuses to queue or send what would take it over. Prints with no known grams or time reserve nothing.</p>
+      <div id="budgets-box"></div>
+    </div>
+
     <h2>Spoolman</h2>
     <div class="settings-form">
       <p class="muted">Share spools with a Spoolman server. <b>Import</b> brings its spools in (once each, refreshing the weight later), <b>Export</b> creates Model Hub's spools there, and with the box ticked every print's grams are also reported to Spoolman.</p>
@@ -712,12 +722,20 @@
       <div class="row"><label>Minutes between starts <input id="stagger-minutes" type="number" min="0" max="240" step="1" placeholder="0"></label>
         <label>Most printers printing at once <input id="max-printing" type="number" min="0" max="50" step="1" placeholder="no limit"></label>
         <button id="stagger-save">Save</button><span id="stagger-status" class="muted"></span></div>
+      <label class="inline-check"><input type="checkbox" id="strict-colour"> Only suggest or send to a printer that has exactly the spool's material and colour loaded (a single print can opt in or out on the queue)</label>
     </div>
 
     <h2>Status page for a wall display</h2>
     <div class="settings-form">
       <p class="muted">A page that shows each printer's state and progress and how many prints are waiting, without anyone signing in, for a tablet or a monitor on the wall. It is off until you switch it on, the link holds a secret (anyone who has it can look), it only shows what Model Hub already knows, and never an address, a key or a serial number.</p>
       <div id="status-page-box"></div>
+    </div>
+
+    <h2>Printer sensors (Home Assistant)</h2>
+    <div class="settings-form">
+      <p class="muted">Hold a printer's queued prints while a Home Assistant sensor is alerting (a door that is open, a chamber that is too hot). Model Hub asks Home Assistant for each bound sensor every half minute with a long-lived access token (made in your Home Assistant profile; it is kept out of backups). While a sensor is alerting that printer is not suggested for new prints and sending to it waits, with the reason shown, and you can still start anyway. If a sensor cannot be read, nothing is held.</p>
+      <div class="row"><input id="ha-url" placeholder="http://192.168.1.5:8123"><input id="ha-token" type="password" placeholder="Long-lived access token" autocomplete="new-password"><button id="ha-save">Save</button><span id="ha-status" class="muted"></span></div>
+      <div id="sensors-box"></div>
     </div>
 
     <h2>Share the whole library</h2>
@@ -769,12 +787,12 @@
     <h2>People</h2>
     <div class="settings-form">
       <p class="muted">Other logins for this Model Hub. A <b>member</b> can use everything in the library, projects, supplies, wishlist and so on, but not
-        Settings, backups, user management or deleting duplicate files. A <b>viewer</b> can only look. Your own login is the administrator.</p>
+        Settings, backups, user management or deleting duplicate files. A <b>viewer</b> can only look. A <b>printer</b> login can look at everything and start, pause, resume and cancel prints, but change nothing else. Your own login is the administrator.</p>
       <div id="users-list"></div>
       <div class="row">
         <input id="new-user-name" placeholder="User name" autocomplete="off">
         <input id="new-user-password" type="password" placeholder="Password (8+ characters)" autocomplete="new-password">
-        <select id="new-user-role"><option value="member">member</option><option value="viewer">viewer</option></select>
+        <select id="new-user-role"><option value="member">member</option><option value="viewer">viewer</option><option value="printer">printer</option></select>
         <button id="add-user-btn">Add</button>
         <span id="users-status" class="muted"></span>
       </div>

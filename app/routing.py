@@ -4,8 +4,45 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
-from app import fit, slots
+from app import fit, sensors, slots
 from app.models import Filament, Model3D, Printer, QueueItem
+
+
+def strict_wanted(session: Session, item: QueueItem) -> bool:
+    if item.strict_match is not None:
+        return bool(item.strict_match)
+    from app.settings_store import get_setting
+    return get_setting(session, "strict_colour", "") == "true"
+
+
+def same_spool_kind(a, b) -> bool:
+    """The same material and the same colour (by name or by hex)."""
+    if str(a.material or "").strip().lower() != str(b.material or "").strip().lower():
+        return False
+    ca, cb = str(a.color or "").strip().lower(), str(b.color or "").strip().lower()
+    ha, hb = str(a.color_hex or "").strip().lower(), str(b.color_hex or "").strip().lower()
+    return bool((ca and ca == cb) or (ha and ha == hb))
+
+
+def exact_match_in(spool, entry, session: Session) -> bool:
+    """Does the printer (its overview entry) have a spool of exactly this material and colour loaded?"""
+    if not entry:
+        return False
+    for slot in entry["slots"]:
+        loaded = session.get(Filament, slot["filament_id"]) if slot["filament_id"] else None
+        if loaded and (loaded.id == spool.id or same_spool_kind(loaded, spool)):
+            return True
+    return False
+
+
+def printers_with_files(session: Session, model_id: int):
+    """Printer ids a model's sliced files are made for, or None when it has a file that suits any printer (or none at all)."""
+    from app import print_files
+    from app.models import PrintFile
+    files = [f for f in session.exec(select(PrintFile).where(PrintFile.model_id == model_id)).all() if f.kind in print_files.GCODE_KINDS]
+    if not files or any(f.printer_id is None for f in files):
+        return None
+    return {f.printer_id for f in files}
 
 
 def tag_list(printer: Printer) -> list:
@@ -20,8 +57,16 @@ def suggest_for(session: Session, item: QueueItem, printers: list, overview: dic
     model = session.get(Model3D, item.model_id)
     spool = session.get(Filament, item.filament_id) if item.filament_id else None
     out = []
+    only = printers_with_files(session, item.model_id)
+    strict = strict_wanted(session, item) and spool is not None
     for printer in printers:
         reasons, score, slot = [], 100.0, None
+        if sensors.hold_reason(session, printer.id):
+            continue                                                      # a sensor says it should not be started now
+        if only is not None and printer.id not in only:
+            continue                                                      # its sliced files are all made for other printers
+        if strict and not exact_match_in(spool, overview.get(printer.id), session):
+            continue                                                      # exact colour wanted and not loaded here
         if item.printer_tag and item.printer_tag.lower() not in tag_list(printer):
             continue                                                      # it asked for a tag this printer does not have
         verdict = fit.fits(model, printer) if model else None

@@ -94,12 +94,28 @@ def _order_json(session: Session, order: Order, with_items: bool = True) -> dict
     elif done and order.status == "accepted":
         suggested = "printing"
     out = {"id": order.id, "customer": order.customer, "contact": order.contact, "status": order.status, "due_date": order.due_date, "notes": order.notes,
-           "paid": order.paid, "created_at": order.created_at.isoformat(), "units": wanted, "units_done": done,
+           "paid": order.paid, "cost_centre_id": order.cost_centre_id, "created_at": order.created_at.isoformat(), "units": wanted, "units_done": done,
            "price": round(price, 2), "cost": round(cost, 2), "profit": round(price - cost, 2), "suggested_status": suggested,
            "overdue": bool(order.due_date and order.due_date < date.today().isoformat() and order.status in ("quote", "accepted", "printing"))}
     if with_items:
         out["items"] = rows
     return out
+
+
+def advance_order(session: Session, order_id: int) -> None:
+    """After a print of an order finished: the order is *printing* once something is done and *ready* when every unit is (nothing else is changed)."""
+    order = session.get(Order, order_id)
+    if not order or order.status not in ("accepted", "printing"):
+        return
+    wanted = sum(i.quantity for i in session.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all())
+    done = sum(c["done"] for c in _unit_counts(session, order_id).values())
+    new = "ready" if wanted and done >= wanted else "printing" if done and order.status == "accepted" else order.status
+    if new != order.status:
+        order.status = new
+        session.add(order)
+        if new == "ready":
+            from app.notify import notify_event
+            notify_event(session, "print_done", "Model Hub: an order is ready", f"The order for {order.customer} has all its prints.")
 
 
 @router.get("")
@@ -295,6 +311,9 @@ def update_order(order_id: int, payload: dict, request: Request, session: Sessio
         if payload["status"] not in STATUSES:
             raise HTTPException(400, "status must be one of: " + ", ".join(STATUSES))
         order.status = payload["status"]
+    if "cost_centre_id" in payload:
+        from app.routers.queue import check_centre
+        order.cost_centre_id = check_centre(session, payload["cost_centre_id"])
     if "paid" in payload:
         if not isinstance(payload["paid"], bool):
             raise HTTPException(400, "paid must be true or false")
@@ -385,12 +404,16 @@ def queue_order(order_id: int, payload: dict, request: Request, session: Session
             session.add(QueueItem(model_id=item.model_id, position=position, status="queued", printer_id=printer_id, order_id=order.id, order_item_id=item.id,
                                   filament_id=defaults["filament_id"], estimated_grams=defaults["grams"], estimated_minutes=suggestion["minutes"],
                                   estimate_basis=suggestion["basis"] if suggestion["minutes"] else None, planned_date=order.due_date,
-                                  notes=f"Order {order.id}: {order.customer}"))
+                                  notes=f"Order {order.id}: {order.customer}", cost_centre_id=order.cost_centre_id))
             position += 1
             created += 1
     if order.status in ("quote", "accepted") and created:
         order.status = "accepted" if order.status == "quote" else order.status
         session.add(order)
+    session.flush()
+    if order.cost_centre_id:
+        from app.routers.queue import refuse_if_over
+        refuse_if_over(session, order.cost_centre_id)
     session.commit()
     if created:
         activity.record(session, activity.actor_of(request), "order", f"Queued {created} print(s) for the order of {order.customer}")

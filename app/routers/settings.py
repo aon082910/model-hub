@@ -13,7 +13,7 @@ import secrets
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Keys never echoed back in plaintext to the frontend after being set
-SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password"} | secret_setting_keys()   # site tokens / API keys
+SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token"} | secret_setting_keys()   # site tokens / API keys
 
 
 @router.get("")

@@ -53,6 +53,32 @@ def check_slot(session: Session, printer_id, slot):
     return slot
 
 
+def check_centre(session: Session, value) -> Optional[int]:
+    from app.models import CostCentre
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not session.get(CostCentre, value):
+        raise HTTPException(400, "That budget does not exist")
+    return value
+
+
+def refuse_if_over(session: Session, centre_id: Optional[int]) -> None:
+    """After a change was flushed: a budget set to stop must not end up over what it holds."""
+    from app import budgets
+    message = budgets.over_message(session, centre_id)
+    if message:
+        session.rollback()
+        raise HTTPException(409, "Budget: " + message)
+
+
+def clean_strict(value) -> Optional[bool]:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise HTTPException(400, "strict_match must be true, false or empty")
+    return value
+
+
 def clean_priority(value) -> int:
     if value in (None, ""):
         return 0
@@ -127,10 +153,13 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
         estimate_basis=basis if minutes else None,
         planned_date=clean_date(payload.get("planned_date")),
         priority=clean_priority(payload.get("priority")) or None, held=clean_held(payload["held"]) if "held" in payload else None,
-        printer_tag=clean_tag(payload.get("printer_tag")),
+        printer_tag=clean_tag(payload.get("printer_tag")), cost_centre_id=check_centre(session, payload.get("cost_centre_id")),
+        strict_match=clean_strict(payload.get("strict_match")),
         position=position,
     )
     session.add(item)
+    session.flush()
+    refuse_if_over(session, item.cost_centre_id)
     session.commit()
     session.refresh(item)
     return item
@@ -175,6 +204,8 @@ def fail_item(session: Session, item: QueueItem, reason: Optional[str] = None, m
             spool = session.get(Filament, spool_id)
             if spool:
                 spoolman.report_usage(session, spool, grams)
+        from app import budgets
+        budgets.charge_failed(session, item, sum(g for _, g in used))
 
 
 def _on_done(session: Session, item: QueueItem, printer_id: Optional[int] = None) -> None:
@@ -200,6 +231,11 @@ def _on_done(session: Session, item: QueueItem, printer_id: Optional[int] = None
                         queue_item_id=item.id, measured=bool(item.actual_minutes), printer_id=printer_id or item.printer_id)
         if len(parts) > 1:
             log.uses = json.dumps([{"filament_id": sid, "grams": g} for sid, g in parts])
+    from app import budgets
+    budgets.charge_done(session, item, round(sum(g for _, g in parts), 1) if parts else item.estimated_grams, item.actual_minutes or item.estimated_minutes)
+    if item.order_id:
+        from app.routers.orders import advance_order
+        advance_order(session, item.order_id)
 
 
 def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = None, printer_id: Optional[int] = None) -> None:
@@ -288,6 +324,20 @@ def auto_assign(payload: dict, request: Request, session: Session = Depends(get_
             "dry_run": dry, "activity_id": activity_id}
 
 
+@router.get("/timeline")
+def queue_timeline(session: Session = Depends(get_session)):
+    """The printers' waiting prints laid out in time, and when each could finish if started now."""
+    from app import timeline
+    return timeline.build(session)
+
+
+@router.get("/holds")
+def queue_holds(session: Session = Depends(get_session)):
+    """{printer id: why it is on hold}: a Home Assistant sensor that is alerting."""
+    from app import sensors
+    return {str(k): v for k, v in sensors.holds(session).items()}
+
+
 @router.get("/summary")
 def summary(session: Session = Depends(get_session)):
     """Per printer: how many jobs are waiting or running for it and how long they will take (from the estimates)."""
@@ -371,11 +421,18 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
         raise HTTPException(409, "This entry is on hold for review: release it first")
     if item.printer_tag and item.printer_tag not in printer_tags(printer):
         raise HTTPException(409, f"This entry asked for a printer tagged \"{item.printer_tag}\" and {printer.name} does not have that tag")
-    kept = [f for f in session.exec(select(PrintFile).where(PrintFile.model_id == item.model_id)
-                                    .order_by(PrintFile.created_at.desc(), PrintFile.id.desc())).all() if f.kind in print_files.GCODE_KINDS]
+    every = [f for f in session.exec(select(PrintFile).where(PrintFile.model_id == item.model_id)
+                                     .order_by(PrintFile.created_at.desc(), PrintFile.id.desc())).all() if f.kind in print_files.GCODE_KINDS]
+    kept = sorted((f for f in every if f.printer_id in (None, printer.id)), key=lambda f: f.printer_id != printer.id)       # this printer's own file first, newest first
     path = print_files.stored_path(kept[0].stored_name) if kept else None
+    if every and not kept:
+        raise HTTPException(400, f"This model's sliced files are all made for other printers; keep one for {printer.name}")
     if not kept or not path.is_file():
         raise HTTPException(400, "Keep a sliced G-code file with this model first (its page, Sliced files)")
+    from app import budgets, routing, slots as slot_mod
+    over = budgets.over_message(session, item.cost_centre_id)
+    if over:
+        raise HTTPException(409, "Budget: " + over)
     start = payload.get("start") is True
     if start and payload.get("force") is not True:
         from app import stagger
@@ -385,6 +442,11 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
         low = low_filament(session, item, kept[0].est_grams)
         if low:
             raise HTTPException(409, "Low: " + low)
+        wanted = session.get(Filament, slot_mod.effective_filament(session, item)) if slot_mod.effective_filament(session, item) else None
+        if wanted and routing.strict_wanted(session, item):
+            entry = next((p for p in slot_mod.overview(session) if p["id"] == printer.id), None)
+            if not routing.exact_match_in(wanted, entry, session):
+                raise HTTPException(409, f"Colour: {printer.name} does not have {' '.join(x for x in (wanted.material, wanted.color) if x) or 'that spool'} loaded, and an exact match is asked for")
     state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
     if not state["online"]:
         raise HTTPException(502, state.get("message") or "The printer cannot be reached")
@@ -451,6 +513,10 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         item.held = clean_held(payload["held"]) or None
     if "printer_tag" in payload:
         item.printer_tag = clean_tag(payload["printer_tag"])
+    if "cost_centre_id" in payload:
+        item.cost_centre_id = check_centre(session, payload["cost_centre_id"])
+    if "strict_match" in payload:
+        item.strict_match = clean_strict(payload["strict_match"])
     if "uses" in payload:
         item.uses = check_uses(session, payload.get("printer_id", item.printer_id), payload["uses"])
         if item.uses and "estimated_grams" not in payload:
@@ -467,6 +533,9 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         fail_item(session, item, reason)
 
     session.add(item)
+    session.flush()
+    if "cost_centre_id" in payload or "estimated_grams" in payload or "estimated_minutes" in payload or "filament_id" in payload:
+        refuse_if_over(session, item.cost_centre_id)
     session.commit()
     session.refresh(item)
     return item

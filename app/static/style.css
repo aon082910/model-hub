@@ -420,3 +420,18 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .queue-hold-label { display: inline-flex !important; }
 .fil-db-row { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .fil-db-swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border); flex: none; }
+
+/* budgets */
+.budget-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.budget-row .budget-name { flex: 1; min-width: 10em; font-weight: 600; }
+.budget-over { color: #ff6b6b; }
+
+/* printer role, timeline, bulk */
+body.not-admin.printer-role #printers-panel { display: block !important; }
+body.not-admin.printer-role #model-printer-panel:not(.hidden) { display: block !important; }
+body.printer-role .printer-row details, body.printer-role .printer-delete, body.printer-role #printers-add-box { display: none !important; }
+#queue-view-list.active, #queue-view-timeline.active { background: var(--accent); color: #fff; }
+.tl-printer { margin: 10px 0; }
+.tl-hour { color: var(--muted); font-size: 13px; margin: 8px 0 2px; border-bottom: 1px solid var(--border); }
+.tl-item { display: flex; gap: 10px; padding: 3px 0; flex-wrap: wrap; }
+.tl-held { opacity: .6; }

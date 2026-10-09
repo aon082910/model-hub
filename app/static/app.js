@@ -165,7 +165,7 @@ async function renderSlicedFiles(model) {
     <p class="muted">G-code or a sliced .3mf you made for this model, kept here with what the slicer said about it. Not part of a backup (they can be big).</p>
     ${files.length ? files.map(f => `
       <div class="sliced-row" data-id="${f.id}">
-        <b>${esc(f.filename)}</b> <span class="muted">${formatBytes(f.size_bytes)}</span>
+        <b>${esc(f.filename)}</b> <span class="muted">${formatBytes(f.size_bytes)}</span>${f.printer_id ? ` <span class="badge" title="Only sent to this printer">for ${esc((printers.find(p => p.id === f.printer_id) || {}).name || 'a printer')}</span>` : ''}
         <div class="muted">${[f.slicer, f.est_minutes != null ? formatMinutes(f.est_minutes) : '', f.est_grams != null ? `${f.est_grams} g` : '', f.filament_type, f.layer_height ? `${f.layer_height} mm layers` : ''].filter(Boolean).map(esc).join(' &middot; ') || 'no details found in the file'}</div>
         ${f.notes ? `<div>${esc(f.notes)}</div>` : ''}
         ${f.file_exists ? '' : '<div class="warn-text">The file is missing from this server (it is not in backups). Upload it again.</div>'}
@@ -179,6 +179,7 @@ async function renderSlicedFiles(model) {
     <div class="row">
       <input id="sliced-file" type="file" accept=".gcode,.gco,.g,.bgcode,.3mf">
       <input id="sliced-notes" placeholder="Note (optional)">
+      ${printers.length ? `<select id="sliced-for" aria-label="Made for" title="A file made for one printer is only ever sent to it; leave it on any printer for a file that suits all"><option value="">for any printer</option>${printers.map(p => `<option value="${p.id}">for ${esc(p.name)}</option>`).join('')}</select>` : ''}
       <button id="sliced-upload" class="primary">Keep this file</button><span id="sliced-status" class="muted"></span>
     </div>`;
   $('#sliced-upload').onclick = async () => {
@@ -189,6 +190,7 @@ async function renderSlicedFiles(model) {
     form.append('model_id', String(model.id));
     form.append('file', file);
     if ($('#sliced-notes').value) form.append('notes', $('#sliced-notes').value);
+    if ($('#sliced-for') && $('#sliced-for').value) form.append('printer_id', $('#sliced-for').value);
     const res = await fetch('/api/print-files', { method: 'POST', body: form });
     if (res.ok) renderSlicedFiles(model); else $('#sliced-status').textContent = await sourceErrorText(res);
   };
@@ -3390,13 +3392,13 @@ async function refreshPrinterStatuses() {
 }
 
 async function loadPrinters() {
-  if (currentUser.role !== 'admin') return;
+  if (!canRunPrinters()) return;
   const res = await fetch('/api/printers');
   if (!res.ok) return;
   printerInfo = await res.json();
   $('#printers-list').innerHTML = printerInfo.printers.length ? printerInfo.printers.map(p => `
     <div class="printer-row" data-id="${p.id}">
-      <b>${esc(p.name)}</b> <span class="badge">${{ moonraker: 'Klipper', octoprint: 'OctoPrint', bambu: 'Bambu Lab' }[p.kind] || esc(p.kind)}</span>
+      <input type="checkbox" class="printer-select" aria-label="Tick ${esc(p.name)}"> <b>${esc(p.name)}</b> <span class="badge">${{ moonraker: 'Klipper', octoprint: 'OctoPrint', bambu: 'Bambu Lab' }[p.kind] || esc(p.kind)}</span>
       <span class="muted">${esc(p.url)}</span>
       <span class="printer-state muted">checking...</span>
       <button class="printer-delete">Remove</button>
@@ -3430,6 +3432,7 @@ async function loadPrinters() {
           <button class="printer-plug-save">Save</button><button class="printer-plug-try">Read it now</button><span class="printer-plug-result muted"></span></div>
       </details>
     </div>`).join('') : '<p class="muted">No printers yet.</p>';
+  $('#printers-bulk').classList.toggle('hidden', !printerInfo.printers.length);
   $('#send-printer').innerHTML = printerInfo.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   refreshPrinterStatuses();
   if (!printerPoll) printerPoll = setInterval(() => {
@@ -3543,6 +3546,26 @@ $('#printers-list').addEventListener('change', async (e) => {
   if (!e.target.checked) pause.checked = false;
   out.textContent = e.target.checked ? 'Watching.' : 'Not watching.';
 });
+async function bulkControl(action) {
+  const ids = $$('.printer-select:checked').map(box => parseInt(box.closest('.printer-row').dataset.id));
+  const out = $('#printers-bulk-msg');
+  if (!ids.length) { out.textContent = 'Tick the printers first.'; return; }
+  if (action === 'cancel' && !confirm(`Cancel the print on ${ids.length} printer${ids.length === 1 ? '' : 's'}? A cancelled print cannot be resumed.`)) return;
+  out.textContent = 'Sending...';
+  const res = await jsonRequest('POST', '/api/printers/bulk-control', { action, printer_ids: ids });
+  if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+  const r = await res.json();
+  out.textContent = `${r.sent} of ${r.results.length}: ` + r.results.map(x => `${x.name} ${x.ok ? 'ok' : x.message}`).join('; ');
+  refreshPrinterStatuses();
+}
+$('#bulk-pause').addEventListener('click', () => bulkControl('pause'));
+$('#bulk-resume').addEventListener('click', () => bulkControl('resume'));
+$('#bulk-cancel').addEventListener('click', () => bulkControl('cancel'));
+$('#bulk-select-none').addEventListener('click', () => $$('.printer-select').forEach(box => { box.checked = false; }));
+$('#bulk-select-printing').addEventListener('click', () => $$('.printer-select').forEach(box => {
+  const state = box.closest('.printer-row').querySelector('.printer-state');
+  box.checked = !!state && /printing/i.test(state.textContent);
+}));
 $('#send-go').addEventListener('click', async () => {
   const file = $('#send-file').files[0];
   const printer = $('#send-printer').value;
@@ -3563,7 +3586,7 @@ $('#send-go').addEventListener('click', async () => {
 // "Slice and send" on a model's page
 async function renderModelPrinter(model) {
   const panel = $('#model-printer-panel');
-  if (currentUser.role !== 'admin') { panel.classList.add('hidden'); return; }
+  if (!canRunPrinters()) { panel.classList.add('hidden'); return; }
   const res = await fetch('/api/printers');
   if (!res.ok || !currentModel || currentModel.id !== model.id) return;
   const info = await res.json();
@@ -3712,6 +3735,40 @@ for (const [id, mode] of [['#queue-sort-priority', 'priority'], ['#queue-sort-sh
   });
 }
 
+let queueView = 'list';
+try { queueView = localStorage.getItem('queueView') === 'timeline' ? 'timeline' : 'list'; } catch (e) { /* storage is optional */ }
+function showQueueView() {
+  $('#queue-list').classList.toggle('hidden', queueView === 'timeline');
+  $('#queue-timeline').classList.toggle('hidden', queueView !== 'timeline');
+  $('#queue-view-list').classList.toggle('active', queueView !== 'timeline');
+  $('#queue-view-timeline').classList.toggle('active', queueView === 'timeline');
+}
+for (const [id, view] of [['#queue-view-list', 'list'], ['#queue-view-timeline', 'timeline']]) {
+  $(id).addEventListener('click', () => { queueView = view; try { localStorage.setItem('queueView', view); } catch (e) { /* optional */ } showQueueView(); });
+}
+const clock = iso => { const d = new Date(iso); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+const dayName = iso => { const d = new Date(iso), t = new Date(); return d.toDateString() === t.toDateString() ? 'Today' : d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }); };
+
+function renderTimeline(data) {
+  const box = $('#queue-timeline');
+  const parts = data.printers.filter(p => p.items.length).map(p => {
+    const placed = p.items.filter(i => i.end).sort((a, b) => a.end.localeCompare(b.end));
+    const unplaced = p.items.filter(i => !i.end);
+    let hour = '';
+    const rows = placed.map(i => {
+      const label = `${dayName(i.end)} ${new Date(i.end).getHours()}:00`;
+      const head = label !== hour ? `<div class="tl-hour">finishing ${esc(label)}</div>` : '';
+      hour = label;
+      return `${head}<div class="tl-item"><span>${esc(clock(i.start))} &rarr; <b>${esc(clock(i.end))}</b></span><span>${esc(i.model || 'model ' + i.model_id)}</span><span class="muted">${i.minutes ? Math.round(i.minutes) + ' min' : ''}${i.status === 'printing' ? ' &middot; printing now' : ''}</span></div>`;
+    }).join('');
+    return `<div class="tl-printer"><b>${esc(p.name)}</b> <span class="muted">free at ${esc(clock(p.free_at))}</span>${rows}
+      ${unplaced.map(i => `<div class="tl-item tl-held"><span>${esc(i.model || 'model ' + i.model_id)}</span><span class="muted">${i.held ? 'on hold' : 'no time estimate'}: not placed</span></div>`).join('')}</div>`;
+  });
+  const loose = data.unassigned.map(i => `<div class="tl-item ${i.held ? 'tl-held' : ''}"><span>${esc(i.model || 'model ' + i.model_id)}</span><span class="muted">${i.held ? 'on hold' : data.if_started_now[i.id] ? `would finish at ${esc(clock(data.if_started_now[i.id]))} if started now` : 'waiting for a printer'}</span></div>`).join('');
+  box.innerHTML = (parts.join('') || '<p class="muted">Nothing is assigned to a printer yet.</p>') + (loose ? `<div class="tl-printer"><b>Not assigned</b>${loose}</div>` : '')
+    + '<p class="muted">Times are worked out from the estimates, so they are only as good as those are; a running print takes what is left of its estimate.</p>';
+}
+
 async function loadQueue() {
   loadPrinters();
   const [slotData, hints] = await Promise.all([
@@ -3721,10 +3778,18 @@ async function loadQueue() {
   const slotsByPrinter = Object.fromEntries(slotData.printers.map(p => [p.id, p]));
   const fitData = await fetch('/api/fit/queue').then(r => (r.ok ? r.json() : {}));
   const suggestions = await fetch('/api/queue/suggestions').then(r => (r.ok ? r.json() : {}));
+  const [timelineData, holds] = await Promise.all([
+    fetch('/api/queue/timeline').then(r => (r.ok ? r.json() : null)),
+    fetch('/api/queue/holds').then(r => (r.ok ? r.json() : {})),
+  ]);
+  if (timelineData) renderTimeline(timelineData);
+  showQueueView();
+  const ifNow = (timelineData || {}).if_started_now || {};
+  const centres = await budgetChoices();
   const [items, models, printerData, summary] = await Promise.all([
     (await fetch('/api/queue')).json(),
     (await fetch('/api/library/models?limit=1000')).json(),
-    currentUser.role === 'admin' ? fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] })) : Promise.resolve({ printers: [] }),
+    canRunPrinters() ? fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] })) : Promise.resolve({ printers: [] }),
     fetch('/api/queue/summary').then(r => (r.ok ? r.json() : { printers: [] })),
   ]);
   const printers = printerData.printers || [];
@@ -3748,6 +3813,8 @@ async function loadQueue() {
     <li>
       <span>#${i.position} ${i.held ? '<span class="status-badge status-failed">on hold</span> ' : ''}${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
         ${fitData[i.id] && !fitData[i.id].fits ? `<span class="warn-text" title="model ${fitData[i.id].model.map(v => Math.round(v)).join(' x ')} mm, bed ${fitData[i.id].bed.filter(Boolean).join(' x ')} mm">&#9888; too big for ${esc(fitData[i.id].printer)}'s bed</span>` : ''}
+        ${ifNow[i.id] ? `<span class="muted">finishes about ${esc(clock(ifNow[i.id]))} if started now</span>` : ''}
+        ${i.printer_id && holds[i.printer_id] && i.status === 'queued' ? `<span class="warn-text">&#9888; waiting: ${esc(holds[i.printer_id])}</span>` : ''}
         ${i.uses ? `<span class="muted">${JSON.parse(i.uses).length} spools counted</span>` : ''}
         ${suggestions[i.id] ? `<span class="muted" title="${esc(suggestions[i.id][0].reasons.join('; '))}">suggested: ${esc(suggestions[i.id][0].name)}${suggestions[i.id][0].slot ? ' slot ' + suggestions[i.id][0].slot : ''}
           <button class="queue-suggest" data-id="${i.id}" data-printer="${suggestions[i.id][0].printer_id}" data-slot="${suggestions[i.id][0].slot || ''}">Use</button></span>` : ''}
@@ -3755,6 +3822,8 @@ async function loadQueue() {
       <span>
         ${i.status === 'queued' ? `<select class="queue-priority" data-id="${i.id}" aria-label="Priority" title="Priority"><option value="1" ${i.priority === 1 ? 'selected' : ''}>high</option><option value="0" ${!i.priority ? 'selected' : ''}>normal</option><option value="-1" ${i.priority === -1 ? 'selected' : ''}>low</option></select>
           <label class="inline-check queue-hold-label" title="Keep it from being suggested, assigned or sent until someone has looked at it"><input type="checkbox" class="queue-hold" data-id="${i.id}" ${i.held ? 'checked' : ''}> hold</label>
+          ${centres.length ? `<select class="queue-centre" data-id="${i.id}" aria-label="Budget" title="The budget this print is charged to"><option value="">no budget</option>${centres.map(c => `<option value="${c.id}" ${c.id === i.cost_centre_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
+          <select class="queue-strict" data-id="${i.id}" aria-label="Exact colour" title="Only a printer with exactly this spool's material and colour loaded"><option value="" ${i.strict_match == null ? 'selected' : ''}>colour: as in Settings</option><option value="true" ${i.strict_match === true ? 'selected' : ''}>colour: exact</option><option value="false" ${i.strict_match === false ? 'selected' : ''}>colour: any</option></select>
           <input class="queue-tag" data-id="${i.id}" value="${esc(i.printer_tag || '')}" placeholder="needs tag" aria-label="Needs a printer with this tag" title="Only a printer with this tag may print it">` : ''}
         ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
         ${printers.length ? `<select data-id="${i.id}" class="queue-printer" aria-label="Printer">
@@ -3772,6 +3841,15 @@ async function loadQueue() {
   }).join('');
   $$('.queue-priority').forEach(sel => sel.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { priority: parseInt(sel.value) });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+  });
+  $$('.queue-centre').forEach(sel => sel.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { cost_centre_id: sel.value ? parseInt(sel.value) : null });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
+  $$('.queue-strict').forEach(sel => sel.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { strict_match: sel.value === '' ? null : sel.value === 'true' });
     if (!res.ok) showNotice(await sourceErrorText(res));
   });
   $$('.queue-hold').forEach(box => box.onchange = async () => {
@@ -3854,7 +3932,7 @@ async function loadQueue() {
     let res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start });
     if (res.status === 409 && start) {
       const detail = (await res.clone().json().catch(() => ({}))).detail || '';
-      if (/^(Wait|Low): /.test(detail) && confirm(`${detail.replace(/^(Wait|Low): /, '')}.\n\nStart it anyway?`)) res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start, force: true });
+      if (/^(Wait|Low|Colour): /.test(detail) && confirm(`${detail.replace(/^(Wait|Low|Colour): /, '')}.\n\nStart it anyway?`)) res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start, force: true });
     }
     showNotice(res.ok ? (start ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.') : await sourceErrorText(res));
     loadQueue();
@@ -4426,6 +4504,7 @@ async function renderOrderBody(id) {
   const o = await res.json();
   const readOnly = currentUser.role === 'viewer';
   const statuses = ['quote', 'accepted', 'printing', 'ready', 'delivered', 'cancelled'];
+  const centres = await budgetChoices();
   card.querySelector('.order-body').innerHTML = `
     ${o.contact ? `<div class="muted">${esc(o.contact)}</div>` : ''}${o.notes ? `<div>${esc(o.notes)}</div>` : ''}
     <table class="facts"><thead><tr><th>Model</th><th>How many</th><th>Price each</th><th>Line</th><th>Printed</th><th></th></tr></thead><tbody>
@@ -4438,6 +4517,7 @@ async function renderOrderBody(id) {
       <input class="oi-new-qty" type="number" min="1" value="1" style="width:5em" aria-label="How many"><button class="oi-add">Add</button>
       <select class="order-status">${statuses.map(s => `<option value="${s}" ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <label class="inline-check"><input type="checkbox" class="order-paid" ${o.paid ? 'checked' : ''}> paid</label>
+      ${centres.length ? `<select class="order-centre" aria-label="Budget" title="Its prints are charged to this budget"><option value="">no budget</option>${centres.map(c => `<option value="${c.id}" ${c.id === o.cost_centre_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
       <button class="order-queue primary">Put the prints in the queue</button><button class="order-delete danger">Delete</button><span class="order-msg muted"></span></div>
       ${o.suggested_status !== o.status ? `<div class="muted">Looks like it is <b>${esc(o.suggested_status)}</b> now.</div>` : ''}`}`;
   const body = card.querySelector('.order-body');
@@ -4467,6 +4547,11 @@ async function renderOrderBody(id) {
   if (status) status.onchange = async () => { await jsonRequest('PATCH', `/api/orders/${id}`, { status: status.value }); reload(); };
   const paid = body.querySelector('.order-paid');
   if (paid) paid.onchange = async () => { await jsonRequest('PATCH', `/api/orders/${id}`, { paid: paid.checked }); reload(); };
+  const centre = body.querySelector('.order-centre');
+  if (centre) centre.onchange = async () => {
+    const r = await jsonRequest('PATCH', `/api/orders/${id}`, { cost_centre_id: centre.value ? parseInt(centre.value) : null });
+    if (!r.ok) msg(await sourceErrorText(r));
+  };
   const queue = body.querySelector('.order-queue');
   if (queue) queue.onclick = async () => {
     const r = await jsonRequest('POST', `/api/orders/${id}/queue`, {});
@@ -4667,7 +4752,7 @@ $('#cal-status').addEventListener('click', async (e) => {
 });
 
 $('#stagger-save').addEventListener('click', async () => {
-  const ok = await saveSetting({ stagger_minutes: $('#stagger-minutes').value.trim(), max_printing: $('#max-printing').value.trim() });
+  const ok = await saveSetting({ stagger_minutes: $('#stagger-minutes').value.trim(), max_printing: $('#max-printing').value.trim(), strict_colour: $('#strict-colour').checked ? 'true' : '' });
   $('#stagger-status').textContent = ok ? 'Saved.' : 'Could not save.';
 });
 $('#calendar-hours-save').addEventListener('click', async () => {
@@ -4782,6 +4867,103 @@ async function makeStepThumbnails() {
 }
 $('#step-thumbs-btn').addEventListener('click', makeStepThumbnails);
 
+async function budgetChoices() {
+  const res = await fetch('/api/budgets');
+  return res.ok ? (await res.json()).budgets : [];
+}
+
+async function loadBudgetsBox() {
+  const box = $('#budgets-box');
+  if (!box) return;
+  const list = await budgetChoices();
+  const readOnly = currentUser.role === 'viewer';
+  box.innerHTML = (list.length ? list.map(b => `<div class="budget-row" data-id="${b.id}">
+      <span class="budget-name">${esc(b.name)}</span>
+      <span class="muted">${money2(b.budget)} ${b.period === 'month' ? 'a month' : 'in all'}${b.hard_stop ? ', stops when spent' : ''}</span>
+      <span>spent <b>${money2(b.spent)}</b></span><span>reserved <b>${money2(b.reserved)}</b>${b.unpriced ? ` <span class="muted">(${b.unpriced} not priced)</span>` : ''}</span>
+      <span class="${b.available < 0 ? 'budget-over' : ''}">left <b>${money2(b.available)}</b></span>
+      <button class="budget-ledger">Ledger</button>${readOnly ? '' : '<button class="budget-spend">Add spending</button><button class="budget-edit">Change</button><button class="budget-delete">Delete</button>'}
+      <div class="budget-ledger-box hidden" style="flex-basis:100%"></div></div>`).join('') : '<p class="muted">No budgets yet.</p>')
+    + (readOnly ? '' : `<div class="row"><input id="budget-name" placeholder="Name (a project, a customer)" maxlength="60"><input id="budget-amount" type="number" min="0" step="0.01" placeholder="Amount">
+      <select id="budget-period"><option value="total">in all</option><option value="month">a month</option></select>
+      <label class="inline-check"><input type="checkbox" id="budget-stop"> stop when spent</label><button id="budget-add" class="primary">Add</button><span id="budget-msg" class="muted"></span></div>`);
+  const add = $('#budget-add');
+  if (add) add.onclick = async () => {
+    const res = await jsonRequest('POST', '/api/budgets', { name: $('#budget-name').value, budget: parseFloat($('#budget-amount').value) || 0, period: $('#budget-period').value, hard_stop: $('#budget-stop').checked });
+    if (res.ok) loadBudgetsBox(); else $('#budget-msg').textContent = await sourceErrorText(res);
+  };
+  box.querySelectorAll('.budget-row').forEach(row => {
+    const id = row.dataset.id, b = list.find(x => String(x.id) === id);
+    row.querySelector('.budget-ledger').onclick = async () => {
+      const panel = row.querySelector('.budget-ledger-box');
+      panel.classList.toggle('hidden');
+      if (panel.classList.contains('hidden')) return;
+      const data = await fetch(`/api/budgets/${id}/ledger`).then(r => (r.ok ? r.json() : { entries: [] }));
+      panel.innerHTML = data.entries.length ? data.entries.map(e => `<div class="row"><span class="muted">${esc(String(e.created_at).slice(0, 10))}</span> <b>${money2(e.amount)}</b>
+        <span>${esc({ print: 'a finished print', failed: 'a failed print', manual: 'written in' }[e.kind] || e.kind)}${e.note ? ': ' + esc(e.note) : ''}</span>
+        ${e.kind === 'manual' && !readOnly ? `<button class="budget-entry-delete" data-id="${e.id}">&times;</button>` : ''}</div>`).join('') : '<p class="muted">Nothing spent yet.</p>';
+      panel.querySelectorAll('.budget-entry-delete').forEach(x => x.onclick = async () => { await fetch(`/api/budgets/${id}/entries/${x.dataset.id}`, { method: 'DELETE' }); loadBudgetsBox(); });
+    };
+    const spend = row.querySelector('.budget-spend');
+    if (spend) spend.onclick = async () => {
+      const amount = prompt('How much was spent? (a negative number is a credit)');
+      if (amount === null || amount.trim() === '') return;
+      const note = prompt('What for? (optional)', '');
+      const res = await jsonRequest('POST', `/api/budgets/${id}/entries`, { amount: parseFloat(amount), note: note || '' });
+      if (res.ok) loadBudgetsBox(); else showNotice(await sourceErrorText(res));
+    };
+    const edit = row.querySelector('.budget-edit');
+    if (edit) edit.onclick = async () => {
+      const amount = prompt(`New amount for "${b.name}"`, b.budget);
+      if (amount === null) return;
+      const stop = confirm('Should it refuse to queue or send what would take it over? (OK = stop, Cancel = only show the figure)');
+      const res = await jsonRequest('PATCH', `/api/budgets/${id}`, { budget: parseFloat(amount), hard_stop: stop });
+      if (res.ok) loadBudgetsBox(); else showNotice(await sourceErrorText(res));
+    };
+    const del = row.querySelector('.budget-delete');
+    if (del) del.onclick = async () => { if (confirm(`Delete the budget "${b.name}" and its ledger? Its prints stay in the queue.`)) { await fetch(`/api/budgets/${id}`, { method: 'DELETE' }); loadBudgetsBox(); } };
+  });
+}
+
+async function loadSensors() {
+  const box = $('#sensors-box');
+  if (!box) return;
+  const [data, printers] = await Promise.all([
+    fetch('/api/sensors').then(r => (r.ok ? r.json() : { sensors: [], configured: false })),
+    fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] })),
+  ]);
+  box.innerHTML = (data.sensors.length ? data.sensors.map(x => `<div class="budget-row" data-id="${x.id}">
+      <span class="budget-name">${esc(x.printer)}: ${esc(x.label || x.entity_id)}</span>
+      <span class="muted">${esc(x.entity_id)} alerts when ${esc({ on: 'on', off: 'off', above: 'above ' + x.threshold, below: 'below ' + x.threshold }[x.condition])}</span>
+      <span class="${x.alerting ? 'budget-over' : 'muted'}">${x.error ? esc(x.error) : x.value == null ? 'not read yet' : (x.alerting ? 'ALERTING: ' : 'now ') + esc(x.value)}</span>
+      <button class="sensor-delete">Remove</button></div>`).join('') : '<p class="muted">No sensors bound yet.</p>')
+    + `<div class="row"><select id="sensor-printer" aria-label="Printer">${printers.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+      <input id="sensor-entity" placeholder="binary_sensor.printer_door" aria-label="Sensor name">
+      <select id="sensor-condition" aria-label="Alerts when"><option value="on">alerts when on</option><option value="off">alerts when off</option><option value="above">alerts above</option><option value="below">alerts below</option></select>
+      <input id="sensor-threshold" type="number" step="any" placeholder="number" style="width:6em">
+      <input id="sensor-label" placeholder="Name to show (optional)"><button id="sensor-test">Read it now</button><button id="sensor-add" class="primary">Bind</button><button id="sensor-poll">Check all now</button><span id="sensor-msg" class="muted"></span></div>`;
+  const msg = text => { $('#sensor-msg').textContent = text; };
+  $('#sensor-test').onclick = async () => {
+    const res = await jsonRequest('POST', '/api/sensors/test', { entity_id: $('#sensor-entity').value.trim() });
+    msg(res.ok ? `Home Assistant says: ${(await res.json()).state}` : await sourceErrorText(res));
+  };
+  $('#sensor-add').onclick = async () => {
+    const body = { printer_id: parseInt($('#sensor-printer').value), entity_id: $('#sensor-entity').value.trim(), condition: $('#sensor-condition').value, label: $('#sensor-label').value };
+    if ($('#sensor-threshold').value !== '') body.threshold = parseFloat($('#sensor-threshold').value);
+    const res = await jsonRequest('POST', '/api/sensors', body);
+    if (res.ok) loadSensors(); else msg(await sourceErrorText(res));
+  };
+  $('#sensor-poll').onclick = async () => { msg('Asking...'); await fetch('/api/sensors/poll', { method: 'POST' }); loadSensors(); };
+  box.querySelectorAll('.sensor-delete').forEach(b => b.onclick = async () => { await fetch(`/api/sensors/${b.closest('.budget-row').dataset.id}`, { method: 'DELETE' }); loadSensors(); });
+}
+$('#ha-save').addEventListener('click', async () => {
+  const body = { ha_url: $('#ha-url').value.trim() };
+  if ($('#ha-token').value) body.ha_token = $('#ha-token').value;
+  const ok = await saveSetting(body);
+  $('#ha-status').textContent = ok ? 'Saved.' : 'Could not save.';
+  if (ok) { $('#ha-token').value = ''; loadSensors(); }
+});
+
 async function loadStatusPage() {
   const box = $('#status-page-box');
   if (!box) return;
@@ -4822,6 +5004,8 @@ $('#storage-refresh').addEventListener('click', loadStorage);
 
 async function loadSettings() {
   loadStorage();
+  loadSensors();
+  loadBudgetsBox();
   loadStatusPage();
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
@@ -4865,6 +5049,9 @@ async function loadSettings() {
   $('#calendar-hours').value = s.calendar_hours_per_day || '';
   $('#stagger-minutes').value = s.stagger_minutes || '';
   $('#max-printing').value = s.max_printing || '';
+  $('#strict-colour').checked = s.strict_colour === 'true';
+  $('#ha-url').value = s.ha_url || '';
+  $('#ha-token').placeholder = s.ha_token ? 'A token is saved (type a new one to replace it)' : 'Long-lived access token';
   renderSharePanel('#library-share-panel', 'library', 0);
   loadVersion();
   loadTokens();
@@ -4996,15 +5183,19 @@ window.fetch = async (...args) => {
   return res;
 };
 
+const canRunPrinters = () => currentUser.role === 'admin' || !!currentUser.printerRole;
+
 function applyUser(user) {
+  if (user.role === 'printer') user = { ...user, role: 'viewer', printerRole: true };           // looks like a viewer, plus the printers
   currentUser = user;
   const admin = user.role === 'admin';
   $('#whoami').classList.remove('hidden');
-  $('#whoami-name').textContent = `${user.username}${admin ? '' : ' (' + user.role + ')'}`;
+  $('#whoami-name').textContent = `${user.username}${admin ? '' : ' (' + (user.printerRole ? 'printer' : user.role) + ')'}`;
   $('#whoami-password').classList.toggle('hidden', admin);
   document.querySelector('#tabs button[data-tab="settings"]').classList.toggle('hidden', !admin);
   document.body.classList.toggle('read-only', user.role === 'viewer');
   document.body.classList.toggle('not-admin', !admin);
+  document.body.classList.toggle('printer-role', !!user.printerRole);
 }
 
 $('#whoami-logout').addEventListener('click', async () => {

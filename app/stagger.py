@@ -23,6 +23,10 @@ def reason_to_wait(session: Session, printer: Printer, now: Optional[datetime] =
     """Why this printer should not be started right now, or None."""
     from app import printwatch
     now = now or datetime.utcnow()
+    from app import sensors
+    held = sensors.hold_reason(session, printer.id)
+    if held:
+        return f"{printer.name} is on hold because {held}"
     gap, limit = _whole(session, "stagger_minutes"), _whole(session, "max_printing")
     if gap:
         recent = session.exec(select(PrinterJob).where(PrinterJob.started.is_(True), PrinterJob.printer_id != printer.id, PrinterJob.finished_at.is_(None),

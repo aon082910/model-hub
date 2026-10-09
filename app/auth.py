@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -132,10 +133,10 @@ def ensure_extension_api_key(session: Session) -> str:
     return key
 
 
-ROLES = ("member", "viewer")
+ROLES = ("member", "viewer", "printer")
 
 # Only the administrator may use these at all (reading them included)...
-ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens", "/api/spoolman")
+ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens", "/api/spoolman", "/api/sensors")
 # ...and these they alone may change (members can still look): they delete files from disk
 ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
 ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-check"}
@@ -178,11 +179,28 @@ def request_is_authenticated(request: Request, session: Session) -> bool:
     return current_user(request, session) is not None
 
 
+PRINTER_ROLE_DENIED_READS = ("/api/settings", "/api/backup", "/api/users", "/api/tokens", "/api/spoolman", "/api/sensors", "/api/shares")
+START_PRINT = re.compile(r"^/api/(queue/\d+/send|printers/\d+/(control|send)|printers/bulk-control)$")
+
+
+def printer_role_reason(method: str, path: str):
+    """A login that may look at everything (but not the administrator's pages) and start, pause, resume and cancel prints, and nothing else."""
+    if path == "/api/auth/me/password":
+        return None
+    if method in ("GET", "HEAD"):
+        return "Your account is not allowed to see that." if path.startswith(PRINTER_ROLE_DENIED_READS) else None
+    if method == "POST" and START_PRINT.match(path):
+        return None
+    return "Your account can start and stop prints but cannot change anything else."
+
+
 def forbidden_reason(user: dict, method: str, path: str):
     """Why this signed-in user may not do this, or None if they may."""
     role = user["role"]
     if role in ("admin", "importer") or path == "/api/auth/logout":
         return None
+    if role == "printer":
+        return printer_role_reason(method, path)
     writing = method not in ("GET", "HEAD")
     sends_to_printer = (path.startswith("/api/queue/") and path.endswith("/send")      # starting a job on a real printer
                         or (path.startswith("/api/prints/") and path.endswith("/timelapse-candidates")))      # asks a printer, and shows where it is
