@@ -8,10 +8,16 @@ from sqlmodel import Session
 
 from app import bambu_send, print_files, printers as printing
 from app.db import get_session
-from app.models import PrinterJob, PrintFile
-from app.routers.printers import _get
+from app.models import Printer, PrinterJob, PrintFile
 
 router = APIRouter(prefix="/api/printers", tags=["printers"])
+
+
+def _get(session: Session, printer_id: int) -> Printer:
+    printer = session.get(Printer, printer_id)
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    return printer
 
 
 @router.post("/{printer_id}/send-3mf")
