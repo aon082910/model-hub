@@ -39,7 +39,7 @@ def test_the_administrator_adds_lists_and_removes_logins(authed):
     b = _new_user(authed, "kid", role="viewer")
     assert a["role"] == "member" and b["role"] == "viewer" and "password_hash" not in a
     listing = authed.get("/api/users").json()
-    assert [u["username"] for u in listing["users"]] == ["kid", "mum"] and listing["admin"] and listing["roles"] == ["member", "viewer"]
+    assert [u["username"] for u in listing["users"]] == ["kid", "mum"] and listing["admin"] and listing["roles"] == ["member", "viewer", "printer"]
     assert authed.delete(f"/api/users/{a['id']}").status_code == 200
     assert authed.delete(f"/api/users/{a['id']}").status_code == 404
     assert [u["username"] for u in authed.get("/api/users").json()["users"]] == ["kid"]

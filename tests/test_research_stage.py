@@ -308,5 +308,5 @@ def test_the_new_controls_are_in_the_page():
                     "order-import-file", "order-import-preview", "order-import-go", "order-import-result"):
         assert f'id="{element}"' in html, element
     for needle in ("/api/filament/db/search", "/api/filament/db/update", "color_hex", "queue-priority", "queue-hold", "queue-tag", "/api/queue/sort",
-                   "printer-tags-save", "/api/orders/import", "(Wait|Low): "):
+                   "printer-tags-save", "/api/orders/import", "(Wait|Low|Colour): "):
         assert needle in js, needle
