@@ -3442,6 +3442,7 @@ async function loadPrinters() {
       <input type="checkbox" class="printer-select" aria-label="Tick ${esc(p.name)}"> <b>${esc(p.name)}</b> <span class="badge">${{ moonraker: 'Klipper', octoprint: 'OctoPrint', bambu: 'Bambu Lab' }[p.kind] || esc(p.kind)}</span>
       <span class="muted">${esc(p.url)}</span>
       <span class="printer-state muted">checking...</span>
+      ${(printerInfo.plate_awaiting || []).includes(p.id) ? '<span class="badge plate-badge" title="A print ended here and nobody has said the plate is clear">plate not cleared</span> <button class="printer-plate-clear">Plate is clear</button>' : ''}
       <button class="printer-delete">Remove</button>
       <details class="printer-bed"><summary>Bed size${p.bed_x && p.bed_y ? ` (${p.bed_x} x ${p.bed_y}${p.bed_z ? ' x ' + p.bed_z : ''})` : ''}</summary>
         <p class="muted">In mm. With it, Model Hub can say which models fit this printer and warn when a queued model is too big.</p>
@@ -3464,7 +3465,8 @@ async function loadPrinters() {
         <label class="inline-check"><input type="checkbox" class="printer-watch" ${p.watch_failures ? 'checked' : ''}> Look at the camera now and then and warn me about a failed print</label>
         <p class="muted">Every two minutes while it prints, one picture goes to your own vision model (Settings, AI: local with a vision model). It only warns you and never stops the printer. A warning needs two bad looks in a row and the model can be wrong, so take it as a hint.</p>
         <label class="inline-check"><input type="checkbox" class="printer-pause-watch" ${p.pause_on_failure ? 'checked' : ''} ${p.watch_failures ? '' : 'disabled'}> Also pause the print after three bad looks in a row</label>
-        <div class="row"><button class="printer-watch-try">Ask the model about the picture now</button><span class="printer-watch-result muted"></span></div>
+        <label class="inline-check"><input type="checkbox" class="printer-plate-check" ${p.plate_check ? 'checked' : ''}> When a print ends, look at the camera and mark the plate as cleared once it looks empty twice in a row (needs the plate-cleared wait in Settings, Print planning)</label>
+        <div class="row"><button class="printer-watch-try">Ask the model about the picture now</button><button class="printer-plate-try">Does the plate look empty?</button><span class="printer-watch-result muted"></span></div>
       </details>
       <details class="printer-plug"><summary>Smart plug${p.plug_kind ? ` (${esc(p.plug_kind)})` : ''}</summary>
         <p class="muted">A Tasmota or Shelly plug that counts energy, with the printer plugged into it. Model Hub reads its running total when a print starts and ends and keeps the difference (kWh) with the print. The address is the plug's own, like 192.168.1.70.</p>
@@ -3555,6 +3557,18 @@ $('#printers-list').addEventListener('click', async (e) => {
     out.textContent = res.ok ? `Its energy total is ${(await res.json()).total_kwh} kWh.` : await sourceErrorText(res);
     return;
   }
+  if (row && e.target.classList.contains('printer-plate-clear')) {
+    await fetch(`/api/printers/${row.dataset.id}/plate-cleared`, { method: 'POST' });
+    loadPrinters();
+    return;
+  }
+  if (row && e.target.classList.contains('printer-plate-try')) {
+    const out = row.querySelector('.printer-watch-result');
+    out.textContent = 'Asking... (a local model can take a minute)';
+    const res = await fetch(`/api/printers/${row.dataset.id}/plate-test`, { method: 'POST' });
+    out.textContent = res.ok ? ((await res.json()).occupied ? 'Something is on the plate.' : 'The plate looks empty.') : await sourceErrorText(res);
+    return;
+  }
   if (row && e.target.classList.contains('printer-watch-try')) {
     const out = row.querySelector('.printer-watch-result');
     out.textContent = 'Asking... (a local model can take a minute)';
@@ -3573,6 +3587,12 @@ $('#printers-list').addEventListener('change', async (e) => {
   const row = e.target.closest('.printer-row');
   if (!row) return;
   const out = row.querySelector('.printer-watch-result');
+  if (e.target.classList.contains('printer-plate-check')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { plate_check: e.target.checked });
+    if (!res.ok) { e.target.checked = !e.target.checked; out.textContent = await sourceErrorText(res); return; }
+    out.textContent = e.target.checked ? 'It will look at the plate after a print.' : 'It will not look at the plate.';
+    return;
+  }
   if (e.target.classList.contains('printer-pause-watch')) {
     const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { pause_on_failure: e.target.checked });
     if (!res.ok) { e.target.checked = !e.target.checked; out.textContent = await sourceErrorText(res); return; }
@@ -4926,7 +4946,7 @@ $('#hms-save').addEventListener('click', async () => {
   $('#hms-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
 });
 $('#stagger-save').addEventListener('click', async () => {
-  const ok = await saveSetting({ stagger_minutes: $('#stagger-minutes').value.trim(), max_printing: $('#max-printing').value.trim(), strict_colour: $('#strict-colour').checked ? 'true' : '' });
+  const ok = await saveSetting({ stagger_minutes: $('#stagger-minutes').value.trim(), max_printing: $('#max-printing').value.trim(), strict_colour: $('#strict-colour').checked ? 'true' : '', plate_clear_gate: $('#plate-clear-gate').checked ? 'true' : '' });
   $('#stagger-status').textContent = ok ? 'Saved.' : 'Could not save.';
 });
 $('#calendar-hours-save').addEventListener('click', async () => {
@@ -5218,6 +5238,49 @@ async function loadDatasets() {
   });
 }
 
+const CHANNEL_SECRETS = ['telegram_token', 'pushover_token', 'pushover_user', 'gotify_token', 'matrix_token', 'bark_key'];
+const CHANNEL_PLAIN = ['telegram_chat_id', 'telegram_topic', 'gotify_url', 'matrix_url', 'matrix_room', 'bark_server'];
+function loadChannels(s) {
+  for (const k of CHANNEL_SECRETS) {
+    const el = $('#' + k.replace(/_/g, '-'));
+    el.value = '';
+    if (!el.dataset.hint) el.dataset.hint = el.placeholder;
+    el.placeholder = s[k] ? 'Saved (type a new one to replace it)' : el.dataset.hint;
+  }
+  for (const k of CHANNEL_PLAIN) $('#' + k.replace(/_/g, '-')).value = s[k] || '';
+  $('#telegram-status').checked = s.telegram_status === 'true';
+  $('#telegram-control').checked = s.telegram_control === 'true';
+}
+async function saveChannels() {
+  const body = { telegram_status: $('#telegram-status').checked ? 'true' : '', telegram_control: $('#telegram-control').checked ? 'true' : '' };
+  for (const k of CHANNEL_PLAIN) body[k] = $('#' + k.replace(/_/g, '-')).value.trim();
+  for (const k of CHANNEL_SECRETS) { const v = $('#' + k.replace(/_/g, '-')).value.trim(); if (v) body[k] = v; }
+  return saveSetting(body);
+}
+$('#channels-save').addEventListener('click', async () => { $('#channels-status').textContent = (await saveChannels()) ? 'Saved.' : 'Could not save.'; });
+$('#channels-test').addEventListener('click', async () => {
+  await saveChannels();
+  $('#channels-status').textContent = 'Sending...';
+  const res = await fetch('/api/settings/notify-test', { method: 'POST' });
+  $('#channels-status').textContent = res.ok ? 'Sent to ' + (await res.json()).channels.join(', ') + '.' : await sourceErrorText(res);
+});
+
+async function loadMetrics() {
+  const res = await fetch('/api/settings/metrics');
+  if (!res.ok) return;
+  const m = await res.json();
+  $('#metrics-enabled').checked = m.enabled;
+  $('#metrics-token').value = '';
+  $('#metrics-token').placeholder = m.token_set ? 'A token is saved (type a new one to replace it)' : 'Token (optional)';
+  $('#metrics-info').textContent = m.enabled ? `Point Prometheus at ${m.scrape_url}` : '';
+}
+$('#metrics-save').addEventListener('click', async () => {
+  const body = { metrics_enabled: $('#metrics-enabled').checked ? 'true' : '' };
+  if ($('#metrics-token').value.trim()) body.metrics_token = $('#metrics-token').value.trim();
+  $('#metrics-status').textContent = (await saveSetting(body)) ? 'Saved.' : 'Could not save.';
+  loadMetrics();
+});
+
 async function loadStatusPage() {
   const box = $('#status-page-box');
   if (!box) return;
@@ -5306,6 +5369,9 @@ async function loadSettings() {
   $('#stagger-minutes').value = s.stagger_minutes || '';
   $('#max-printing').value = s.max_printing || '';
   $('#strict-colour').checked = s.strict_colour === 'true';
+  $('#plate-clear-gate').checked = s.plate_clear_gate === 'true';
+  loadChannels(s);
+  loadMetrics();
   $('#notify-progress-step').value = s.notify_progress_step || '';
   $('#notify-snapshots').checked = s.notify_snapshots !== 'false';
   loadHmsMap();

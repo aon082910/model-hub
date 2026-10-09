@@ -91,6 +91,9 @@ def discovery_messages(prefix: str, printers: list) -> list:
             out.append((f"homeassistant/sensor/{key}/{field}/config", json.dumps({
                 "name": f"{p.name} {label}".strip(), "unique_id": f"{key}_{field}", "state_topic": base,
                 "value_template": "{{ value_json.%s }}" % field, "device": device, **extra}), True))
+        out.append((f"homeassistant/binary_sensor/{key}/plate_clear/config", json.dumps({
+            "name": f"{p.name} needs its plate cleared", "unique_id": f"{key}_plate", "state_topic": f"{prefix}/printer/{p.id}/plate_clear", "value_template": "{{ value_json.awaiting }}",
+            "payload_on": "True", "payload_off": "False", "device": device}), True))
         out.append((f"homeassistant/binary_sensor/{key}/online/config", json.dumps({
             "name": f"{p.name} online", "unique_id": f"{key}_online", "state_topic": base, "value_template": "{{ value_json.online }}",
             "payload_on": "True", "payload_off": "False", "device_class": "connectivity", "device": device}), True))
@@ -111,14 +114,18 @@ def discovery_messages(prefix: str, printers: list) -> list:
 def messages(session: Session, cfg: dict, include_discovery: bool) -> list:
     prefix = cfg["prefix"]
     printers = session.exec(select(Printer).order_by(Printer.id)).all()
+    from app import plate
+    plate_waiting = set(plate.awaiting(session)) if plate.gate_enabled(session) else set()
     out = []
     for p in printers:
         st = printwatch.latest.get(p.id)
         if not st:
             continue
+        waiting = p.id in plate_waiting
         out.append((f"{prefix}/printer/{p.id}/state", json.dumps({
             "name": p.name, "online": bool(st["online"]), "state": st["state"], "progress": st["progress"], "file": st["file"],
-            "nozzle": st["nozzle"], "bed": st["bed"]}), True))
+            "nozzle": st["nozzle"], "bed": st["bed"], "awaiting_plate_clear": waiting}), True))
+        out.append((f"{prefix}/printer/{p.id}/plate_clear", json.dumps({"awaiting": waiting}), True))
     out.append((f"{prefix}/stats", json.dumps(stats_payload(session)), True))
     if include_discovery and cfg["discovery"]:
         out = discovery_messages(prefix, printers) + out

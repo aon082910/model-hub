@@ -159,9 +159,12 @@ better) as candidates. Nothing is linked by the job itself: you review the queue
   are still left for you. Those models are listed under **Linked automatically** for a second look
   (**Looks right** or **Unlink**), and carry an *auto-linked* badge on their page.
 - **None of these** marks a model as skipped so it stays out of the queue and future runs.
-- The job goes easy on the sites (about one search pair per second), stops by itself if a site rate limits or
-  keeps failing, and can be stopped any time. It remembers what it has checked, so running it again only looks
-  at new models; tick **Also search again for models that had no match** to retry those too.
+- The job goes easy on the sites (about one search pair per second) and can be stopped any time. A site that
+  fails three times in a row is **left out for the rest of the run** (the message names it and says why) while the
+  other sites carry on; a model that one site could not search and the others found nothing for is *not* recorded
+  as "no match", so the next run tries it again. The job stops by itself only if every site keeps failing or a site
+  rate limits. It remembers what it has checked, so running it again only looks at new models; tick **Also search
+  again for models that had no match** to retry those too.
 - Models whose names say nothing (a hash like `a1b2c3d4e5f6.stl`) are not searched.
 
 ### Parts lists from MakerWorld
@@ -227,6 +230,8 @@ farms with limited power.
 ones that fit this program: every spool of a multicolour print, pause/resume/cancel, bed sizes and "will it fit", off-site backups, a cost calculator, orders for people who sell prints, choosing the printer, Spoolman, watching a camera for a failed print (with your own local vision model,
 not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models, collection covers, NFC tags for spools, staggered starts with a power limit, and an optional pause when the camera sees a failure (it never cancels, because a wrong guess would ruin a good print). A further research round (a multi-source search checked claim by claim) added queue priority, hold and tags, the low-spool check, filament weight from G-code length, the spool database and the shop-order import. Left out on purpose: *ActivityPub federation* (a large project with no sign of demand here), mounting external folders (the library folder is already read in place) and direct shop connections (credentials I cannot test). *NIH 3D* has no documented interface (its site runs on private calls), so it was not added; *Sketchfab* and *MyMiniFactory* downloads need your own login, which is what the existing sources already ask of you. A second round (also checked claim by claim, mostly from Bambuddy's and Manyfold's release notes and issue trackers) produced the budgets, a sliced file per printer, the exact-colour switch, sensor holds, bulk printer actions, the queue timeline with "if started now", the printer role and the most-used sort, all described above. On the source side it looked at *Thingi10K* (10 000 meshes, but a frozen 2009-2015 Thingiverse subset, so it adds little) and *Objaverse* (800 000 objects, 8.9 TB, mostly textured Sketchfab models with a licence field each: usable only as a metadata index, so it was not added). No other site with a usable interface was verified. Thingi10K and Objaverse (earlier set aside as frozen or metadata-only) were added after all as opt-in sources, and a slicer-facing virtual printer. A fourth round (the same checking) found, in this order: a Prometheus /metrics endpoint with a Grafana dashboard; a Telegram bot and other push targets (ntfy, Pushover, Gotify, Matrix, Bark); structured fields in webhook messages; a *plate clear* signal over MQTT; OIDC/LDAP sign-in with two-factor and an audit log; marketplace order sync (Etsy, eBay, WooCommerce, ShipStation, TikTok Shop); automatic restocking from the shelf and a customer quote page; camera detection of an occupied plate; and two more sources, the ABC Dataset (about 1 million Onshape CAD models, heavy and uncurated) and NIH 3D (no documented API). A third round (checked the same way) produced the report, the extra maintenance triggers and Bambu fault codes, the Discord additions, the shelf of finished parts, the stored files and the tougher 3MF reading. It could not verify any new model site (Thangs, Creality Cloud, Prusa, YouMagine, GrabCAD and the rest of the list stayed unverified, so none was added), nor demand claims from Reddit or issue trackers; nearly everything came from vendors' own feature pages. Not done: per-user wallets (budgets are shared cost centres) and a slicer-facing virtual printer. More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
 their models are mostly made for screens, not for printing, or need an account or a key, so none was added.
+
+**A fourth research round (versions 2.26 and 2.27)** added Prometheus metrics with a Grafana dashboard, Telegram, Pushover, Gotify, Matrix and Bark with quiet and loud messages, a Telegram bot, the plate-cleared wait, and, in 2.27, sign-in hardening and shop orders. Not built: the ABC Dataset (its files are 4.65 GB archives of STL chunks, too heavy to offer as a search) and the NIH 3D Print Exchange (no documented API).
 
 Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
 MakerWorld, Thingiverse, MyMiniFactory, Cults3D, Sketchfab, NIH 3D, Smithsonian and NASA (all dealt with above) plus: *Thangs* and *Free3D* refuse requests from a server (403) and have no public
@@ -585,6 +590,24 @@ model it belongs to (matched by name: a file called `benchy_0.2mm_PLA_MK4.gcode`
 **Settings → Dataset sources** can download the lists for two research collections, after which they take part in Discover searches (until then they are left out). **Thingi10K** is about 2 000 Thingiverse things from 2009 to 2015 (10 000 meshes; three small CSV files), searched by name, designer, tag and category; every model keeps the licence it had, shown as CC BY, CC BY-NC and so on, and
 about half of the meshes are not solid (the mesh check and repair help). **Objaverse** is a very large collection of textured models, mostly from Sketchfab; its labelled part (about 46 000 objects) is searched by category name (*chair*, *teddy bear*), the name, designer, picture and licence come from Sketchfab, and a downloaded GLB is converted to an STL scaled to **80 mm along its longest side** (the scale is a choice, not a measurement).
 Many Objaverse objects are meant for screens, not printing, and some licences forbid selling prints or changing the model (NC, ND), so the licence is shown on every result. Only the two Hugging Face repositories are contacted (every redirect checked), over https and with size caps; Objaverse's list is a one-time download of about 20 MB.
+
+## Prometheus and Grafana
+
+**Settings → Prometheus and Grafana** switches on `GET /metrics` (off until you do; add a token and the scraper must send it as `Authorization: Bearer ...`). It offers printer up/state/progress/temperatures, prints by printer and result, filament grams, print hours, queue entries, orders, spool remaining grams, stock on hand and low, maintenance due and due soon, and the number of models, in Prometheus text format. **Download the Grafana dashboard** gives a JSON file to import
+(Dashboards → Import; pick your Prometheus data source). It is not meant to be public: only switch it on where the scraper is on your own network.
+
+## More ways to be told
+
+Beside the webhook, **Settings → More ways to be told** can send to **Telegram**, **Pushover**, **Gotify**, **Matrix** and **Bark**; each is used as soon as it is filled in. Messages have a loudness: a print started or passing a step is *silent*, most things are *normal*, and a suspected failure or a failed backup is an *alarm* (Pushover priority, Gotify priority, Bark time-sensitive, a Telegram notification that is never muted). The webhook now also carries fields
+a script can use (`event`, `printer`, `filename`, `duration_minutes`, `level`, `timestamp`) and an ntfy `Priority` header, next to the text it always had. Tokens and keys stay on the server and are left out of backups.
+
+The **Telegram bot** answers only the chats you list: `/status` (every printer), `/queue` and `/help` always, and, only if you tick *Let the bot pause, resume and cancel prints*, `/pause NAME`, `/resume NAME` and `/cancel NAME` (a cancel must be confirmed with `/confirm` within a minute). It asks Telegram for messages (long polling), so nothing needs to reach your server from outside. Tick *Keep one status message up to date* to have a single message edited in place instead of many;
+a forum **topic id** sends everything to that topic.
+
+## Waiting for the plate to be cleared
+
+With **Settings → Print planning → wait for the plate** on, a printer whose print finished or was stopped is marked *plate not cleared* until you press **Plate is clear** on its card, call `POST /api/printers/ID/plate-cleared` (Home Assistant or a script; the printer login may do it too), or a new print starts. While it waits, starting a print on it asks first (you can always start anyway), the state is published over MQTT (`.../plate_clear`, with Home Assistant discovery) and an optional
+*needs its plate cleared* message is sent. With a camera and a local vision model, a printer can also be set to **look at the plate** after a print and clear itself once the plate looks empty twice in a row; the model only says what it sees, and an uncertain answer counts as *occupied*.
 
 ## The report
 

@@ -173,16 +173,26 @@ def run_job(force: bool = False, notify_changes: bool = False) -> None:
         listings = _listings_to_check(force)
         _set(total=len(listings), message="Checking..." if listings else "Everything was checked recently.")
         failures = 0
+        strikes: dict = {}                       # site -> listings in a row it failed on; a site that keeps failing is left out of the run
+        left_out: set = set()
         for provider, source_id in listings:
             if _stop.is_set():
                 _set(message="Stopped. Start again to continue.")
                 return
+            if provider in left_out:
+                continue
             try:
                 with Session(engine) as session:
                     outcome = check_listing(session, provider, source_id, sources.load_credentials(session))
             except sources.SourceError as e:
                 failures += 1
                 _bump("errors")
+                strikes[provider] = strikes.get(provider, 0) + 1
+                others = {p for p, _ in listings} - left_out - {provider}
+                if strikes[provider] >= 3 and others and "rate limiting" not in str(e):
+                    left_out.add(provider)                # the other sites go on
+                    failures = 0
+                    continue
                 if "rate limiting" in str(e) or failures >= MAX_CONSECUTIVE_FAILURES:
                     _set(message=("A site is rate limiting requests" if "rate limiting" in str(e) else "The sites keep failing")
                          + ". Stopped; try again in a while.")
@@ -194,11 +204,12 @@ def run_job(force: bool = False, notify_changes: bool = False) -> None:
                 _bump("errors")
                 continue
             failures = 0
+            strikes[provider] = 0
             _bump("checked")
             if outcome == "changed":
                 _bump("changed")
             _stop.wait(PAUSE_SECONDS)
-        _set(message="Finished.")
+        _set(message="Finished." + (" Left out because they kept failing: " + ", ".join(sources.PROVIDER_LABELS.get(p, p) for p in sorted(left_out)) + "." if left_out else ""))
         if notify_changes and job_status()["changed"]:
             from app.notify import notify_event
             with Session(engine) as session:

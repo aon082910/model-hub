@@ -30,6 +30,7 @@ MAX_CANDIDATES = 3
 PAUSE_SECONDS = 1.0              # between models
 BACKOFF_SECONDS = 5.0            # after a model where both sites failed
 MAX_CONSECUTIVE_FAILURES = 5
+SITE_STRIKES = 3                 # a site that fails this many models in a row is left out of the rest of the run
 AUTO_LINK_MARGIN = 0.1           # an auto-link also needs to beat the runner-up by this much
 AUTO_LINK_FLOOR = 0.9            # never auto-link below this, whatever is asked
 
@@ -42,8 +43,8 @@ _lock = threading.Lock()
 _stop = threading.Event()
 _state = {
     "running": False, "started_at": None, "finished_at": None,
-    "total": 0, "checked": 0, "with_candidates": 0, "no_match": 0, "auto_linked": 0, "errors": 0, "message": "",
-    "auto_link_min": None,
+    "total": 0, "checked": 0, "with_candidates": 0, "no_match": 0, "auto_linked": 0, "errors": 0, "incomplete": 0, "message": "",
+    "auto_link_min": None, "left_out": [],
 }
 
 
@@ -60,6 +61,11 @@ def _bump(key: str):
 def job_status() -> dict:
     with _lock:
         return dict(_state)
+
+
+def _left_out_note(left: list) -> str:
+    sites = "; ".join(f"{x['label']} ({x['reason']})" for x in left)
+    return f" Left out because they kept failing: {sites}. Models that only those sites could have matched were not recorded, so run it again once they work."
 
 
 def clear_match_data(session: Session, model_id: int) -> None:
@@ -120,9 +126,10 @@ def clear_winner(ranked: list, minimum: float) -> bool:
     return best >= max(minimum, AUTO_LINK_FLOOR) and best - runner_up >= AUTO_LINK_MARGIN
 
 
-def _check_one(model_id: int, auto_link_min: Optional[float] = None) -> str:
+def _check_one(model_id: int, auto_link_min: Optional[float] = None, skip=frozenset(), report: Optional[dict] = None) -> str:
     """Look one model up. Returns 'candidates', 'none', 'linked' (auto-linked),
-    'error' or 'limited' (a site asked us to slow down)."""
+    'error' (every site failed), 'limited' (a site asked us to slow down) or 'partial' (nothing found, but a site did not answer, so nothing is recorded
+    and the model is looked at again next time). Sites in `skip` are not asked; `report` is filled with the sites asked and what failed."""
     with Session(engine) as session:
         model = session.get(Model3D, model_id)
         if not model or model.source_provider:
@@ -133,15 +140,19 @@ def _check_one(model_id: int, auto_link_min: Optional[float] = None) -> str:
             session.commit()
             return "none"
         credentials = sources.load_credentials(session)
-        providers = sources.matching_providers(credentials)
+        providers = tuple(p for p in sources.matching_providers(credentials) if p not in skip)
+        if not providers:
+            return "error"
         found = sources.search(query, providers, limit=6, credentials=credentials)
         errors = found["errors"]
+        if report is not None:
+            report.update(providers=providers, errors=dict(errors))
         if errors and len(errors) >= len(providers):
             return "limited" if any("rate limiting" in m for m in errors.values()) else "error"
 
         ranked = [r for r in sources.rank(found["results"], query) if r["score"] >= MIN_SCORE][:MAX_CANDIDATES]
         if not ranked and errors:
-            return "error"     # one site was down and the other had nothing: look again next time
+            return "partial"   # a site was down and the others had nothing: look again next time (it is not a failure of the run)
         if clear_winner(ranked, auto_link_min):
             from app.source_linking import link_model_to_listing   # lazy: that module imports this one
             try:
@@ -173,12 +184,15 @@ def run_job(recheck_none: bool = False, only_ids: Optional[list] = None, auto_li
         ids = _models_to_check(recheck_none, only_ids)
         _set(total=len(ids), message="Searching..." if ids else "Nothing left to check.")
         failures = 0
+        strikes: dict = {}                                   # site -> models in a row it failed on
+        left_out: dict = {}                                  # site -> why it was left out of this run
         for model_id in ids:
             if _stop.is_set():
                 _set(message="Stopped. Start again to continue where it left off.")
                 return
+            report: dict = {}
             try:
-                outcome = _check_one(model_id, auto_link_min)
+                outcome = _check_one(model_id, auto_link_min, frozenset(left_out), report)
             except sources.SourceError as e:
                 outcome = "error"
                 logger.info("Match lookup failed: %s", e)
@@ -186,12 +200,29 @@ def run_job(recheck_none: bool = False, only_ids: Optional[list] = None, auto_li
                 logger.exception("Match lookup crashed for model %s", model_id)
                 outcome = "error"
 
+            for site in report.get("providers", ()):          # one site that keeps failing must not stop the others
+                if site in report.get("errors", {}):
+                    strikes[site] = strikes.get(site, 0) + 1
+                    asked = len(report["providers"]) - sum(1 for p in report["providers"] if p in left_out)
+                    if strikes[site] >= SITE_STRIKES and site not in left_out and asked > 1:
+                        left_out[site] = report["errors"][site]
+                        _set(left_out=[{"provider": p, "label": sources.PROVIDER_LABELS.get(p, p), "reason": r} for p, r in left_out.items()])
+                        logger.warning("Match job: %s failed %d models in a row (%s); leaving it out of this run", site, strikes[site], report["errors"][site])
+                else:
+                    strikes[site] = 0
+
+            if outcome == "partial":
+                _bump("incomplete")
+                failures = 0
+                _stop.wait(PAUSE_SECONDS)
+                continue
             if outcome in ("error", "limited"):
                 failures += 1
                 _bump("errors")
                 if outcome == "limited" or failures >= MAX_CONSECUTIVE_FAILURES:
-                    _set(message=("A site is rate limiting requests" if outcome == "limited"
-                                  else "The sites keep failing") + ". Stopped; try again in a while.")
+                    why = "; ".join(f"{sources.PROVIDER_LABELS.get(p, p)}: {m}" for p, m in (report.get("errors") or {}).items())
+                    _set(message=("A site is rate limiting requests" if outcome == "limited" else "The sites keep failing")
+                         + (f" ({why})" if why else "") + ". Stopped; try again in a while.")
                     return
                 _stop.wait(BACKOFF_SECONDS)
                 continue
@@ -199,7 +230,8 @@ def run_job(recheck_none: bool = False, only_ids: Optional[list] = None, auto_li
             _bump("checked")
             _bump({"candidates": "with_candidates", "linked": "auto_linked"}.get(outcome, "no_match"))
             _stop.wait(PAUSE_SECONDS)
-        _set(message="Finished.")
+        left = job_status()["left_out"]
+        _set(message="Finished." + (_left_out_note(left) if left else ""))
     except Exception:
         logger.exception("Match job failed")
         _set(message="The job hit an unexpected error; see the container log.")
@@ -212,8 +244,8 @@ def start_job(recheck_none: bool = False, auto_link_min: Optional[float] = None)
         if _state["running"]:
             raise JobBusy("A matching job is already running")
         _state.update(running=True, started_at=datetime.utcnow().isoformat(), finished_at=None,
-                      total=0, checked=0, with_candidates=0, no_match=0, auto_linked=0, errors=0,
-                      message="Starting...", auto_link_min=auto_link_min)
+                      total=0, checked=0, with_candidates=0, no_match=0, auto_linked=0, errors=0, incomplete=0,
+                      message="Starting...", auto_link_min=auto_link_min, left_out=[])
     _stop.clear()
     threading.Thread(target=run_job, args=(recheck_none, None, auto_link_min), name="source-match", daemon=True).start()
     return job_status()

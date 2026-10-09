@@ -101,6 +101,9 @@ def _announce(session: Session, printer: Printer, previous, st: dict) -> None:
     state, was = st["state"], (previous or {}).get("state")
     progress = st.get("progress")
     fields = {"printer": printer.name, "file": st.get("file") or "a print", "progress": f"{round(progress)}%" if isinstance(progress, (int, float)) else "", "minutes": ""}
+    if state == "printing":
+        from app import plate
+        plate.clear(session, printer.id)                    # a new print has begun: the plate cannot still be waiting
     if previous is not None:
         if state == "printing" and was not in ("printing", "paused"):
             _progress_sent[printer.id] = 0
@@ -183,6 +186,8 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
                 log.energy_kwh = energy_kwh
                 session.add(log)
     session.commit()
+    from app import plate
+    plate.mark_awaiting(session, printer)
     fields = {"printer": printer.name, "file": label, "progress": "", "minutes": str(round(duration / 60)) if duration else ""}
     if outcome == "done":
         _say(session, printer, "print_done", f"Model Hub: {printer.name} finished", f"{label} is done" + (f" ({round(duration / 60)} min)." if duration else "."), fields)

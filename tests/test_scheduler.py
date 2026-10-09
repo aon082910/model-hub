@@ -74,7 +74,7 @@ def test_the_settings_page_lists_events_and_can_send_a_test(authed, clean):
     assert {e["id"] for e in events} == set(notify_module.EVENTS) and all(e["enabled"] for e in events if e["id"] not in notify_module.DEFAULT_OFF)
     authed.put("/api/settings", json={"notify_print_done": "false"})
     assert next(e for e in authed.get("/api/settings/notify-events").json()["events"] if e["id"] == "print_done")["enabled"] is False
-    assert authed.post("/api/settings/notify-test").json() == {"status": "sent"}
+    assert authed.post("/api/settings/notify-test").json() == {"status": "sent", "channels": ["webhook"]}
     assert clean[-1][1] == "Model Hub: test"
     authed.put("/api/settings", json={"notify_webhook_url": ""})
     assert authed.post("/api/settings/notify-test").status_code == 400

@@ -1503,6 +1503,9 @@ def search(query: str, providers=None, limit: int = 6, credentials: Optional[dic
                     results.extend(futures[provider].result())
                 except SourceError as e:
                     errors[provider] = str(e)
+                except Exception as e:                       # a site that misbehaves in an unexpected way must not take the others down with it
+                    logging.getLogger("modelhub.sources").warning("Search of %s failed: %s", provider, e.__class__.__name__)
+                    errors[provider] = f"The site gave an unexpected answer ({e.__class__.__name__})"
     return {"results": results, "errors": errors}
 
 

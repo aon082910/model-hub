@@ -33,6 +33,7 @@ EVENTS = {
     "dry_due": "A spool in a printer is due for drying",
     "stock_low": "Finished parts on the shelf are at or below their minimum",
     "slicer_upload": "A sliced file arrived from a slicer (the virtual printer)",
+    "plate_clear": "A printer is waiting for its plate to be cleared (off until you switch it on)",
     "print_started": "A print started (off until you switch it on)",
     "print_progress": "A print passed another step of its progress (off until you switch it on)",
     "print_paused": "A print was paused or resumed (off until you switch it on)",
@@ -43,7 +44,16 @@ EVENTS = {
 }
 
 
-DEFAULT_OFF = {"print_started", "print_progress", "print_paused"}            # these would be noisy: you switch them on
+DEFAULT_OFF = {"print_started", "print_progress", "print_paused", "plate_clear"}            # these would be noisy: you switch them on
+SILENT_EVENTS = {"print_started", "print_progress", "print_paused"}
+ALARM_EVENTS = {"failure_suspected", "backup_failed"}
+
+
+def level_of(event: Optional[str]) -> str:
+    """How loud a message should be: silent (a print started or passed a step), alarm (a failure, a failed backup), else normal."""
+    return "silent" if event in SILENT_EVENTS else "alarm" if event in ALARM_EVENTS else "normal"
+
+
 DISCORD_HOSTS = ("discord.com", "discordapp.com", "canary.discord.com", "ptb.discord.com")
 PLACEHOLDERS = ("printer", "file", "progress", "minutes")
 
@@ -73,13 +83,17 @@ def notify_event(session: Session, event: str, title: str, message: str, fields:
     fields fill in the placeholders of a custom text; image (a JPEG) is attached when the webhook is a Discord one."""
     if event not in EVENTS or not event_enabled(session, event):
         return False
-    return notify(session, title, apply_template(session, event, message, fields), image)
+    return notify(session, title, apply_template(session, event, message, fields), image, level=level_of(event), event=event, fields=fields)
 
 
-def notify(session: Session, title: str, message: str, image: Optional[bytes] = None) -> bool:
+def notify(session: Session, title: str, message: str, image: Optional[bytes] = None, level: str = "normal", event: Optional[str] = None, fields: Optional[dict] = None) -> bool:
+    """Tell you: to the webhook (if set) and to every other channel that is set up (Telegram, Pushover, Gotify, Matrix, Bark). True if any took it."""
+    from datetime import datetime
+    from app import channels
+    sent = bool(channels.send_all(session, title, message, image, level))
     url = get_setting(session, "notify_webhook_url")
     if not url:
-        return False
+        return sent
     if image and is_discord(url):
         try:
             payload = json.dumps({"content": f"**{title}**\n{message}"[:1900]})
@@ -87,17 +101,24 @@ def notify(session: Session, title: str, message: str, image: Optional[bytes] = 
             return True
         except Exception as e:
             logger.warning("Notification webhook (with picture) failed: %s", e)
+    f = fields or {}
     try:
-        # A generic JSON body covers Discord/Slack-style webhooks (which accept
-        # "content"/"text") and ntfy (which reads the raw body as the message,
-        # with title carried in a header) in one shot.
-        httpx.post(
-            url,
-            json={"title": title, "message": message, "content": f"**{title}**\n{message}", "text": f"{title}: {message}"},
-            headers={"Title": title[:200]},
-            timeout=10,
-        )
+        # A generic JSON body covers Discord/Slack-style webhooks ("content"/"text") and ntfy (which reads the raw body as the message, with the title in a header) in one go,
+        # and the extra top-level fields (event, printer, filename, duration_minutes...) let n8n, Node-RED or Home Assistant route on them.
+        body = {"title": title, "message": message, "content": f"**{title}**\n{message}", "text": f"{title}: {message}", "source": "model-hub",
+                "timestamp": datetime.utcnow().isoformat() + "Z", "level": level}
+        if event:
+            body["event"] = event
+        if f.get("printer"):
+            body["printer"] = f["printer"]
+        if f.get("file"):
+            body["filename"] = f["file"]
+        if f.get("progress"):
+            body["progress"] = f["progress"]
+        if f.get("minutes"):
+            body["duration_minutes"] = f["minutes"]
+        httpx.post(url, json=body, headers={"Title": title[:200], "Priority": {"silent": "low", "normal": "default", "alarm": "urgent"}.get(level, "default")}, timeout=10)
         return True
     except Exception as e:
         logger.warning("Notification webhook failed: %s", e)
-        return False
+        return sent

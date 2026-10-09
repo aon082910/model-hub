@@ -27,6 +27,10 @@ def reason_to_wait(session: Session, printer: Printer, now: Optional[datetime] =
     held = sensors.hold_reason(session, printer.id)
     if held:
         return f"{printer.name} is on hold because {held}"
+    from app import plate
+    waiting = plate.reason_to_wait(session, printer)
+    if waiting:
+        return waiting
     gap, limit = _whole(session, "stagger_minutes"), _whole(session, "max_printing")
     if gap:
         recent = session.exec(select(PrinterJob).where(PrinterJob.started.is_(True), PrinterJob.printer_id != printer.id, PrinterJob.finished_at.is_(None),

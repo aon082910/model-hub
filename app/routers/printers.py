@@ -20,7 +20,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "tags": [t for t in (printer.tags or "").split(",") if t], "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "plate_check": bool(printer.plate_check), "tags": [t for t in (printer.tags or "").split(",") if t], "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
             "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
@@ -108,6 +108,13 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
             if tag.strip().lower() not in clean:
                 clean.append(tag.strip().lower())
         out["tags"] = ",".join(clean) or None
+    if "plate_check" in payload:
+        if not isinstance(payload["plate_check"], bool):
+            raise HTTPException(400, "plate_check must be true or false")
+        snapshot = out.get("snapshot_url") if "snapshot_url" in out else (existing.snapshot_url if existing else None)
+        if payload["plate_check"] and not snapshot:
+            raise HTTPException(400, "The plate check needs the printer's camera picture address first")
+        out["plate_check"] = payload["plate_check"]
     if "plug_kind" in payload or "plug_host" in payload:
         from app import plugs
         kind = payload["plug_kind"] if "plug_kind" in payload else (existing.plug_kind if existing else None)
@@ -139,7 +146,8 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
 @router.get("")
 def list_printers(session: Session = Depends(get_session)):
     rows = session.exec(select(Printer).order_by(Printer.name)).all()
-    return {"printers": [_json(p) for p in rows], "slicer_ready": printing.slicer_ready(), "slicer_note": printing.slicer_note()}
+    from app import plate
+    return {"printers": [_json(p) for p in rows], "plate_awaiting": sorted(plate.awaiting(session)) if plate.gate_enabled(session) else [], "slicer_ready": printing.slicer_ready(), "slicer_note": printing.slicer_note()}
 
 
 @router.post("")
@@ -171,9 +179,10 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     name = printer.name
     from app import slots
     slots.forget_printer(session, printer_id)
-    from app import maintenance, sensors
+    from app import maintenance, plate, sensors
     maintenance.forget_printer(session, printer_id)
     sensors.forget_printer(session, printer_id)
+    plate.forget_printer(session, printer_id)
     for kept in session.exec(select(PrintFile).where(PrintFile.printer_id == printer_id)).all():
         kept.printer_id = None                         # a file made for a printer that is gone suits any printer again (ids are reused)
         session.add(kept)
@@ -262,6 +271,28 @@ def control_printer(printer_id: int, payload: dict, request: Request, session: S
     if action not in printing.CONTROL_ACTIONS:
         raise HTTPException(400, "action must be pause, resume or cancel")
     return _control_one(session, printer, action, request)
+
+
+@router.post("/{printer_id}/plate-cleared")
+def plate_cleared(printer_id: int, request: Request, session: Session = Depends(get_session)):
+    """Say the printer's plate is clear (a button, Home Assistant or a script can call this)."""
+    from app import plate
+    printer = _get(session, printer_id)
+    was = plate.clear(session, printer.id)
+    if was:
+        activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: plate marked as cleared")
+    return {"cleared": True, "was_waiting": was}
+
+
+@router.post("/{printer_id}/plate-test")
+def plate_test(printer_id: int, session: Session = Depends(get_session)):
+    """Take a picture now and ask the vision model whether the plate looks empty (nothing is changed)."""
+    from app import plate
+    printer = _get(session, printer_id)
+    try:
+        return plate.look(session, printer)
+    except printing.PrinterError as e:
+        raise HTTPException(502, str(e))
 
 
 @router.post("/{printer_id}/plug-test")

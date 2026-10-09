@@ -636,6 +636,37 @@
       <label class="inline-check"><input type="checkbox" id="auto-listing-check"> Check linked listings for changes by itself (about once a day)</label>
     </div>
 
+    <h2>More ways to be told</h2>
+    <div class="settings-form" id="channels-box">
+      <p class="muted">Each one below is used as soon as it is filled in, next to the webhook above. A failure or a failed backup is sent as an alarm (loud); a print starting is sent quietly. Tokens and keys are kept here and left out of backups. The first line of each is what to fill in; a saved token shows as dots.</p>
+      <details><summary>Telegram <span id="tg-state" class="muted"></span></summary>
+        <div class="row"><input id="telegram-token" type="password" autocomplete="new-password" placeholder="Bot token from @BotFather"><input id="telegram-chat-id" placeholder="Chat id(s), like 123456789, -1001234" aria-label="Telegram chat ids"><input id="telegram-topic" placeholder="Topic id (optional)" aria-label="Telegram forum topic id" style="width:10em"></div>
+        <label class="inline-check"><input type="checkbox" id="telegram-status"> Keep one status message up to date in the first chat instead of sending many</label>
+        <label class="inline-check"><input type="checkbox" id="telegram-control"> Let the bot pause, resume and cancel prints (only the chats listed above are ever answered; a cancel must be confirmed). /status and /queue always work.</label>
+      </details>
+      <details><summary>Pushover</summary>
+        <div class="row"><input id="pushover-token" type="password" autocomplete="new-password" placeholder="Application token"><input id="pushover-user" type="password" autocomplete="new-password" placeholder="User key"></div>
+      </details>
+      <details><summary>Gotify</summary>
+        <div class="row"><input id="gotify-url" placeholder="https://gotify.example"><input id="gotify-token" type="password" autocomplete="new-password" placeholder="Application token"></div>
+      </details>
+      <details><summary>Matrix</summary>
+        <div class="row"><input id="matrix-url" placeholder="https://matrix.example"><input id="matrix-room" placeholder="!room:matrix.example"><input id="matrix-token" type="password" autocomplete="new-password" placeholder="Access token"></div>
+      </details>
+      <details><summary>Bark (iPhone)</summary>
+        <div class="row"><input id="bark-key" type="password" autocomplete="new-password" placeholder="Device key"><input id="bark-server" placeholder="https://api.day.app (leave empty for the default)"></div>
+      </details>
+      <div class="row"><button id="channels-save">Save</button><button id="channels-test">Send a test message</button><span id="channels-status" class="muted"></span></div>
+    </div>
+
+    <h2>Prometheus and Grafana</h2>
+    <div class="settings-form" id="metrics-box">
+      <p class="muted">Model Hub can offer its figures (printer states, temperatures, prints, filament, queue, stock, maintenance) at <code>/metrics</code> for Prometheus, and a ready dashboard for Grafana. It is off until you switch it on. With a token set, the scraper must send it as a bearer token.</p>
+      <label class="inline-check"><input type="checkbox" id="metrics-enabled"> Offer /metrics</label>
+      <div class="row"><input id="metrics-token" type="password" autocomplete="new-password" placeholder="Token (optional)"><button id="metrics-save">Save</button><a class="button-link" href="/api/settings/metrics/grafana.json" download>Download the Grafana dashboard</a><span id="metrics-status" class="muted"></span></div>
+      <div class="muted" id="metrics-info"></div>
+    </div>
+
     <h2>Browser Extension</h2>
     <div class="settings-form">
       <p class="muted">Sends model files from Printables, MakerWorld, Thingiverse, MyMiniFactory, Cults3D and Sketchfab pages to this library,
@@ -736,6 +767,7 @@
         <label>Most printers printing at once <input id="max-printing" type="number" min="0" max="50" step="1" placeholder="no limit"></label>
         <button id="stagger-save">Save</button><span id="stagger-status" class="muted"></span></div>
       <label class="inline-check"><input type="checkbox" id="strict-colour"> Only suggest or send to a printer that has exactly the spool's material and colour loaded (a single print can opt in or out on the queue)</label>
+      <label class="inline-check" id="plate-gate"><input type="checkbox" id="plate-clear-gate"> After a print ends, wait for someone to say the plate is cleared before sending the next one (a printer card gets a button; Home Assistant can call <code>POST /api/printers/ID/plate-cleared</code>)</label>
     </div>
 
     <h2>Slicer: a virtual printer</h2>

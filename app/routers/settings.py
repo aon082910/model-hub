@@ -13,7 +13,7 @@ import secrets
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Keys never echoed back in plaintext to the frontend after being set
-SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token"} | secret_setting_keys()   # site tokens / API keys
+SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | secret_setting_keys()   # site tokens / API keys
 
 
 @router.get("")
@@ -44,6 +44,22 @@ def update_settings(payload: dict, request: Request, session: Session = Depends(
     return {"status": "ok"}
 
 
+@router.get("/metrics")
+def metrics_settings(request: Request, session: Session = Depends(get_session)):
+    from app import metrics
+    from app.settings_store import get_setting
+    base = str(request.base_url).rstrip("/")
+    return {"enabled": metrics.enabled(session), "token_set": bool(get_setting(session, "metrics_token", "")), "scrape_url": base + "/metrics"}
+
+
+@router.get("/metrics/grafana.json")
+def grafana_dashboard():
+    """The Grafana dashboard for these metrics, as a file to import."""
+    from fastapi.responses import JSONResponse
+    from app import metrics
+    return JSONResponse(metrics.grafana_dashboard(), headers={"Content-Disposition": 'attachment; filename="modelhub-grafana.json"'})
+
+
 @router.get("/notify-events")
 def notify_events(session: Session = Depends(get_session)):
     """The kinds of notification, and which are switched on."""
@@ -57,13 +73,14 @@ def notify_events(session: Session = Depends(get_session)):
 @router.post("/notify-test")
 def notify_test(session: Session = Depends(get_session)):
     """Send a test message to the webhook, to check it is set up right."""
+    from app import channels
     from app.notify import notify
     from app.settings_store import get_setting
-    if not get_setting(session, "notify_webhook_url"):
-        raise HTTPException(400, "Save a webhook URL first")
+    if not get_setting(session, "notify_webhook_url") and not channels.configured(session):
+        raise HTTPException(400, "Save a webhook URL, or set up Telegram, Pushover, Gotify, Matrix or Bark, first")
     if not notify(session, "Model Hub: test", "If you can read this, notifications work."):
-        raise HTTPException(502, "The webhook did not accept the message (check the address)")
-    return {"status": "sent"}
+        raise HTTPException(502, "Nothing accepted the message (check the addresses and keys)")
+    return {"status": "sent", "channels": (["webhook"] if get_setting(session, "notify_webhook_url") else []) + channels.configured(session)}
 
 
 @router.post("/weekly-test")

@@ -40,6 +40,19 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.26.0
+Prometheus and Grafana: switch on /metrics (Settings) and import the ready
+dashboard. More ways to be told: Telegram, Pushover, Gotify, Matrix and Bark
+with quiet and loud messages, plus structured fields on the webhook, and a
+Telegram bot (/status, /queue, and, only if you allow it, pause, resume and
+confirmed cancel) with one status message edited in place. A printer can wait
+for its plate to be cleared before the next print (a button, an API call, or
+the camera seeing an empty plate twice), published over MQTT. The "match my
+whole library" job no longer stops because one site keeps failing: that site
+is left out for the run, named in the message, and models it could not search
+are tried again next time. No new settings are required; new columns are
+added automatically on first start.
+
 ### 2.25.0
 Slicers can now send sliced files straight to Model Hub: switch on the
 virtual printer (Settings, Slicer) and add it in PrusaSlicer, OrcaSlicer or

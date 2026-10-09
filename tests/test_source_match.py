@@ -81,7 +81,7 @@ def _run(*model_ids, recheck=False, auto=None):
     """Run the job over just these models (the shared test database holds hundreds
     of others), or over everything when none are given."""
     # what start_job does before handing over to the thread
-    jobs._state.update(running=True, total=0, checked=0, with_candidates=0, no_match=0, auto_linked=0, errors=0, message="")
+    jobs._state.update(running=True, total=0, checked=0, with_candidates=0, no_match=0, auto_linked=0, errors=0, incomplete=0, left_out=[], message="")
     jobs.run_job(recheck_none=recheck, only_ids=list(model_ids) or None, auto_link_min=auto)
     return jobs.job_status()
 
@@ -235,6 +235,39 @@ def test_job_stops_after_repeated_failures(authed, sites):
     status = _run(*ids)
     assert "keep failing" in status["message"]
     assert status["errors"] == jobs.MAX_CONSECUTIVE_FAILURES
+
+
+def test_one_site_that_keeps_failing_is_left_out_and_the_run_goes_on(authed, sites):
+    """The case that stopped whole runs: one site is down for good, the others answer, and most models have no match."""
+    sites.printables_down = True
+    ids = [_model(authed, f"Zzqx_nothing{i}.stl", 120 + i) for i in range(jobs.MAX_CONSECUTIVE_FAILURES + 4)]
+    status = _run(*ids)
+    assert status["message"].startswith("Finished.") and "Printables" in status["message"] and "run it again" in status["message"]
+    assert [x["provider"] for x in status["left_out"]] == ["printables"] and status["errors"] == 0
+    states = [_state(i)[0] for i in ids]
+    assert states[:jobs.SITE_STRIKES] == [None] * jobs.SITE_STRIKES                 # asked while it still looked like a hiccup: looked at again next time
+    assert states[jobs.SITE_STRIKES:] == ["none"] * (len(ids) - jobs.SITE_STRIKES)   # the rest were judged without it
+    assert status["incomplete"] == jobs.SITE_STRIKES and status["checked"] == len(ids) - jobs.SITE_STRIKES
+    sites.printables_down = False
+    again = _run(*ids)                                                                 # the unrecorded ones are picked up next time
+    assert again["checked"] == jobs.SITE_STRIKES and again["left_out"] == []
+
+
+def test_a_site_that_recovers_is_not_left_out(authed, sites):
+    ids = [_model(authed, f"Zzqx_recover{i}.stl", 150 + i) for i in range(4)]
+    sites.printables_down = True
+    status = _run(ids[0])
+    sites.printables_down = False
+    status = _run(*ids[1:])
+    assert status["left_out"] == [] and all(_state(i)[0] == "none" for i in ids[1:])
+
+
+def test_a_site_raising_an_odd_error_does_not_take_the_search_down(authed, sites, monkeypatch):
+    def boom(client, query, limit, page=1):
+        raise ValueError("a surprise")
+    monkeypatch.setattr(sources, "_search_sketchfab", boom)
+    result = sources.search("benchy", ["printables", "sketchfab"], limit=3)
+    assert [r["provider"] for r in result["results"]] == ["printables"] * len(result["results"]) and "unexpected answer" in result["errors"]["sketchfab"]
 
 
 def test_stop_request_ends_the_job(authed, sites):

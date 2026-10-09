@@ -49,7 +49,7 @@ class BackupError(Exception):
 
 
 def sensitive_settings() -> set:
-    return set(RESERVED_SETTING_KEYS) | {"ai_api_key", "mqtt_password", "offsite_password", "ha_token"} | secret_setting_keys()
+    return set(RESERVED_SETTING_KEYS) | {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | secret_setting_keys()
 
 
 def _stamp() -> str:

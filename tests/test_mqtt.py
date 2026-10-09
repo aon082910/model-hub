@@ -77,7 +77,7 @@ def test_printer_state_and_stats_are_published_from_the_existing_poll(authed, cl
     assert count > 10                                                           # discovery + state + stats
     topics = _topics(clean)
     state = topics[f"modelhub/printer/{p['id']}/state"]
-    assert state == {"name": "Voron 2.4", "online": True, "state": "printing", "progress": 42.4, "file": "benchy.gcode", "nozzle": 215.0, "bed": 59.9}
+    assert state == {"name": "Voron 2.4", "online": True, "state": "printing", "progress": 42.4, "file": "benchy.gcode", "nozzle": 215.0, "bed": 59.9, "awaiting_plate_clear": False}
     stats = topics["modelhub/stats"]
     assert set(stats) == {"models", "never_printed", "prints_this_month", "low_stock", "filament_remaining_g", "queue_waiting", "update_available"}
     assert all(retain for _, _, retain in clean[-1][0])

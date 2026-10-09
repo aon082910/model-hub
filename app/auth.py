@@ -19,7 +19,7 @@ SECRET_KEY_PATH = CONFIG_PATH / "secret.key"
 # Paths reachable with no session at all -- health checks, the login/setup API
 # itself, static assets needed to render the login page, and the browser
 # extension's own upload endpoint (which authenticates via API key instead).
-PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js"}
+PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js", "/metrics"}
 PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/", "/status/")
 
 # The extension API key is intentionally weaker than a full login session: it's
@@ -187,7 +187,7 @@ def request_is_authenticated(request: Request, session: Session) -> bool:
 
 
 PRINTER_ROLE_DENIED_READS = ("/api/settings", "/api/backup", "/api/users", "/api/tokens", "/api/spoolman", "/api/sensors", "/api/shares")
-START_PRINT = re.compile(r"^/api/(queue/\d+/send|printers/\d+/(control|send)|printers/bulk-control)$")
+START_PRINT = re.compile(r"^/api/(queue/\d+/send|printers/\d+/(control|send|plate-cleared)|printers/bulk-control)$")
 
 
 def printer_role_reason(method: str, path: str):
