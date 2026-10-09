@@ -46,7 +46,7 @@ def tidy(authed):
     for q in authed.get("/api/queue").json():
         authed.delete(f"/api/queue/{q['id']}")
     authed.put("/api/settings", json={"notify_webhook_url": "", "notify_text_print_done": "", "notify_print_started": "", "notify_print_progress": "", "notify_print_paused": "",
-                                      "notify_progress_step": "", "notify_snapshots": "", "hms_tasks": "", "cost_kwh_price": "", "cost_machine_per_hour": "",
+                                      "notify_progress_step": "", "notify_snapshots": "", "hms_tasks": "", "maintenance_notified": "", "stock_notified": "", "cost_kwh_price": "", "cost_machine_per_hour": "",
                                       "calendar_hours_per_day": ""})
 
 
