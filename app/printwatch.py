@@ -12,24 +12,28 @@ ends while Model Hub was restarting is not noticed.
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from sqlmodel import Session, select
 
 from app import plugs, printers as printing
 from app.models import Model3D, PrintLog, Printer, PrinterJob, PrintFile, QueueItem
-from app.notify import notify_event
+from app.notify import event_enabled, is_discord, notify_event
+from app.settings_store import get_setting
 
 logger = logging.getLogger("modelhub.printwatch")
 
 _last: dict = {}          # printer id -> {"state", "file"}
 latest: dict = {}         # printer id -> the full status from the most recent poll
 _energy_start: dict = {}  # printer id -> the plug's energy total when the print began
+_progress_sent: dict = {} # printer id -> the last progress step announced
 
 
 def reset() -> None:
     _last.clear()
     latest.clear()
     _energy_start.clear()
+    _progress_sent.clear()
 
 
 def finished(kind: str, state: str, progress) -> bool:
@@ -48,6 +52,7 @@ def poll(session: Session) -> list:
         latest[printer.id] = {**st, "name": printer.name}
         previous = _last.get(printer.id)
         if st["online"]:
+            _announce(session, printer, previous, st)
             progress = st["progress"] if st["state"] == "printing" and st["progress"] is not None else (previous or {}).get("progress")
             _last[printer.id] = {"state": st["state"], "file": st["file"] or (previous or {}).get("file"), "progress": progress}
             if st["state"] == "printing" and (not previous or previous["state"] != "printing") and printer.plug_kind:
@@ -64,10 +69,59 @@ def poll(session: Session) -> list:
             kwh = plugs.used(_energy_start.pop(printer.id), plugs.try_total(printer.plug_kind, printer.plug_host))
         _record(session, printer, previous.get("file"), outcome, st.get("duration"), progress=previous.get("progress"), energy_kwh=kwh)
         ended.append((printer.name, outcome))
+    try:
+        from app import maintenance
+        maintenance.apply_hms(session)
+    except Exception as e:                       # a mapping problem must never stop the poll
+        logger.info("HMS check failed: %s", e.__class__.__name__)
     for gone in (set(_last) | set(latest)) - {p.id for p in printers}:
         _last.pop(gone, None)
         latest.pop(gone, None)
     return ended
+
+
+def _picture(session: Session, printer: Printer, event: str) -> Optional[bytes]:
+    """A camera picture to attach to a notification, when the event is on, pictures are on and the printer has a camera. Never raises."""
+    if not printer.snapshot_url or get_setting(session, "notify_snapshots", "true") == "false" or not event_enabled(session, event) or not is_discord(get_setting(session, "notify_webhook_url", "")):
+        return None
+    try:
+        return printing.fetch_snapshot(printer.snapshot_url)
+    except Exception as e:
+        logger.info("No picture for the notification from %s: %s", printer.name, e.__class__.__name__)
+        return None
+
+
+def _say(session: Session, printer: Printer, event: str, title: str, message: str, fields: dict) -> None:
+    if event_enabled(session, event):
+        notify_event(session, event, title, message, fields=fields, image=_picture(session, printer, event))
+
+
+def _announce(session: Session, printer: Printer, previous, st: dict) -> None:
+    """Say when a print starts, is paused or resumed, or passes another step of its progress (all off until you switch them on)."""
+    state, was = st["state"], (previous or {}).get("state")
+    progress = st.get("progress")
+    fields = {"printer": printer.name, "file": st.get("file") or "a print", "progress": f"{round(progress)}%" if isinstance(progress, (int, float)) else "", "minutes": ""}
+    if previous is not None:
+        if state == "printing" and was not in ("printing", "paused"):
+            _progress_sent[printer.id] = 0
+            _say(session, printer, "print_started", f"Model Hub: {printer.name} started", f"{fields['file']} started.", fields)
+        elif state == "paused" and was == "printing":
+            _say(session, printer, "print_paused", f"Model Hub: {printer.name} paused", f"{fields['file']} is paused at {fields['progress'] or 'an unknown point'}.", fields)
+        elif state == "printing" and was == "paused":
+            _say(session, printer, "print_paused", f"Model Hub: {printer.name} resumed", f"{fields['file']} is printing again.", fields)
+    if state not in ("printing", "paused"):
+        _progress_sent.pop(printer.id, None)
+        return
+    try:
+        step = min(50, max(1, int(float(get_setting(session, "notify_progress_step", "10") or 10))))
+    except ValueError:
+        step = 10
+    if state == "printing" and isinstance(progress, (int, float)) and not isinstance(progress, bool):
+        bucket = int(progress // step)
+        last = _progress_sent.get(printer.id)
+        _progress_sent[printer.id] = bucket if last is None else max(last, bucket)
+        if last is not None and bucket > last and bucket * step < 100:
+            _say(session, printer, "print_progress", f"Model Hub: {printer.name} is at {bucket * step}%", f"{fields['file']} is {bucket * step}% done.", fields)
 
 
 def _photograph(session: Session, printer: Printer, model_id: int) -> None:
@@ -129,8 +183,8 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
                 log.energy_kwh = energy_kwh
                 session.add(log)
     session.commit()
+    fields = {"printer": printer.name, "file": label, "progress": "", "minutes": str(round(duration / 60)) if duration else ""}
     if outcome == "done":
-        notify_event(session, "print_done", f"Model Hub: {printer.name} finished", f"{label} is done" +
-                     (f" ({round(duration / 60)} min)." if duration else "."))
+        _say(session, printer, "print_done", f"Model Hub: {printer.name} finished", f"{label} is done" + (f" ({round(duration / 60)} min)." if duration else "."), fields)
     else:
-        notify_event(session, "print_done", f"Model Hub: {printer.name} stopped", f"{label} did not finish (cancelled or failed).")
+        _say(session, printer, "print_done", f"Model Hub: {printer.name} stopped", f"{label} did not finish (cancelled or failed).", fields)

@@ -8,11 +8,11 @@ MAX_FACES = 2_000_000
 
 
 def _load(path: Path):
-    import trimesh
-    mesh = trimesh.load(str(path), force="mesh")
-    if not hasattr(mesh, "faces") or len(mesh.faces) == 0:
+    from app.thumbnails import load_mesh
+    try:
+        return load_mesh(path)                    # the same loader as the thumbnails, including the second way to read a 3MF
+    except ValueError:
         raise ValueError("That file has no surface to check")
-    return mesh
 
 
 def _health(mesh) -> dict:

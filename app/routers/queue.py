@@ -231,7 +231,8 @@ def _on_done(session: Session, item: QueueItem, printer_id: Optional[int] = None
                         queue_item_id=item.id, measured=bool(item.actual_minutes), printer_id=printer_id or item.printer_id)
         if len(parts) > 1:
             log.uses = json.dumps([{"filament_id": sid, "grams": g} for sid, g in parts])
-    from app import budgets
+    from app import budgets, stock
+    stock.on_item_done(session, item)
     budgets.charge_done(session, item, round(sum(g for _, g in parts), 1) if parts else item.estimated_grams, item.actual_minutes or item.estimated_minutes)
     if item.order_id:
         from app.routers.orders import advance_order

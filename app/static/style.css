@@ -435,3 +435,14 @@ body.printer-role .printer-row details, body.printer-role .printer-delete, body.
 .tl-hour { color: var(--muted); font-size: 13px; margin: 8px 0 2px; border-bottom: 1px solid var(--border); }
 .tl-item { display: flex; gap: 10px; padding: 3px 0; flex-wrap: wrap; }
 .tl-held { opacity: .6; }
+
+/* report, shelf, other files */
+.stock-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.stock-row .stock-name { flex: 1; min-width: 12em; font-weight: 600; }
+.stock-low { color: #ff6b6b; }
+.file-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 4px 0; }
+#hms-map { width: 100%; font-family: ui-monospace, monospace; }
+table.facts a, .stat-cards a, .panel table a { color: var(--accent); }
+
+.stock-row a, .file-row a { color: var(--accent); }
+.file-row a.button-link { color: inherit; }

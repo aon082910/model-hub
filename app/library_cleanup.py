@@ -36,7 +36,14 @@ def delete_model_records(session: Session, model_ids: Iterable[int]) -> int:
     from app.routers.print_files import remove_files
     remove_files(session, ids)
     session.exec(delete(ShareLink).where(ShareLink.kind == "model", ShareLink.target_id.in_(ids)))   # a link must never outlive its model
-    from app.models import Collection, Favorite
+    from app.models import Collection, Favorite, ModelAttachment
+    from app.routers.attachments_router import stored_path as attachment_path
+    for row in session.exec(select(ModelAttachment).where(ModelAttachment.model_id.in_(ids))).all():
+        attachment_path(row.stored_name).unlink(missing_ok=True)
+        session.delete(row)
+    from app.models import StockItem
+    for row in session.exec(select(StockItem).where(StockItem.model_id.in_(ids))).all():
+        session.delete(row)
     session.exec(delete(Favorite).where(Favorite.model_id.in_(ids)))                               # nor a star
     session.exec(update(Collection).where(Collection.cover_model_id.in_(ids)).values(cover_model_id=None))
     family_ids = {f for f in session.exec(select(Model3D.family_id).where(Model3D.id.in_(ids), Model3D.family_id.is_not(None))).all()}

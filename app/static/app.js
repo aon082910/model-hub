@@ -152,6 +152,45 @@ function formatMinutes(m) {
   return h ? `${h} h ${min} min` : `${min} min`;
 }
 
+async function renderAttachments(model) {
+  const panel = $('#model-files-panel');
+  if (!panel) return;
+  const files = await fetch(`/api/attachments?model_id=${model.id}`).then(r => (r.ok ? r.json() : []));
+  if (!currentModel || currentModel.id !== model.id) return;
+  const readOnly = currentUser.role === 'viewer';
+  panel.innerHTML = `<h3>Other files</h3>
+    <p class="muted">Files for this model that Model Hub does not open: the CAD project it was made from, a slicer project, a Blender scene. They are kept and can be downloaded, never opened, and are not part of a backup.</p>
+    ${files.length ? files.map(f => `<div class="file-row" data-id="${f.id}"><b>${esc(f.filename)}</b> <span class="badge">${esc(f.label)}</span> <span class="muted">${formatBytes(f.size_bytes)}${f.notes ? ' &middot; ' + esc(f.notes) : ''}</span>
+      <a class="button-link" href="/api/attachments/${f.id}/download">Download</a>${readOnly ? '' : '<button class="attachment-delete">Delete</button>'}</div>`).join('') : '<p class="muted">None yet.</p>'}
+    ${readOnly ? '' : `<div class="row"><input id="attachment-file" type="file"><input id="attachment-notes" placeholder="Note (optional)"><button id="attachment-upload" class="primary">Keep this file</button><span id="attachment-status" class="muted"></span></div>`}
+    <details><summary>What Model Hub can open</summary><div id="format-table" class="muted">Loading...</div></details>`;
+  const up = $('#attachment-upload');
+  if (up) up.onclick = async () => {
+    const file = $('#attachment-file').files[0];
+    if (!file) { $('#attachment-status').textContent = 'Choose a file first.'; return; }
+    $('#attachment-status').textContent = 'Uploading...';
+    const form = new FormData();
+    form.append('model_id', String(model.id));
+    form.append('file', file);
+    if ($('#attachment-notes').value) form.append('notes', $('#attachment-notes').value);
+    const res = await fetch('/api/attachments', { method: 'POST', body: form });
+    if (res.ok) renderAttachments(model); else $('#attachment-status').textContent = await sourceErrorText(res);
+  };
+  panel.querySelectorAll('.attachment-delete').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this file?')) return;
+    await fetch(`/api/attachments/${b.closest('.file-row').dataset.id}`, { method: 'DELETE' });
+    renderAttachments(model);
+  });
+  panel.querySelector('details').addEventListener('toggle', async (e) => {
+    if (!e.target.open || e.target.dataset.loaded) return;
+    e.target.dataset.loaded = '1';
+    const t = await fetch('/api/attachments/formats').then(r => (r.ok ? r.json() : null));
+    if (!t) return;
+    $('#format-table').innerHTML = `<p><b>Opened:</b> ${t.opened.map(o => `${esc(o.label)} (${[o.preview ? 'picture' : '', o.viewer ? '3D view' : '', o.analyse ? 'checks and repair' : 'no checks'].filter(Boolean).join(', ')}${o.note ? '; ' + esc(o.note) : ''})`).join('; ')}.</p>
+      <p><b>Kept only:</b> ${t.stored.map(o => esc(o.label)).filter((v, i, a) => a.indexOf(v) === i).join(', ')}, and any other kind of file except ${t.refused.map(x => '.' + esc(x)).join(' ')}.</p>`;
+  });
+}
+
 async function renderSlicedFiles(model) {
   const panel = $('#model-sliced-panel');
   const [files, printerInfo] = await Promise.all([
@@ -583,6 +622,7 @@ function renderModelPage(model) {
   loadFavorites().then(paintStar);
   renderVersions(model);
   renderSlicedFiles(model);
+  renderAttachments(model);
   renderSharePanel('#model-share-panel', 'model', model.id);
 }
 
@@ -3634,13 +3674,16 @@ async function loadMaintenance() {
     <p class="muted">Tasks fall due after so many hours of printing (counted from the prints a printer reported) and/or days.</p>
     ${data.tasks.length ? data.tasks.map(t => `<div class="row maint-row" data-id="${t.id}">${badge(t)}
       <b>${esc(t.printer)}</b>: ${esc(t.name)}
+      ${t.flagged ? `<span class="warn-text">&#9888; problem reported${t.flagged_note ? ': ' + esc(t.flagged_note) : ''}</span>` : ''}
+      <span class="muted">${[t.every_grams ? `${t.grams_since}/${t.every_grams} g` : '', t.every_prints ? `${t.prints_since}/${t.every_prints} prints` : '', t.every_failures ? `${t.failures_since}/${t.every_failures} failed${t.failure_reason ? ' (' + esc(t.failure_reason) + ')' : ''}` : '', t.predicted_due ? `expected due about ${esc(t.predicted_due)}` : ''].filter(Boolean).join(' &middot; ')}</span>
       <span class="muted">${t.status === 'due' ? 'overdue by ' + esc(left({ hours_left: t.hours_left != null && t.hours_left < 0 ? -t.hours_left : null, days_left: t.days_left != null && t.days_left < 0 ? -t.days_left : null })) || 'now'
         : esc(left(t)) + ' left'}${t.note ? ' &middot; ' + esc(t.note) : ''}</span>
-      ${readOnly ? '' : '<button class="maint-done">Done</button><button class="maint-delete">Remove</button>'}</div>`).join('') : '<p class="muted">No tasks yet.</p>'}
+      ${readOnly ? '' : '<button class="maint-done">Done</button><button class="maint-report" title="Say something is wrong: it is due now">Report a problem</button><button class="maint-delete">Remove</button>'}</div>`).join('') : '<p class="muted">No tasks yet.</p>'}
     ${readOnly || !data.printers.length ? '' : `<details><summary>Add a task</summary><div class="row">
       <select id="maint-printer">${data.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
       <select id="maint-preset"><option value="">(a common task...)</option>${data.presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('')}</select></div>
       <div class="row"><input id="maint-name" placeholder="What has to be done" maxlength="80"><input id="maint-hours" type="number" min="1" placeholder="every ... print hours"><input id="maint-days" type="number" min="1" placeholder="or every ... days">
+      <input id="maint-grams" type="number" min="1" placeholder="or every ... g of filament"><input id="maint-prints" type="number" min="1" placeholder="or every ... prints"><input id="maint-failures" type="number" min="1" placeholder="or every ... failed prints">
       <button id="maint-add" class="primary">Add</button><span id="maint-status" class="muted"></span></div></details>`}
     <details id="maint-history"><summary>History of what was done</summary><div id="maint-history-body" class="muted">Loading...</div></details>`;
   const preset = $('#maint-preset');
@@ -3653,6 +3696,9 @@ async function loadMaintenance() {
     const body = { printer_id: parseInt($('#maint-printer').value), name: $('#maint-name').value };
     if ($('#maint-hours').value) body.every_hours = parseFloat($('#maint-hours').value);
     if ($('#maint-days').value) body.every_days = parseInt($('#maint-days').value);
+    if ($('#maint-grams').value) body.every_grams = parseFloat($('#maint-grams').value);
+    if ($('#maint-prints').value) body.every_prints = parseInt($('#maint-prints').value);
+    if ($('#maint-failures').value) body.every_failures = parseInt($('#maint-failures').value);
     const res2 = await jsonRequest('POST', '/api/maintenance', body);
     if (res2.ok) loadMaintenance(); else $('#maint-status').textContent = await sourceErrorText(res2);
   };
@@ -3671,6 +3717,12 @@ async function loadMaintenance() {
       <span class="muted">at ${r.print_hours} print hours${r.note ? ' &middot; ' + esc(r.note) : ''}</span>${readOnly ? '' : ` <button class="maint-log-delete" data-id="${r.id}" title="Remove this entry">&times;</button>`}</div>`).join('')
       : '<p class="muted">Nothing has been marked done yet.</p>';
     $$('.maint-log-delete').forEach(x => x.onclick = async () => { await fetch(`/api/maintenance/log/${x.dataset.id}`, { method: 'DELETE' }); history.open = false; history.open = true; });
+  });
+  panel.querySelectorAll('.maint-report').forEach(b => b.onclick = async () => {
+    const note = prompt('What is wrong? (optional)', '');
+    if (note === null) return;
+    await jsonRequest('POST', `/api/maintenance/${b.closest('.maint-row').dataset.id}/report`, { note });
+    loadMaintenance();
   });
   panel.querySelectorAll('.maint-delete').forEach(b => b.onclick = async () => {
     if (!confirm('Remove this maintenance task?')) return;
@@ -4258,11 +4310,15 @@ async function saveSetting(values, statusSelector) {
 async function loadNotifyEvents() {
   const res = await fetch('/api/settings/notify-events');
   if (!res.ok) return;
-  $('#notify-events').innerHTML = (await res.json()).events.map(e => `
-    <label class="inline-check"><input type="checkbox" class="notify-event" data-event="${esc(e.id)}" ${e.enabled ? 'checked' : ''}> ${esc(e.label)}</label>`).join('');
+  const data = await res.json();
+  const worded = ['print_started', 'print_progress', 'print_paused', 'print_done'];
+  $('#notify-events').innerHTML = data.events.map(e => `
+    <div><label class="inline-check"><input type="checkbox" class="notify-event" data-event="${esc(e.id)}" ${e.enabled ? 'checked' : ''}> ${esc(e.label)}</label>
+    ${worded.includes(e.id) ? `<input class="notify-text" data-event="${esc(e.id)}" value="${esc(e.text)}" placeholder="Your own wording, e.g. {printer} is at {progress}" aria-label="Wording for ${esc(e.label)}" style="width:100%">` : ''}</div>`).join('');
 }
 
 $('#notify-events').addEventListener('change', (e) => {
+  if (e.target.classList.contains('notify-text')) { saveSetting({ [`notify_text_${e.target.dataset.event}`]: e.target.value }); return; }
   if (!e.target.classList.contains('notify-event')) return;
   saveSetting({ [`notify_${e.target.dataset.event}`]: e.target.checked ? 'true' : 'false' });
 });
@@ -4321,7 +4377,7 @@ function barChart(title, rows, valueKey, format) {
     const x = i * (bar + gap);
     return `<g><title>${esc(r.month)}: ${esc(format(r[valueKey]))}</title>
       <rect x="${x}" y="${height - 14 - h}" width="${bar}" height="${h}" rx="2" class="bar"/>
-      <text x="${x + bar / 2}" y="${height - 2}" text-anchor="middle" class="bar-label">${esc(r.month.slice(5))}</text></g>`;
+      ${i % Math.ceil(rows.length / 12) === 0 ? `<text x="${x + bar / 2}" y="${height - 2}" text-anchor="middle" class="bar-label">${esc(r.month.slice(5))}</text>` : ''}</g>`;
   }).join('');
   return `<div class="chart"><h3>${esc(title)} <small class="muted">most in a month: ${esc(format(max))}</small></h3>
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}">${bars}</svg></div>`;
@@ -4358,8 +4414,44 @@ async function loadStats() {
         <p class="muted">${d.failures.grams ? `${d.failures.grams.toLocaleString()} g of filament${d.failures.cost ? ` (${money(d.failures.cost)})` : ''} went into them.` : 'Say how much filament a failed print used (its log entry) to count the waste.'}</p>`
         : '<p class="muted">No failed prints logged. Mark one on a model\'s print history, or in the Print Queue.</p>'}</div>
     </div>`;
+  loadAnalytics();
 }
 $('#stats-months').addEventListener('change', loadStats);
+
+async function loadAnalytics() {
+  if (!$('#analytics-start').value) {
+    const end = new Date(), start = new Date(Date.now() - 29 * 86400000);
+    $('#analytics-end').value = end.toISOString().slice(0, 10);
+    $('#analytics-start').value = start.toISOString().slice(0, 10);
+  }
+  if (canRunPrinters() && $('#analytics-printer').options.length === 1) {
+    const info = await fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] }));
+    $('#analytics-printer').innerHTML = '<option value="">all</option>' + info.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  }
+  $('#analytics-printer').parentElement.classList.toggle('hidden', !canRunPrinters());
+  const params = new URLSearchParams({ start: $('#analytics-start').value, end: $('#analytics-end').value });
+  if ($('#analytics-printer').value) params.set('printer_id', $('#analytics-printer').value);
+  if ($('#analytics-material').value.trim()) params.set('material', $('#analytics-material').value.trim());
+  const res = await fetch(`/api/analytics?${params}`);
+  const box = $('#analytics-box');
+  if (!res.ok) { box.innerHTML = `<p class="error-text">${esc(await sourceErrorText(res))}</p>`; return; }
+  const d = await res.json(), c = d.cards;
+  const card = (label, value) => `<div class="stat-card"><div class="stat-value">${value}</div><div class="muted">${esc(label)}</div></div>`;
+  const rate = v => (v == null ? 'n/a' : `${v}%`);
+  const table = (title, head, rows) => `<div class="panel"><h3>${esc(title)}</h3>${rows.length ? `<table class="facts"><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(x => `<td>${x}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<p class="muted">Nothing in this period.</p>'}</div>`;
+  box.innerHTML = `<div class="stat-cards">
+      ${card('print jobs', c.jobs)}${card('print time', `${c.hours} h`)}${card('success rate', rate(c.success_rate))}${card('filament used', `${c.grams.toLocaleString()} g`)}
+      ${card('prints per day', c.prints_per_day)}${card('average print', c.average_minutes == null ? 'n/a' : `${Math.round(c.average_minutes)} min`)}
+      ${card('printers ran', `${c.printer_run_hours} h`)}${card('cost of prints', money2(c.cost))}</div>
+    ${barChart('Jobs per day', d.per_day.map(x => ({ month: x.date, jobs: x.jobs })), 'jobs', v => String(v))}
+    <div class="page-grid">
+      ${table('By printer', ['Printer', 'Jobs', 'Success', 'Hours', 'Used', 'Cost'], d.by_printer.map(p => [esc(p.printer), p.jobs, rate(p.success_rate), p.hours, p.utilisation == null ? '' : `${p.utilisation}% of ${d.hours_per_day} h a day`, money2(p.cost)]))}
+      ${table('By material', ['Material', 'Jobs', 'Success', 'Grams', 'Cost'], d.by_material.map(m => [esc(m.material), m.jobs, rate(m.success_rate), m.grams, money2(m.cost)]))}
+      ${table('By customer', ['Customer', 'Jobs', 'Hours', 'Cost'], d.by_customer.map(x => [esc(x.customer), x.jobs, x.hours, money2(x.cost)]))}
+      ${table('Most printed', ['Model', 'Jobs', 'Success'], d.by_model.map(m => [`<a href="#/model/${m.model_id}">${esc(m.filename)}</a>`, m.jobs, rate(m.success_rate)]))}
+      ${table('Why prints failed', ['Reason', 'Count'], d.failure_reasons.map(r => [esc(r.label), r.count]))}</div>`;
+}
+$('#analytics-go').addEventListener('click', loadAnalytics);
 
 // ---------- Updates and API tokens (Settings) ----------
 function versionLine(v) {
@@ -4479,7 +4571,66 @@ async function importOrders(dry) {
 $('#order-import-preview').addEventListener('click', () => importOrders(true));
 $('#order-import-go').addEventListener('click', () => importOrders(false));
 
+async function loadStock() {
+  const box = $('#stock-box');
+  if (!box) return;
+  const res = await fetch('/api/stock');
+  if (!res.ok) { box.textContent = ''; return; }
+  const data = await res.json();
+  const readOnly = currentUser.role === 'viewer';
+  box.innerHTML = (data.items.length ? data.items.map(i => `<div class="stock-row" data-id="${i.id}">
+      <a class="stock-name" href="#/model/${i.model_id}">${esc(i.filename)}${i.sku ? ` <span class="muted">${esc(i.sku)}</span>` : ''}</a>
+      <span class="${i.low ? 'stock-low' : ''}">on the shelf <b>${i.on_hand}</b>${i.minimum ? ` (minimum ${i.minimum})` : ''}</span>${i.queued ? `<span class="muted">${i.queued} being printed</span>` : ''}
+      ${readOnly ? '' : `<button class="stock-minus">&minus;1</button><button class="stock-plus">+1</button><button class="stock-min">Minimum</button><button class="stock-make" ${i.short || true ? '' : 'disabled'}>Make more${i.short ? ` (${i.short})` : ''}</button><button class="stock-delete">&times;</button>`}</div>`).join('')
+    : '<p class="muted">Nothing on the shelf list yet.</p>')
+    + (readOnly ? '' : `<div class="row"><input id="stock-model" list="stock-models" placeholder="Add a model (type to search)"><datalist id="stock-models"></datalist>
+      <input id="stock-have" type="number" min="0" placeholder="on hand" style="width:6em"><input id="stock-minimum" type="number" min="0" placeholder="minimum" style="width:6em">
+      <button id="stock-add" class="primary">Add</button><span id="stock-msg" class="muted"></span></div>`);
+  const msg = text => { const el = $('#stock-msg'); if (el) el.textContent = text; };
+  const modelInput = $('#stock-model');
+  if (modelInput) modelInput.oninput = async () => {
+    if (modelInput.value.length < 2) return;
+    const found = await fetch(`/api/library/models?q=${encodeURIComponent(modelInput.value.replace(/\s*#\d+$/, ''))}&limit=15`).then(r => (r.ok ? r.json() : []));
+    $('#stock-models').innerHTML = found.map(m => `<option value="${esc(m.filename)} #${m.id}"></option>`).join('');
+  };
+  const add = $('#stock-add');
+  if (add) add.onclick = async () => {
+    const m = /#(\d+)\s*$/.exec(modelInput.value);
+    if (!m) { msg('Pick a model from the list.'); return; }
+    const r = await jsonRequest('POST', '/api/stock', { model_id: parseInt(m[1]), on_hand: parseInt($('#stock-have').value) || 0, minimum: parseInt($('#stock-minimum').value) || 0 });
+    if (r.ok) loadStock(); else msg(await sourceErrorText(r));
+  };
+  box.querySelectorAll('.stock-row').forEach(row => {
+    const id = row.dataset.id, item = data.items.find(x => String(x.id) === id);
+    const adjust = async (delta) => { const r = await jsonRequest('POST', `/api/stock/${id}/adjust`, { delta }); if (r.ok) loadStock(); else showNotice(await sourceErrorText(r)); };
+    const minus = row.querySelector('.stock-minus'), plus = row.querySelector('.stock-plus');
+    if (minus) minus.onclick = () => adjust(-1);
+    if (plus) plus.onclick = () => adjust(1);
+    const min = row.querySelector('.stock-min');
+    if (min) min.onclick = async () => {
+      const value = prompt(`Fewest to keep of "${item.filename}" (0 = no minimum)`, item.minimum);
+      if (value === null) return;
+      const r = await jsonRequest('PATCH', `/api/stock/${id}`, { minimum: parseInt(value) || 0 });
+      if (r.ok) loadStock(); else showNotice(await sourceErrorText(r));
+    };
+    const make = row.querySelector('.stock-make');
+    if (make) make.onclick = async () => {
+      let payload = {};
+      if (!item.short) {
+        const q = prompt('The shelf is already covered. How many more should be printed?', '1');
+        if (!q) return;
+        payload = { quantity: parseInt(q) };
+      }
+      const r = await jsonRequest('POST', `/api/stock/${id}/make`, payload);
+      if (r.ok) { showNotice(`Queued ${(await r.json()).queued} print(s) for the shelf.`); loadStock(); } else showNotice(await sourceErrorText(r));
+    };
+    const del = row.querySelector('.stock-delete');
+    if (del) del.onclick = async () => { if (confirm('Take this part off the shelf list?')) { await fetch(`/api/stock/${id}`, { method: 'DELETE' }); loadStock(); } };
+  });
+}
+
 async function loadOrders() {
+  loadStock();
   const res = await fetch('/api/orders');
   if (!res.ok) { $('#orders-list').innerHTML = '<p class="error-text">Could not load the orders.</p>'; return; }
   const data = await res.json();
@@ -4518,7 +4669,7 @@ async function renderOrderBody(id) {
       <select class="order-status">${statuses.map(s => `<option value="${s}" ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <label class="inline-check"><input type="checkbox" class="order-paid" ${o.paid ? 'checked' : ''}> paid</label>
       ${centres.length ? `<select class="order-centre" aria-label="Budget" title="Its prints are charged to this budget"><option value="">no budget</option>${centres.map(c => `<option value="${c.id}" ${c.id === o.cost_centre_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
-      <button class="order-queue primary">Put the prints in the queue</button><button class="order-delete danger">Delete</button><span class="order-msg muted"></span></div>
+      <button class="order-shelf" title="Fill what is still needed from finished parts on the shelf">Take from the shelf</button><button class="order-queue primary">Put the prints in the queue</button><button class="order-delete danger">Delete</button><span class="order-msg muted"></span></div>
       ${o.suggested_status !== o.status ? `<div class="muted">Looks like it is <b>${esc(o.suggested_status)}</b> now.</div>` : ''}`}`;
   const body = card.querySelector('.order-body');
   const msg = text => { const el = body.querySelector('.order-msg'); if (el) el.textContent = text; };
@@ -4551,6 +4702,11 @@ async function renderOrderBody(id) {
   if (centre) centre.onchange = async () => {
     const r = await jsonRequest('PATCH', `/api/orders/${id}`, { cost_centre_id: centre.value ? parseInt(centre.value) : null });
     if (!r.ok) msg(await sourceErrorText(r));
+  };
+  const shelf = body.querySelector('.order-shelf');
+  if (shelf) shelf.onclick = async () => {
+    const r = await jsonRequest('POST', `/api/orders/${id}/take-from-stock`, {});
+    if (r.ok) { const d = await r.json(); showNotice(d.taken ? `Took ${d.taken} from the shelf.` : 'Nothing on the shelf fits what this order still needs.'); reload(); loadStock(); } else msg(await sourceErrorText(r));
   };
   const queue = body.querySelector('.order-queue');
   if (queue) queue.onclick = async () => {
@@ -4751,6 +4907,22 @@ $('#cal-status').addEventListener('click', async (e) => {
   if (await undoActivity(e.target.dataset.id)) { $('#cal-status').textContent = 'Undone.'; loadCalendar(); }
 });
 
+$('#notify-progress-step').addEventListener('change', () => saveSetting({ notify_progress_step: $('#notify-progress-step').value.trim() }));
+$('#notify-snapshots').addEventListener('change', () => saveSetting({ notify_snapshots: $('#notify-snapshots').checked ? 'true' : 'false' }));
+async function loadHmsMap() {
+  const res = await fetch('/api/maintenance/hms-map');
+  if (!res.ok) return;
+  $('#hms-map').value = Object.entries((await res.json()).map).map(([code, name]) => `${code} = ${name}`).join('\n');
+}
+$('#hms-save').addEventListener('click', async () => {
+  const map = {};
+  for (const line of $('#hms-map').value.split('\n')) {
+    const at = line.indexOf('=');
+    if (at > 0 && line.trim()) map[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  const res = await jsonRequest('PUT', '/api/maintenance/hms-map', { map });
+  $('#hms-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+});
 $('#stagger-save').addEventListener('click', async () => {
   const ok = await saveSetting({ stagger_minutes: $('#stagger-minutes').value.trim(), max_printing: $('#max-printing').value.trim(), strict_colour: $('#strict-colour').checked ? 'true' : '' });
   $('#stagger-status').textContent = ok ? 'Saved.' : 'Could not save.';
@@ -5050,6 +5222,9 @@ async function loadSettings() {
   $('#stagger-minutes').value = s.stagger_minutes || '';
   $('#max-printing').value = s.max_printing || '';
   $('#strict-colour').checked = s.strict_colour === 'true';
+  $('#notify-progress-step').value = s.notify_progress_step || '';
+  $('#notify-snapshots').checked = s.notify_snapshots !== 'false';
+  loadHmsMap();
   $('#ha-url').value = s.ha_url || '';
   $('#ha-token').placeholder = s.ha_token ? 'A token is saved (type a new one to replace it)' : 'Long-lived access token';
   renderSharePanel('#library-share-panel', 'library', 0);

@@ -299,6 +299,19 @@ def _bambu_ams(report: dict) -> list:
     return sorted(out, key=lambda t: t["slot"])
 
 
+def _bambu_hms(report: dict) -> list:
+    """The fault codes (HMS) a Bambu printer reports, as HMS_AAAA_BBBB_CCCC_DDDD (the form used in Bambu's own wiki)."""
+    out = []
+    for item in report.get("hms") or []:
+        if not isinstance(item, dict):
+            continue
+        attr, code = item.get("attr"), item.get("code")
+        if all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF for v in (attr, code)):
+            digits = f"{attr:08X}{code:08X}"
+            out.append("HMS_" + "_".join(digits[i:i + 4] for i in range(0, 16, 4)))
+    return out[:20]
+
+
 def _bambu_status(host, serial, code, result):
     if not host or not serial or not code:
         raise PrinterError("This printer needs its address, serial number and LAN access code")
@@ -307,7 +320,7 @@ def _bambu_status(host, serial, code, result):
     percent = report.get("mc_percent")
     result.update(online=True, state=state, progress=float(percent) if isinstance(percent, (int, float)) and not isinstance(percent, bool) else None,
                   file=(report.get("subtask_name") or report.get("gcode_file") or None),
-                  nozzle=_number(report.get("nozzle_temper")), bed=_number(report.get("bed_temper")), ams=_bambu_ams(report))
+                  nozzle=_number(report.get("nozzle_temper")), bed=_number(report.get("bed_temper")), ams=_bambu_ams(report), hms=_bambu_hms(report))
     return result
 
 

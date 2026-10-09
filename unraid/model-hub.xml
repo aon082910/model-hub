@@ -40,6 +40,19 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.24.0
+From a third round of research: a Report under Stats (jobs, success rate,
+print time, filament and cost by printer, material and customer, with filters
+and printer utilisation); maintenance that also falls due by grams, prints or
+failed prints, predicts its date, can be flagged as a problem and can follow
+Bambu fault codes; Discord messages with a camera picture, optional started,
+progress and paused messages and your own wording; a shelf of finished parts
+with a minimum, that orders can take from and that fills itself from prints;
+CAD, slicer and scene files kept with a model (stored only); slicer project
+3MF files that could not be read are now read directly; and a corpus checker
+for stress-testing. No new settings are required; new columns and tables are
+added automatically on first start.
+
 ### 2.23.0
 From a second round of research: budgets that reserve money when a print is
 queued, charge it when it finishes and can stop a dispatch once spent; a

@@ -75,14 +75,21 @@ def thumbnail_filename(
 
 def load_mesh(path: Path):
     """Load and validate one mesh for reuse by stats and thumbnail generation."""
+    mesh, problem = None, None
     try:
         mesh = trimesh.load(str(path), force="mesh")
         if isinstance(mesh, trimesh.Scene):
             mesh = mesh.dump(concatenate=True)
     except Exception as exc:
-        raise ValueError(
-            f"invalid or unsupported {path.suffix.lower()} mesh: {exc}"
-        ) from exc
+        problem = exc
+    if path.suffix.lower() == ".3mf" and (problem is not None or mesh is None or len(getattr(mesh, "faces", [])) == 0):
+        try:                                       # a slicer project the general loader cannot read: read its XML directly
+            from app.threemf_fallback import load as load_3mf_xml
+            mesh, problem = load_3mf_xml(path), None
+        except Exception as exc:
+            problem = problem or exc
+    if problem is not None:
+        raise ValueError(f"invalid or unsupported {path.suffix.lower()} mesh: {problem}") from problem
 
     if mesh is None or not hasattr(mesh, "vertices") or not hasattr(mesh, "faces"):
         raise ValueError("mesh loader returned no mesh geometry")

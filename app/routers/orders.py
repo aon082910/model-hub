@@ -65,7 +65,7 @@ def _item_json(session: Session, item: OrderItem, names: dict, units: dict) -> d
     queued = units.get(item.id, {"queued": 0, "done": 0})
     return {"id": item.id, "model_id": item.model_id, "filename": names.get(item.model_id), "quantity": item.quantity, "unit_price": item.unit_price,
             "suggested_price": suggested, "price_used": used, "line_price": round(used * item.quantity, 2) if used is not None else None,
-            "line_cost": q["total"]["cost"] if q else None, "units_queued": queued["queued"], "units_done": queued["done"], "estimated": q is not None}
+            "line_cost": q["total"]["cost"] if q else None, "units_queued": queued["queued"], "units_done": queued["done"], "from_stock": item.from_stock or 0, "estimated": q is not None}
 
 
 def _unit_counts(session: Session, order_id: int) -> dict:
@@ -76,6 +76,11 @@ def _unit_counts(session: Session, order_id: int) -> dict:
             c["queued"] += 1
         if q.status == "done":
             c["done"] += 1
+    for item in session.exec(select(OrderItem).where(OrderItem.order_id == order_id, OrderItem.from_stock.is_not(None))).all():
+        if item.from_stock:                                       # units taken from the shelf count as printed and queued
+            c = counts.setdefault(item.id, {"queued": 0, "done": 0})
+            c["queued"] += item.from_stock
+            c["done"] += item.from_stock
     return counts
 
 
@@ -379,6 +384,33 @@ def remove_item(order_id: int, item_id: int, session: Session = Depends(get_sess
     session.delete(item)
     session.commit()
     return _order_json(session, order)
+
+
+@router.post("/{order_id}/take-from-stock")
+def take_from_stock(order_id: int, request: Request, session: Session = Depends(get_session)):
+    """Fill what the order still needs from finished parts on the shelf (never more than are there); the rest is still to be printed."""
+    from app.models import StockItem
+    order = _get(session, order_id)
+    taken, lines = 0, []
+    units = _unit_counts(session, order_id)
+    for item in session.exec(select(OrderItem).where(OrderItem.order_id == order_id).order_by(OrderItem.id)).all():
+        row = session.exec(select(StockItem).where(StockItem.model_id == item.model_id)).first()
+        need = item.quantity - units.get(item.id, {"queued": 0})["queued"]
+        if not row or need <= 0 or row.on_hand <= 0:
+            continue
+        take = min(row.on_hand, need)
+        row.on_hand -= take
+        item.from_stock = (item.from_stock or 0) + take
+        session.add(row)
+        session.add(item)
+        taken += take
+        lines.append({"model_id": item.model_id, "taken": take})
+    session.commit()
+    if taken:
+        advance_order(session, order_id)
+        session.commit()
+        activity.record(session, activity.actor_of(request), "order", f"Took {taken} part(s) from the shelf for the order of {order.customer}")
+    return {"taken": taken, "lines": lines, "order": _order_json(session, order)}
 
 
 @router.post("/{order_id}/queue")

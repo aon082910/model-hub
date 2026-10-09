@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, engine
 from app.config import SCAN_INTERVAL_SECONDS
-from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, costs, orders, spoolman_router, share_target, creators, storage_router, favorites, profiles, status_page, budgets, sensors_router, queue, settings, ai, slicer, auth_router
+from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, costs, orders, spoolman_router, share_target, creators, storage_router, favorites, profiles, status_page, budgets, sensors_router, analytics, stock_router, attachments_router, queue, settings, ai, slicer, auth_router
 from app.routers import bambu_send
 from app.auth import path_requires_auth, current_user, forbidden_reason, bootstrap_from_env, ensure_extension_api_key
 
@@ -94,6 +94,9 @@ app.include_router(favorites.router)
 app.include_router(profiles.router)
 app.include_router(budgets.router)
 app.include_router(sensors_router.router)
+app.include_router(analytics.router)
+app.include_router(stock_router.router)
+app.include_router(attachments_router.router)
 app.include_router(status_page.router)
 app.include_router(status_page.public_router)
 app.include_router(creators.router)

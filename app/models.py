@@ -130,6 +130,8 @@ class QueueItem(SQLModel, table=True):
     order_id: Optional[int] = Field(default=None, index=True)       # the order this print is for
     order_item_id: Optional[int] = None
     uses: Optional[str] = None                 # JSON [{slot|filament_id, grams}]: a multicolour job's spools (else filament_id/slot above)
+    to_stock_id: Optional[int] = None          # when it finishes, one more of this finished part goes on the shelf
+    stocked: Optional[bool] = None             # that has been done (once)
     priority: Optional[int] = None             # -1 low, 0 or empty normal, 1 high
     held: Optional[bool] = None                # waiting for someone to look at it: not suggested, assigned or sent until released
     printer_tag: Optional[str] = None          # only a printer with this tag may print it
@@ -325,6 +327,7 @@ class OrderItem(SQLModel, table=True):
     model_id: int
     quantity: int = 1
     unit_price: Optional[float] = None     # empty: the price the cost calculator suggests
+    from_stock: Optional[int] = None       # units supplied from finished parts on the shelf
 
 
 class MaintenanceTask(SQLModel, table=True):
@@ -334,6 +337,12 @@ class MaintenanceTask(SQLModel, table=True):
     name: str
     every_hours: Optional[float] = None           # of printing on that printer
     every_days: Optional[int] = None
+    every_grams: Optional[float] = None           # of filament printed on that printer
+    every_prints: Optional[int] = None            # finished prints on that printer
+    every_failures: Optional[int] = None          # failed prints on that printer
+    failure_reason: Optional[str] = None          # count only failures with this reason (a key of print_outcomes.REASONS)
+    flagged_at: Optional[datetime] = None         # someone said there is a problem: due now
+    flagged_note: Optional[str] = None
     last_done_at: datetime = Field(default_factory=datetime.utcnow)
     last_done_hours: float = 0                    # the printer's print hours when it was last done
     note: Optional[str] = None
@@ -531,3 +540,26 @@ class PrinterSensor(SQLModel, table=True):
     condition: str                          # on, off, above, below
     threshold: Optional[float] = None       # for above and below
     label: Optional[str] = None
+
+
+class StockItem(SQLModel, table=True):
+    """Finished parts on the shelf: how many there are of a model, and how few is too few."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model_id: int = Field(index=True)
+    sku: Optional[str] = None
+    on_hand: int = 0
+    minimum: int = 0
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ModelAttachment(SQLModel, table=True):
+    """A file kept with a model that Model Hub does not open (a CAD project, a slicer project, a Blender scene): stored and downloadable only."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model_id: int = Field(index=True)
+    filename: str
+    stored_name: str
+    kind: str                               # the extension without its dot, lower case
+    size_bytes: int = 0
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)

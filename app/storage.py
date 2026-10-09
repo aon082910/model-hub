@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from app.config import CONFIG_PATH, LIBRARY_PATH
 from app.models import Model3D
 
-CONFIG_FOLDERS = ("thumbnails", "source_images", "print_photos", "print_files", "backups", "downloads")
+CONFIG_FOLDERS = ("thumbnails", "source_images", "print_photos", "print_files", "attachments", "backups", "downloads")
 
 
 def folder_size(path: Path, limit_entries: int = 200_000) -> int:

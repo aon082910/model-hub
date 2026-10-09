@@ -356,6 +356,8 @@ def model_health(model_id: int, session: Session = Depends(get_session)):
     except mesh_worker.MeshWorkerError as e:
         raise HTTPException(502, f"The check could not be done ({e})")
     except Exception as e:
+        if "no surface" in str(e):                                       # an empty or unreadable file: a plain answer, not a failure of the server
+            raise HTTPException(400, "This file has no surface to check (it is empty or could not be read)")
         raise HTTPException(502, f"The check could not be done ({e.__class__.__name__}: {str(e)[:120]})")
 
 
@@ -379,6 +381,8 @@ def repair_model(model_id: int, session: Session = Depends(get_session)):
         try:
             report = pool.run(mesh_worker.repair_file, str(path), str(out), pool.budget_bytes)
         except Exception as e:
+            if "no surface" in str(e):
+                raise HTTPException(400, "This file has no surface to repair (it is empty or could not be read)")
             raise HTTPException(502, f"The repair could not be done ({str(e)[:140]})")
         try:
             copy = import_model_from_path(session, out, path.parent, out.name, source_url=model.source_url, designer=model.designer, license=model.license)

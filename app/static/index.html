@@ -445,6 +445,9 @@
       <div id="order-import-result"></div>
     </details>
     <div id="orders-list"></div>
+    <h2>Finished parts on the shelf</h2>
+    <p class="muted">How many finished prints of a model you have, and how few is too few. An order can take what is on the shelf, <b>Make more</b> queues the shortfall (each print that finishes goes on the shelf by itself), and you are told when a part is at or below its minimum.</p>
+    <div id="stock-box"></div>
   </section>
 
   <section id="tab-creators" class="tab">
@@ -459,6 +462,12 @@
     <div class="row"><label>Show the last
       <select id="stats-months"><option value="6">6 months</option><option value="12" selected>12 months</option><option value="24">24 months</option></select></label></div>
     <div id="stats-body"></div>
+    <h2>Report</h2>
+    <p class="muted">Jobs, success rate, print time, filament and cost for any stretch of time, by printer, material and customer. Cost counts filament, electricity and machine time (Settings, Costs); a failed print costs only its filament.</p>
+    <div class="row"><label>From <input type="date" id="analytics-start"></label><label>To <input type="date" id="analytics-end"></label>
+      <label>Printer <select id="analytics-printer"><option value="">all</option></select></label><label>Material <input id="analytics-material" placeholder="PLA" size="8"></label>
+      <button id="analytics-go">Show</button></div>
+    <div id="analytics-box"></div>
   </section>
 
   <section id="tab-calendar" class="tab">
@@ -615,6 +624,9 @@
       <span id="notify-test-status" class="muted"></span>
       <p class="muted">Tell me about:</p>
       <div id="notify-events"></div>
+      <div class="row"><label>Tell me every <input id="notify-progress-step" type="number" min="1" max="50" placeholder="10" style="width:5em"> % of a print (when that is switched on)</label>
+        <label class="inline-check"><input type="checkbox" id="notify-snapshots"> Attach a camera picture (Discord webhooks only)</label></div>
+      <p class="muted">Your own wording for an event can use <code>{printer}</code>, <code>{file}</code>, <code>{progress}</code> and <code>{minutes}</code>. Leave it empty for the normal text.</p>
       <label class="inline-check"><input type="checkbox" id="weekly-summary"> Send me a summary of the week, every seven days</label>
       <button id="weekly-test-btn">Send one now</button> <span id="weekly-test-status" class="muted"></span>
       <label>Low filament warning at <small>(grams left on a spool; 0 switches spool warnings off. Supplies warn at the minimum you set for them.)</small>
@@ -731,6 +743,13 @@
       <div id="status-page-box"></div>
     </div>
 
+    <h2>Bambu fault codes and maintenance</h2>
+    <div class="settings-form">
+      <p class="muted">Tie a fault code a Bambu Lab printer reports (its HMS codes, like <code>HMS_0300_0100_0001_0001</code>) to a maintenance task of that printer, one per line as <code>code = task name</code>. When the printer reports the code, that task is marked as having a problem and is due now. The task must already exist on the printer, with exactly that name.</p>
+      <textarea id="hms-map" rows="4" placeholder="HMS_0300_0100_0001_0001 = Replace the nozzle" aria-label="Fault codes and tasks"></textarea>
+      <div class="row"><button id="hms-save">Save</button><span id="hms-status" class="muted"></span></div>
+    </div>
+
     <h2>Printer sensors (Home Assistant)</h2>
     <div class="settings-form">
       <p class="muted">Hold a printer's queued prints while a Home Assistant sensor is alerting (a door that is open, a chamber that is too hot). Model Hub asks Home Assistant for each bound sensor every half minute with a long-lived access token (made in your Home Assistant profile; it is kept out of backups). While a sensor is alerting that printer is not suggested for new prints and sending to it waits, with the reason shown, and you can still start anyway. If a sensor cannot be read, nothing is held.</p>
@@ -831,6 +850,7 @@
         <div class="panel" id="model-details-panel"></div>
         <div class="panel" id="model-settings-panel"></div>
         <div class="panel" id="model-sliced-panel"></div>
+        <div class="panel" id="model-files-panel"></div>
         <div class="panel" id="model-versions-panel"></div>
         <div class="panel" id="model-share-panel"></div>
         <div class="panel" id="viewer-source"></div>

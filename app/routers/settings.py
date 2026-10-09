@@ -48,7 +48,10 @@ def update_settings(payload: dict, request: Request, session: Session = Depends(
 def notify_events(session: Session = Depends(get_session)):
     """The kinds of notification, and which are switched on."""
     from app.notify import EVENTS, event_enabled
-    return {"events": [{"id": k, "label": v, "enabled": event_enabled(session, k)} for k, v in EVENTS.items()]}
+    from app.notify import PLACEHOLDERS
+    from app.settings_store import get_setting
+    return {"events": [{"id": k, "label": v, "enabled": event_enabled(session, k), "text": get_setting(session, f"notify_text_{k}", "") or ""} for k, v in EVENTS.items()],
+            "placeholders": list(PLACEHOLDERS)}
 
 
 @router.post("/notify-test")
