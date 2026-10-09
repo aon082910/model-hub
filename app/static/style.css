@@ -383,3 +383,6 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid #888; margin-right: 4px; vertical-align: -1px; }
 .timelapse-video { display: block; max-width: 100%; width: 480px; margin-top: 6px; border-radius: 6px; }
 .maint-row { align-items: center; margin: 4px 0; }
+
+.queue-colours-box { flex-basis: 100%; margin-top: 6px; padding: 8px; border: 1px solid var(--border, #2a2e37); border-radius: 8px; }
+.printer-controls { margin-left: 6px; }

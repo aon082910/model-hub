@@ -177,6 +177,9 @@ def _upsert_path(
         counters["duplicates"] = counters.get("duplicates", 0) + 1
 
     existing = session.get(Model3D, existing_id) if existing_id is not None else None
+    if existing is None:
+        # the background scan may have indexed this very file while it was being analysed here: update that row instead of adding a second
+        existing = session.exec(select(Model3D).where(Model3D.path == rel_path)).first()
     if existing:
         existing.size_bytes = stat.st_size
         existing.content_hash = content_hash

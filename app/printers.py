@@ -355,6 +355,55 @@ def _octoprint_status(client, url, api_key, result):
     return result
 
 
+# ---------- pause, resume, cancel ----------
+
+CONTROL_ACTIONS = ("pause", "resume", "cancel")
+
+
+def _bambu_command(host: str, serial: str, code: str, command: str, timeout: float = BAMBU_TIMEOUT) -> None:
+    """Publish one print command (pause, resume, stop) to a Bambu printer. (Tests replace this.)"""
+    import json
+    import ssl
+    import paho.mqtt.client as mqtt
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"modelhub-cmd-{serial[-6:]}")
+    client.username_pw_set("bblp", code)
+    client.tls_set(cert_reqs=ssl.CERT_NONE)
+    client.tls_insecure_set(True)
+    try:
+        client.connect(host, BAMBU_PORT, keepalive=10)
+        client.loop_start()
+        info = client.publish(f"device/{serial}/request", json.dumps({"print": {"sequence_id": "2", "command": command, "param": ""}}), qos=1)
+        info.wait_for_publish(timeout)
+        if not info.is_published():
+            raise PrinterError("The printer did not take the command (is the access code right?)")
+    except OSError as e:
+        raise PrinterError(f"Could not reach the printer ({e.__class__.__name__})")
+    finally:
+        try:
+            client.loop_stop()
+            client.disconnect()
+        except Exception:
+            pass
+
+
+def control(kind: str, url: str, api_key: Optional[str], serial: Optional[str], action: str) -> None:
+    """Pause, resume or cancel the print that is running. Raises PrinterError when the printer refuses or cannot be reached."""
+    if action not in CONTROL_ACTIONS:
+        raise PrinterError("The action must be pause, resume or cancel")
+    if kind == "bambu":
+        _bambu_command(url, serial or "", api_key or "", {"pause": "pause", "resume": "resume", "cancel": "stop"}[action])
+        return
+    with _client() as client:
+        if kind == "moonraker":
+            response = _request(client, "POST", f"{url}/printer/print/{action}", api_key)
+        else:
+            body = {"command": "cancel"} if action == "cancel" else {"command": "pause", "action": action}
+            response = _request(client, "POST", f"{url}/api/job", api_key, json=body)
+        if response.status_code not in (200, 202, 204):
+            raise PrinterError(f"The printer refused ({response.status_code}); is something printing?")
+
+
 # ---------- sending a file ----------
 
 def safe_gcode_name(name: str) -> str:

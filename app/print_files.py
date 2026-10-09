@@ -4,6 +4,7 @@ Nothing here runs a slicer. A file is G-code (or a sliced .3mf) that you made yo
 estimated time, filament weight, layer height and filament type from the comments the slicer wrote, and can send it to
 a printer. Files live in CONFIG_PATH/print_files and are not part of a backup (they can be large and can be made again).
 """
+import json
 import re
 import zipfile
 from pathlib import Path
@@ -39,6 +40,36 @@ def _first(pattern: str, text: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
+_COLOUR = re.compile(r"#?([0-9A-Fa-f]{6})")
+
+
+def _colour(value) -> Optional[str]:
+    match = _COLOUR.search(str(value or ""))
+    return "#" + match.group(1).lower() if match else None
+
+
+def _filaments_json(rows: list) -> Optional[str]:
+    rows = [r for r in rows if r.get("grams") and r["grams"] > 0][:16]
+    return json.dumps(rows) if len(rows) > 0 else None
+
+
+def _filaments_from_gcode(text: str) -> Optional[str]:
+    """One entry per filament the file uses: its type, colour and grams (PrusaSlicer and OrcaSlicer list them as a;b;c and a, b, c)."""
+    used = _first(r"^\s*;\s*(?:total )?filament used \[g\]\s*[=:]\s*([^\n]+)", text)
+    if not used:
+        return None
+    grams = []
+    for part in re.split(r"[,;]", used):
+        try:
+            grams.append(float(part.strip()))
+        except ValueError:
+            pass
+    types = [t.strip().strip('"') for t in (_first(r"^\s*;\s*filament_type\s*[=:]\s*([^\n]+)", text) or "").split(";")]
+    colours = [_colour(c) for c in re.split(r"[;,]", _first(r"^\s*;\s*filament_colou?r\s*[=:]\s*([^\n]+)", text) or "")]
+    return _filaments_json([{"index": i + 1, "type": (types[i] if i < len(types) and types[i] else None),
+                             "color": colours[i] if i < len(colours) else None, "grams": round(g, 2)} for i, g in enumerate(grams)])
+
+
 def parse_gcode_text(text: str) -> dict:
     """What PrusaSlicer, OrcaSlicer, Bambu Studio and Cura write in their G-code comments."""
     slicer = _first(r"^\s*;\s*generated (?:by|with) ([^\n]{2,60}?)(?:\s+on\s+\d|\s*$)", text)
@@ -56,12 +87,13 @@ def parse_gcode_text(text: str) -> dict:
     layer = _first(r"^\s*;\s*layer_height\s*[=:]\s*([\d.]+)", text) or _first(r"^\s*;\s*Layer height:\s*([\d.]+)", text)
     return {"slicer": slicer[:80] if slicer else None, "est_minutes": minutes,
             "est_grams": round(float(grams), 2) if grams else None,
-            "filament_type": filament[:40] if filament else None, "layer_height": layer}
+            "filament_type": filament[:40] if filament else None, "layer_height": layer,
+            "filaments": _filaments_from_gcode(text)}
 
 
 def parse_3mf(path: Path) -> dict:
     """A sliced Bambu/Orca 3MF carries Metadata/slice_info.config; an ordinary 3MF carries nothing we read."""
-    out = {"slicer": None, "est_minutes": None, "est_grams": None, "filament_type": None, "layer_height": None}
+    out = {"slicer": None, "est_minutes": None, "est_grams": None, "filament_type": None, "layer_height": None, "filaments": None}
     try:
         with zipfile.ZipFile(path) as z:
             info = z.getinfo("Metadata/slice_info.config")
@@ -82,6 +114,15 @@ def parse_3mf(path: Path) -> dict:
             out["est_grams"] = round(float(meta["weight"]), 2)
     except ValueError:
         pass
+    found = []
+    for f in root.iter("filament"):
+        try:
+            grams = float(f.get("used_g") or 0)
+            index = int(f.get("id") or len(found) + 1)
+        except ValueError:
+            continue
+        found.append({"index": index, "type": (f.get("type") or "")[:40] or None, "color": _colour(f.get("color")), "grams": round(grams, 2)})
+    out["filaments"] = _filaments_json(sorted(found, key=lambda r: r["index"]))
     types = [f.get("type") for f in root.iter("filament") if f.get("type")]
     out["filament_type"] = types[0][:40] if types else None
     if meta.get("client_type") or meta.get("client_version"):
@@ -91,7 +132,7 @@ def parse_3mf(path: Path) -> dict:
 
 def read_metadata(path: Path, kind: str) -> dict:
     """Best-effort: a file that cannot be read just has no metadata."""
-    empty = {"slicer": None, "est_minutes": None, "est_grams": None, "filament_type": None, "layer_height": None}
+    empty = {"slicer": None, "est_minutes": None, "est_grams": None, "filament_type": None, "layer_height": None, "filaments": None}
     try:
         if kind == "3mf":
             return parse_3mf(path)

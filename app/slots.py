@@ -3,6 +3,7 @@
 A printer with slot_count N has slots 1..N. A queue entry can name the printer and a slot; the spool loaded in that slot at the
 time is the one the print is counted against. A spool sits in at most one slot, so loading it somewhere takes it out of where it was.
 """
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -28,6 +29,33 @@ def loaded(session: Session, printer_id: Optional[int], slot: Optional[int]) -> 
 def effective_filament(session: Session, item: QueueItem) -> Optional[int]:
     """The spool a queue entry is printed from: the one in its slot right now, else the one chosen for the entry."""
     return loaded(session, item.printer_id, item.slot) or item.filament_id
+
+
+def parse_uses(value) -> list:
+    """The spools of a multicolour job: [{"slot": n} or {"filament_id": n}, "grams": g]. Anything unreadable is dropped."""
+    try:
+        rows = json.loads(value) if isinstance(value, str) and value else []
+    except ValueError:
+        return []
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and isinstance(row.get("grams"), (int, float)) and row["grams"] > 0:
+            out.append({k: row[k] for k in ("slot", "filament_id", "grams") if row.get(k) is not None})
+    return out[:16]
+
+
+def spool_parts(session: Session, item: QueueItem) -> list:
+    """[(spool id, grams)] a queue entry takes: each of its uses (a slot means the spool loaded in it now), or its one spool."""
+    uses = parse_uses(item.uses)
+    if uses:
+        parts = []
+        for use in uses:
+            spool_id = loaded(session, item.printer_id, use.get("slot")) or use.get("filament_id")
+            if spool_id:
+                parts.append((spool_id, float(use["grams"])))
+        return parts
+    spool_id = effective_filament(session, item)
+    return [(spool_id, float(item.estimated_grams))] if spool_id and item.estimated_grams else []
 
 
 def load(session: Session, printer: Printer, slot: int, filament_id: Optional[int], label: Optional[str] = None) -> SpoolSlot:

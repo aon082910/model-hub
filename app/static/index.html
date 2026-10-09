@@ -80,6 +80,7 @@
         <label class="inline-check"><input type="checkbox" id="f-notes"> Has notes</label>
         <label class="inline-check"><input type="checkbox" id="f-latest"> Latest versions only</label>
         <label class="inline-check"><input type="checkbox" id="f-failed"> Failed before</label>
+        <label>Fits printer <select id="f-fits-printer"><option value="">any</option></select></label>
       </div>
       <div class="row">
         <select id="f-saved"><option value="">saved searches...</option></select>
@@ -610,6 +611,20 @@
         <label>Keep the newest <input id="auto-backup-keep" type="number" min="1" max="60" step="1" placeholder="7"></label>
         <span id="auto-backup-status" class="muted"></span>
       </div>
+      <details id="offsite-box"><summary>Also send backups somewhere else</summary>
+        <p class="muted">Each new saved backup is copied to a folder (a mounted share or disk; add it to the container as a path first) or a WebDAV server (Nextcloud, a NAS).
+          The folder keeps the newest few; WebDAV keeps everything. The password is stored here but never put in a backup.</p>
+        <div class="row">
+          <select id="offsite-kind"><option value="">off</option><option value="folder">a folder</option><option value="webdav">a WebDAV server</option></select>
+          <input id="offsite-path" placeholder="Folder in the container, like /offsite">
+          <input id="offsite-url" placeholder="https://cloud.example/remote.php/dav/files/me/backups">
+        </div>
+        <div class="row">
+          <input id="offsite-user" placeholder="WebDAV user" autocomplete="off"><input id="offsite-password" type="password" placeholder="WebDAV password" autocomplete="new-password">
+          <input id="offsite-keep" type="number" min="1" max="1000" placeholder="keep 10" aria-label="How many to keep in the folder">
+        </div>
+        <div class="row"><button id="offsite-save">Save</button><button id="offsite-test">Test</button><button id="offsite-now">Send the newest backup now</button><span id="offsite-status" class="muted"></span></div>
+      </details>
       <div id="backup-saved"></div>
       <label>Restore from a backup file <small>(replaces your current tags, projects, notes and so on; a copy of the current data is saved first)</small>
         <input id="backup-file" type="file" accept=".zip,application/zip">

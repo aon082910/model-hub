@@ -495,6 +495,29 @@ Give a printer its camera's still-picture address (Print Queue, the printer's *C
 entry, unless the entry already has one. *Take a picture now* tests the address. The address must not contain a user name or password; redirects are not followed, the printer's API key is never sent to the camera, and a camera that is off or wrong never
 stops the print being recorded. Photos are kept in `/config/print_photos` and are part of backups.
 
+## Multicolour prints
+
+A kept sliced file (a sliced `.3mf` from Bambu Studio or Orca, or G-code from PrusaSlicer or OrcaSlicer) lists every filament it uses, with its type, colour and grams. On a waiting queue entry, **colours** shows them and lets you say which
+slot of the printer (or which spool, for a printer without slots) each is printed from, starting from the slot that holds the same material and a close colour. When the print finishes, each spool loses its own grams (the spool in that slot at that
+moment), the print log records the total and the spools used, and the Calendar checks every spool of the plan. *Back to one spool* returns the entry to a single spool. A file whose slicer does not list its filaments cannot be mapped.
+
+## Pause, resume and cancel
+
+The administrator can **Pause**, **Resume** or **Cancel print** from a printer's card (Klipper, OctoPrint and Bambu). Model Hub first asks what the printer is doing and only sends what makes sense (a pause to a printer that is printing, a resume to
+one that is paused), and a cancel asks you to confirm. A cancelled print is then logged as a failed print like any other stopped one. Bambu commands are sent through the same LAN MQTT connection as its status and, like the rest of Bambu support, are
+untested on a real printer.
+
+## Will it fit
+
+Each printer can have its **Bed size** (width, depth, height in mm). A model's page then says which printers it fits and which it is too big for, a queued entry warns when its model is too big for the printer chosen, and the Library can be filtered to
+models that **fit a printer**. The footprint may be turned a quarter turn; the height must fit as it is. Sizes come from the model's measured bounding box, so a model that has not been measured yet is not judged.
+
+## Backups somewhere else
+
+**Settings → Backup → Also send backups somewhere else** copies each new saved backup (including the scheduled ones) to a **folder** (a mounted share or disk, added to the container as a path mapping first) or a **WebDAV** server (Nextcloud, ownCloud, a NAS).
+It checks hourly and sends the newest backup once. The folder keeps the newest few (10 by default) and never touches files that are not Model Hub's own backups; WebDAV keeps everything. *Test* writes a small file, *Send the newest backup now* sends one at once. The WebDAV
+password is hidden in Settings and left out of backups. Other cloud storage (S3, Google Drive...) is not built in: mount it with a tool such as rclone and use the folder option.
+
 ## Bambu Lab printers
 
 Add a **Bambu Lab (LAN mode)** printer with its address on your network, its serial number and its LAN access code (on the printer's screen: Settings, WLAN; LAN Only mode or Developer

@@ -113,13 +113,13 @@ def _names(session: Session, logs: list) -> dict:
 def log_print(session: Session, model_id: int, *, printed_at=None, filament_id=None, grams=None, minutes=None,
               rating=None, notes=None, deduct: bool = True, source: str = "manual", queue_item_id=None,
               measured: bool = False, outcome: Optional[str] = None, failure_reason: Optional[str] = None,
-              printer_id: Optional[int] = None, timelapse_url: Optional[str] = None) -> PrintLog:
+              printer_id: Optional[int] = None, timelapse_url: Optional[str] = None, uses: Optional[str] = None) -> PrintLog:
     """Record a print (does not commit). Used by the log's own API and by the print queue."""
     log = PrintLog(model_id=model_id, printed_at=printed_at or datetime.utcnow(), filament_id=filament_id,
                    grams=grams, minutes=minutes, rating=rating, notes=notes, source=source, queue_item_id=queue_item_id,
                    measured=bool(measured and minutes and outcome != "failed"),   # a failed print's time is only part of the job
                    outcome="failed" if outcome == "failed" else None, failure_reason=failure_reason if outcome == "failed" else None,
-                   printer_id=printer_id, timelapse_url=timelapse_url)
+                   printer_id=printer_id, timelapse_url=timelapse_url, uses=uses)
     session.add(log)
     session.flush()
     if deduct:

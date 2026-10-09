@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Optional
 
@@ -7,6 +8,35 @@ from app.db import get_session
 from app.models import Model3D, Printer, PrinterJob, PrintFile, QueueItem, Filament, PrintLog
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
+
+def check_uses(session: Session, printer_id, value) -> Optional[str]:
+    """A multicolour job's spools as JSON text, or None. Each use names a slot of the entry's printer or a spool, and grams."""
+    import json
+    from app import slots
+    if value in (None, "", []):
+        return None
+    if not isinstance(value, list) or len(value) > 16:
+        raise HTTPException(400, "uses must be a list of at most 16 spools")
+    clean = []
+    for row in value:
+        if not isinstance(row, dict):
+            raise HTTPException(400, "Each spool in uses needs a slot or a spool, and grams")
+        grams = row.get("grams")
+        if isinstance(grams, bool) or not isinstance(grams, (int, float)) or not 0 < grams <= 100000:
+            raise HTTPException(400, "grams must be a number above 0")
+        slot, spool = row.get("slot"), row.get("filament_id")
+        if slot is None and spool is None:
+            raise HTTPException(400, "Each spool in uses needs a slot or a spool")
+        entry = {"grams": round(float(grams), 2)}
+        if slot is not None:
+            entry["slot"] = check_slot(session, printer_id, slot)
+        if spool is not None:
+            if isinstance(spool, bool) or not isinstance(spool, int) or not session.get(Filament, spool):
+                raise HTTPException(400, "That filament spool does not exist")
+            entry["filament_id"] = spool
+        clean.append(entry)
+    return json.dumps(clean)
+
 
 def check_slot(session: Session, printer_id, slot):
     """A slot number for a queue entry: needs a printer that has that slot. None clears it."""
@@ -58,6 +88,8 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
     if slot and not filament_id:
         from app import slots
         filament_id = slots.loaded(session, printer_id, slot)               # the spool in that slot
+    uses = check_uses(session, printer_id, payload.get("uses"))
+    total = round(sum(u["grams"] for u in json.loads(uses)), 1) if uses else None
     minutes, basis = payload.get("estimated_minutes"), "manual"
     if not minutes:
         from app import learned
@@ -68,7 +100,7 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
         model_id=payload["model_id"],
         filament_id=filament_id,
         notes=payload.get("notes"),
-        estimated_grams=payload.get("estimated_grams"),
+        estimated_grams=payload.get("estimated_grams") or total, uses=uses,
         estimated_minutes=minutes,
         estimate_basis=basis if minutes else None,
         planned_date=clean_date(payload.get("planned_date")),
@@ -98,20 +130,23 @@ def _on_done(session: Session, item: QueueItem, printer_id: Optional[int] = None
     """Deduct consumed filament exactly once, the moment a job transitions into "done",
     and write it to the model's print log (once per queue entry)."""
     from app import slots
-    spool_id = slots.effective_filament(session, item)                    # the spool in the entry's slot, if it has one
-    if spool_id and item.estimated_grams:
+    parts = slots.spool_parts(session, item)                              # the spool(s) in the entry's slot(s)
+    for spool_id, grams in parts:
         spool = session.get(Filament, spool_id)
         if spool:
-            spool.remaining_g = max(0.0, spool.remaining_g - item.estimated_grams)
+            spool.remaining_g = max(0.0, spool.remaining_g - grams)
             session.add(spool)
+    spool_id = max(parts, key=lambda p: p[1])[0] if parts else slots.effective_filament(session, item)
     from app.routers.prints import log_print
     for earlier in session.exec(select(PrintLog).where(PrintLog.queue_item_id == item.id, PrintLog.outcome == "failed")).all():
         earlier.queue_item_id = None                       # a failed first attempt stays in the log, apart from this success
         session.add(earlier)
     if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item.id)).first():
-        log_print(session, item.model_id, filament_id=spool_id, grams=item.estimated_grams,
-                  minutes=item.actual_minutes or item.estimated_minutes, notes=item.notes, deduct=False, source="queue",
-                  queue_item_id=item.id, measured=bool(item.actual_minutes), printer_id=printer_id or item.printer_id)
+        log = log_print(session, item.model_id, filament_id=spool_id, grams=round(sum(g for _, g in parts), 1) if parts else item.estimated_grams,
+                        minutes=item.actual_minutes or item.estimated_minutes, notes=item.notes, deduct=False, source="queue",
+                        queue_item_id=item.id, measured=bool(item.actual_minutes), printer_id=printer_id or item.printer_id)
+        if len(parts) > 1:
+            log.uses = json.dumps([{"filament_id": sid, "grams": g} for sid, g in parts])
 
 
 def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = None, printer_id: Optional[int] = None) -> None:
@@ -126,6 +161,41 @@ def complete_item(session: Session, item: QueueItem, minutes: Optional[float] = 
         item.estimate_basis = None
     session.add(item)
     _on_done(session, item, printer_id)
+
+
+@router.get("/uses-from-file/{model_id}")
+def uses_from_file(model_id: int, printer_id: Optional[int] = None, session: Session = Depends(get_session)):
+    """The filaments of the model's newest kept sliced file, each with the slot of the printer that holds the same kind of filament
+    (or just its own number), so a multicolour job can be queued with every colour counted."""
+    from app import slots
+    from app.models import PrintFile, Printer
+    rows = session.exec(select(PrintFile).where(PrintFile.model_id == model_id, PrintFile.filaments.is_not(None))
+                        .order_by(PrintFile.created_at.desc(), PrintFile.id.desc())).all()
+    if not rows:
+        raise HTTPException(404, "No kept sliced file of this model lists its filaments (a sliced .3mf, or G-code from PrusaSlicer, OrcaSlicer or Bambu Studio)")
+    file = rows[0]
+    try:
+        filaments = json.loads(file.filaments)
+    except ValueError:
+        filaments = []
+    printer = session.get(Printer, printer_id) if printer_id else None
+    overview = next((p for p in slots.overview(session) if p["id"] == printer_id), None) if printer else None
+    taken, out = set(), []
+    for f in filaments:
+        suggestion = None
+        for slot in (overview["slots"] if overview else []):
+            spool = slot["spool"]
+            if spool and slot["slot"] not in taken and str(spool["material"] or "").lower() == str(f.get("type") or "").lower() and slot["slot"] not in taken:
+                a, b = slots._rgb(f.get("color")), slots._rgb(spool.get("color_hex"))
+                if not (a and b) or sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5 <= 90:
+                    suggestion = slot["slot"]
+                    break
+        if suggestion is None and overview and f["index"] <= overview["slot_count"] and f["index"] not in taken:
+            suggestion = f["index"]
+        if suggestion:
+            taken.add(suggestion)
+        out.append({**f, "suggested_slot": suggestion})
+    return {"file": {"id": file.id, "filename": file.filename}, "filaments": out}
 
 
 @router.get("/summary")
@@ -227,6 +297,10 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         if item.slot and "filament_id" not in payload:
             from app import slots
             item.filament_id = slots.loaded(session, new_printer, item.slot) or item.filament_id
+    if "uses" in payload:
+        item.uses = check_uses(session, payload.get("printer_id", item.printer_id), payload["uses"])
+        if item.uses and "estimated_grams" not in payload:
+            item.estimated_grams = round(sum(u["grams"] for u in json.loads(item.uses)), 1)
     for field in ("status", "position", "filament_id", "notes", "estimated_grams", "estimated_minutes", "printer_id"):
         if field in payload:
             setattr(item, field, payload[field])

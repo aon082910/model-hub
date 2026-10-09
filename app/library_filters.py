@@ -12,7 +12,7 @@ from app.models import (
 from app.settings_store import get_setting
 
 FILTER_KEYS = ("q", "tag", "extension", "duplicates_only", "printed", "designer", "license", "collection_id",
-               "project_id", "linked", "fits_bed", "has_notes", "latest_only", "failed_before")
+               "project_id", "linked", "fits_bed", "has_notes", "latest_only", "failed_before", "fits_printer")
 SORT_KEYS = ("id", "name", "newest", "oldest", "largest", "smallest", "last_printed")
 
 
@@ -50,6 +50,13 @@ def conditions(session: Session, f: dict) -> list:
         out.append(Model3D.id.in_(select(PrintLog.model_id).where(print_outcomes.ok())))
     elif f.get("printed") is False:
         out.append(Model3D.id.not_in(select(PrintLog.model_id).where(print_outcomes.ok())))
+    if isinstance(f.get("fits_printer"), int) and not isinstance(f.get("fits_printer"), bool):     # models that fit this printer's bed
+        from app.models import Printer
+        p = session.get(Printer, f["fits_printer"])
+        if not p or not p.bed_x or not p.bed_y:
+            raise FilterError("That printer has no bed size set")
+        flat = or_(and_(Model3D.bbox_x <= p.bed_x, Model3D.bbox_y <= p.bed_y), and_(Model3D.bbox_x <= p.bed_y, Model3D.bbox_y <= p.bed_x))
+        out.append(and_(flat, Model3D.bbox_z <= p.bed_z) if p.bed_z else flat)
     if f.get("failed_before") is True:      # at least one failed print in its log
         out.append(Model3D.id.in_(select(PrintLog.model_id).where(print_outcomes.failed())))
     if f.get("linked") is True:

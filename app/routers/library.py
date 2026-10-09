@@ -67,6 +67,7 @@ def list_models(
     has_notes: bool = False,
     latest_only: bool = False,
     failed_before: bool = False,
+    fits_printer: Optional[int] = None,
     sort: Optional[str] = None,
     limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
@@ -81,7 +82,7 @@ def list_models(
         "q": q, "tag": tag, "extension": extension, "duplicates_only": duplicates_only or None, "printed": printed,
         "designer": designer, "license": license, "collection_id": collection_id, "project_id": project_id,
         "linked": linked, "fits_bed": fits_bed or None, "has_notes": has_notes or None,
-        "latest_only": latest_only or None, "failed_before": failed_before or None,
+        "latest_only": latest_only or None, "failed_before": failed_before or None, "fits_printer": fits_printer,
     }
     try:
         conditions = library_filters.conditions(session, filters)

@@ -40,6 +40,16 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-08</Date>
   <Changes>
+### 2.16.0
+Multicolour prints are counted properly: a sliced file's filaments can be
+mapped to the printer's slots and each spool loses its own grams. Printers can
+be paused, resumed and cancelled from Model Hub. Each printer can have a bed
+size, so models that are too big for it are flagged and the Library can be
+filtered to what fits. Backups can also be sent to a folder or a WebDAV
+server. Fixed: importing a file while the background scan was indexing the
+same file could fail. No new settings are required; new columns are added
+automatically on first start.
+
 ### 2.15.0
 Bambu Lab printers (LAN mode) can be added: their state shows like the others,
 finished and failed prints are logged, and the AMS slots are read, with

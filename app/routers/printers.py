@@ -19,7 +19,8 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "created_at": printer.created_at}
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial,
+            "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
 def _get(session: Session, printer_id: int) -> Printer:
@@ -54,6 +55,15 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
             raise HTTPException(400, str(e))
     if kind_now == "bambu" and "slot_count" not in payload and (existing is None or not existing.slot_count):
         out["slot_count"] = 4                                      # an AMS has four slots; change it if there are more units
+    for axis in ("bed_x", "bed_y", "bed_z"):
+        if axis in payload:
+            value = payload[axis]
+            if value in (None, ""):
+                out[axis] = None
+            elif isinstance(value, bool) or not isinstance(value, (int, float)) or not 10 <= value <= 5000:
+                raise HTTPException(400, f"{axis} must be a size in mm between 10 and 5000")
+            else:
+                out[axis] = float(value)
     if "slot_count" in payload:
         count = payload["slot_count"]
         if count in (None, ""):
@@ -135,6 +145,28 @@ def printer_snapshot(printer_id: int, session: Session = Depends(get_session)):
         return Response(shrink_image(printing.fetch_snapshot(printer.snapshot_url)), media_type="image/jpeg")
     except (printing.PrinterError, SourceError) as e:
         raise HTTPException(502, str(e))
+
+
+@router.post("/{printer_id}/control")
+def control_printer(printer_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Pause, resume or cancel what the printer is printing now (administrator only). It first looks at what the printer is doing:
+    a pause is only sent to a printer that is printing, a resume to one that is paused, a cancel to either."""
+    printer = _get(session, printer_id)
+    action = payload.get("action")
+    if action not in printing.CONTROL_ACTIONS:
+        raise HTTPException(400, "action must be pause, resume or cancel")
+    state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
+    if not state["online"]:
+        raise HTTPException(502, state.get("message") or "The printer cannot be reached")
+    running, paused = state["state"] == "printing", state["state"] == "paused"
+    if (action == "pause" and not running) or (action == "resume" and not paused) or (action == "cancel" and not (running or paused)):
+        raise HTTPException(409, f"{printer.name} is {state['state']}, so it cannot be told to {action}")
+    try:
+        printing.control(printer.kind, printer.url, printer.api_key, printer.serial, action)
+    except printing.PrinterError as e:
+        raise HTTPException(502, str(e))
+    activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: {action} sent" + (f" ({state['file']})" if state.get("file") else ""))
+    return {"status": "sent", "action": action, "was": state["state"]}
 
 
 @router.get("/{printer_id}/status")

@@ -72,3 +72,13 @@ def test_bambu_maintenance_slicer_weekly_and_suggestions_have_their_controls():
     assert 'id="weekly-summary"' in HTML and "/api/settings/weekly-test" in JS
     assert "suggested-settings" in JS and "ps-use" in JS
     assert "timelapse-play" in JS and "archive: 'Internet Archive (Thingiverse)'" in JS
+
+
+def test_stage_16_controls_are_in_the_page():
+    assert "printer-pause" in JS and "printer-resume" in JS and "printer-cancel" in JS and "/control" in JS
+    assert "printer-bed-save" in JS and "bed_x" in JS and "/api/fit/queue" in JS and "/api/fit/model/" in JS
+    assert 'id="f-fits-printer"' in HTML and "fits_printer" in JS and "fillFitPrinters" in JS
+    assert "queue-colours" in JS and "uses-from-file" in JS and "colours-save" in JS
+    for element in ("offsite-kind", "offsite-path", "offsite-url", "offsite-user", "offsite-password", "offsite-keep", "offsite-save", "offsite-test", "offsite-now", "offsite-status"):
+        assert f'id="{element}"' in HTML, element
+    assert "/api/backup/offsite/test" in JS and "/api/backup/offsite/now" in JS

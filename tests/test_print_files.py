@@ -51,7 +51,7 @@ def test_bambu_and_cura_comments_are_read():
 
 
 def test_a_file_without_comments_has_no_metadata():
-    assert print_files.parse_gcode_text("G28\nG1 X1\n") == {"slicer": None, "est_minutes": None, "est_grams": None, "filament_type": None, "layer_height": None}
+    assert print_files.parse_gcode_text("G28\nG1 X1\n") == {"slicer": None, "est_minutes": None, "est_grams": None, "filament_type": None, "layer_height": None, "filaments": None}
 
 
 @pytest.mark.parametrize("text,expected", [("1d 2h 3m 4s", 1563.1), ("45m", 45.0), ("2h", 120.0), ("90s", 1.5), ("", None), ("soon", None), ("1h 5m 2s", 65.0)])

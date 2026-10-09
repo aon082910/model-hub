@@ -126,6 +126,7 @@ $$('#tabs button').forEach(btn => btn.addEventListener('click', () => {
 
 // ---------- Library ----------
 async function loadModels() {
+  fillFitPrinters();
   const params = libraryParams();
   const res = await fetch(`/api/library/models?${params}`);
   if (!res.ok) {
@@ -279,6 +280,7 @@ function libraryParams() {
   if ($('#f-notes').checked) params.set('has_notes', 'true');
   if ($('#f-latest').checked) params.set('latest_only', 'true');
   if ($('#f-failed').checked) params.set('failed_before', 'true');
+  put('fits_printer', $('#f-fits-printer').value);
   return params;
 }
 
@@ -296,6 +298,7 @@ function setLibraryFilters(values) {
   $('#f-notes').checked = values.has_notes === true || values.has_notes === 'true';
   $('#f-latest').checked = values.latest_only === true || values.latest_only === 'true';
   $('#f-failed').checked = values.failed_before === true || values.failed_before === 'true';
+  $('#f-fits-printer').value = values.fits_printer ? String(values.fits_printer) : '';
 }
 
 // a filter changed: back to the first page, then reload (the paging script resets on a search-box input)
@@ -318,7 +321,7 @@ async function loadFilterChoices() {
 let savedSearches = [];
 
 ['#f-designer', '#f-license'].forEach(sel => $(sel).addEventListener('input', debounce(filtersChanged, 400)));
-['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
+['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed', '#f-fits-printer'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
 $('#library-filters').addEventListener('toggle', () => { if ($('#library-filters').open) loadFilterChoices(); });
 $('#f-clear').addEventListener('click', () => { setLibraryFilters({}); filtersChanged(); });
 $('#f-saved').addEventListener('change', () => {
@@ -548,15 +551,28 @@ function renderModelPage(model) {
   renderSharePanel('#model-share-panel', 'model', model.id);
 }
 
+async function fillFitPrinters() {
+  const res = await fetch('/api/fit/printers');
+  if (!res.ok) return;
+  const list = (await res.json()).filter(p => p.bed);
+  const keep = $('#f-fits-printer').value;
+  $('#f-fits-printer').innerHTML = '<option value="">any</option>' + list.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  $('#f-fits-printer').value = keep;
+  $('#f-fits-printer').parentElement.classList.toggle('hidden', !list.length);
+}
+
 // ---------- Open a model in a slicer on this computer ----------
 const SLICER_BUTTONS = [['prusaslicer', 'PrusaSlicer'], ['orcaslicer', 'OrcaSlicer'], ['bambustudio', 'Bambu Studio']];
-function renderSlicerPanel(model) {
+async function renderSlicerPanel(model) {
   const panel = $('#model-slicer-panel');
   if (!panel) return;
+  const fitInfo = await fetch(`/api/fit/model/${model.id}`).then(r => (r.ok ? r.json() : { fits: [], too_big: [] }));
+  if (!currentModel || currentModel.id !== model.id) return;
   if (!['.stl', '.3mf', '.obj', '.step', '.stp'].includes(model.extension)) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
   panel.innerHTML = `<h3>Open in a slicer</h3>
     <div class="row">${SLICER_BUTTONS.map(([id, label]) => `<button class="slicer-open" data-slicer="${id}">${label}</button>`).join('')}</div>
+    ${fitInfo.fits.length || fitInfo.too_big.length ? `<p class="muted">${fitInfo.fits.length ? 'Fits: ' + fitInfo.fits.map(p => esc(p.name)).join(', ') + '. ' : ''}${fitInfo.too_big.length ? `<span class="warn-text">Too big for: ${fitInfo.too_big.map(p => esc(p.name)).join(', ')}.</span>` : ''}</p>` : ''}
     <p class="muted slicer-note">The slicer on this computer fetches the file from a link that works for 15 minutes, so Model Hub has to be reachable from here at the address in your browser. If nothing opens, the slicer is not installed or too old to open links.</p>`;
   panel.querySelectorAll('.slicer-open').forEach(btn => btn.onclick = async () => {
     const res = await fetch(`/api/slicer-link/${model.id}`);
@@ -3127,7 +3143,11 @@ async function refreshPrinterStatuses() {
   for (const p of printerInfo.printers) {
     const res = await fetch(`/api/printers/${p.id}/status`);
     const cell = document.querySelector(`.printer-row[data-id="${p.id}"] .printer-state`);
-    if (cell && res.ok) cell.innerHTML = printerStatusText(await res.json());
+    if (cell && res.ok) {
+      const st = await res.json();
+      cell.innerHTML = printerStatusText(st) + (st.online && ['printing', 'paused'].includes(st.state) ? ` <span class="printer-controls">
+        ${st.state === 'printing' ? '<button class="printer-pause">Pause</button>' : '<button class="printer-resume">Resume</button>'}<button class="printer-cancel danger">Cancel print</button></span>` : '');
+    }
   }
 }
 
@@ -3142,6 +3162,11 @@ async function loadPrinters() {
       <span class="muted">${esc(p.url)}</span>
       <span class="printer-state muted">checking...</span>
       <button class="printer-delete">Remove</button>
+      <details class="printer-bed"><summary>Bed size${p.bed_x && p.bed_y ? ` (${p.bed_x} x ${p.bed_y}${p.bed_z ? ' x ' + p.bed_z : ''})` : ''}</summary>
+        <p class="muted">In mm. With it, Model Hub can say which models fit this printer and warn when a queued model is too big.</p>
+        <div class="row"><input type="number" class="printer-bed-x" min="10" max="5000" value="${p.bed_x || ''}" placeholder="width" aria-label="Bed width"><input type="number" class="printer-bed-y" min="10" max="5000" value="${p.bed_y || ''}" placeholder="depth" aria-label="Bed depth"><input type="number" class="printer-bed-z" min="10" max="5000" value="${p.bed_z || ''}" placeholder="height" aria-label="Build height">
+        <button class="printer-bed-save">Save</button><span class="printer-bed-result muted"></span></div>
+      </details>
       <details class="printer-slotcount"><summary>Spool slots${p.slot_count ? ` (${p.slot_count})` : ''}</summary>
         <p class="muted">How many spools it can hold at once (an AMS has 4, a toolchanger one per tool). Leave 0 for a printer with one spool.</p>
         <div class="row"><input type="number" class="printer-slot-count" min="0" max="16" value="${p.slot_count || 0}" aria-label="Number of spool slots"><button class="printer-slot-save">Save</button><span class="printer-slot-result muted"></span></div>
@@ -3179,6 +3204,21 @@ $('#printer-add').addEventListener('click', async () => {
 });
 $('#printers-list').addEventListener('click', async (e) => {
   const row = e.target.closest('.printer-row');
+  if (row && e.target.classList.contains('printer-bed-save')) {
+    const num = sel => (row.querySelector(sel).value ? parseFloat(row.querySelector(sel).value) : null);
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { bed_x: num('.printer-bed-x'), bed_y: num('.printer-bed-y'), bed_z: num('.printer-bed-z') });
+    row.querySelector('.printer-bed-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    return;
+  }
+  if (row && ['printer-pause', 'printer-resume', 'printer-cancel'].some(c => e.target.classList.contains(c))) {
+    const action = e.target.classList.contains('printer-pause') ? 'pause' : e.target.classList.contains('printer-resume') ? 'resume' : 'cancel';
+    if (action === 'cancel' && !confirm('Cancel the print that is running? It cannot be continued afterwards, and it will be logged as a failed print.')) return;
+    e.target.disabled = true;
+    const res = await jsonRequest('POST', `/api/printers/${row.dataset.id}/control`, { action });
+    showNotice(res.ok ? `Sent: ${action}.` : await sourceErrorText(res));
+    refreshPrinterStatuses();
+    return;
+  }
   if (row && e.target.classList.contains('printer-slot-save')) {
     const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { slot_count: parseInt(row.querySelector('.printer-slot-count').value) || 0 });
     row.querySelector('.printer-slot-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
@@ -3357,6 +3397,7 @@ async function loadQueue() {
     loadHints(),
   ]);
   const slotsByPrinter = Object.fromEntries(slotData.printers.map(p => [p.id, p]));
+  const fitData = await fetch('/api/fit/queue').then(r => (r.ok ? r.json() : {}));
   const [items, models, printerData, summary] = await Promise.all([
     (await fetch('/api/queue')).json(),
     (await fetch('/api/library/models?limit=1000')).json(),
@@ -3383,6 +3424,8 @@ async function loadQueue() {
     return `
     <li>
       <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
+        ${fitData[i.id] && !fitData[i.id].fits ? `<span class="warn-text" title="model ${fitData[i.id].model.map(v => Math.round(v)).join(' x ')} mm, bed ${fitData[i.id].bed.filter(Boolean).join(' x ')} mm">&#9888; too big for ${esc(fitData[i.id].printer)}'s bed</span>` : ''}
+        ${i.uses ? `<span class="muted">${JSON.parse(i.uses).length} spools counted</span>` : ''}
         ${hints[i.model_id] && ['queued', 'printing'].includes(i.status) ? `<span class="warn-text" title="${esc(hints[i.model_id].tip || '')}">&#9888; ${esc(hintText(hints[i.model_id]))}</span>` : ''}</span>
       <span>
         ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
@@ -3394,6 +3437,7 @@ async function loadQueue() {
         <select data-id="${i.id}" class="queue-status">
           ${['queued', 'printing', 'done', 'failed'].map(s => `<option value="${s}" ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
+        ${['queued'].includes(i.status) ? `<button data-id="${i.id}" class="queue-colours" title="Count each colour of a sliced file against its spool">colours</button>` : ''}
         <button data-id="${i.id}" class="del-queue">remove</button>
       </span>
     </li>`;
@@ -3401,6 +3445,37 @@ async function loadQueue() {
   $$('.queue-date').forEach(input => input.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { planned_date: input.value || null });
     if (!res.ok) showNotice(await sourceErrorText(res));
+  });
+  $$('.queue-colours').forEach(btn => btn.onclick = async () => {
+    const item = items.find(x => x.id === parseInt(btn.dataset.id));
+    const li = btn.closest('li');
+    if (li.querySelector('.queue-colours-box')) { li.querySelector('.queue-colours-box').remove(); return; }
+    const res = await fetch(`/api/queue/uses-from-file/${item.model_id}${item.printer_id ? `?printer_id=${item.printer_id}` : ''}`);
+    if (!res.ok) { showNotice(await sourceErrorText(res)); return; }
+    const data = await res.json();
+    const slots = (slotsByPrinter[item.printer_id] || { slots: [] }).slots;
+    const spools = await fetch('/api/filament').then(r => (r.ok ? r.json() : []));
+    const spoolLabel = f => [f.material, f.brand, f.color].filter(Boolean).join(' ');
+    const box = document.createElement('div');
+    box.className = 'queue-colours-box';
+    box.innerHTML = `<p class="muted">The colours of <b>${esc(data.file.filename)}</b>. Say which ${slots.length ? 'slot' : 'spool'} each one is printed from; each gets its grams taken when the print finishes.</p>
+      ${data.filaments.map(f => `<div class="row colour-row" data-grams="${f.grams}">
+        <span>${f.color ? `<span class="swatch" style="background:${esc(f.color)}"></span>` : ''}${esc(f.type || 'filament ' + f.index)} ${f.grams} g</span>
+        <select class="colour-pick" aria-label="Where ${esc(f.type || 'filament')} comes from">${slots.length
+          ? `<option value="">(not counted)</option>${slots.map(sl => `<option value="s${sl.slot}" ${sl.slot === f.suggested_slot ? 'selected' : ''}>slot ${sl.slot}${sl.spool ? ': ' + esc(spoolLabel(sl.spool)) : ' (empty)'}</option>`).join('')}`
+          : `<option value="">(not counted)</option>${spools.map(sp => `<option value="f${sp.id}">${esc(spoolLabel(sp))} (${sp.remaining_g} g)</option>`).join('')}`}</select></div>`).join('')}
+      <div class="row"><button class="colours-save primary">Save</button><button class="colours-clear">Back to one spool</button></div>`;
+    li.appendChild(box);
+    const save = async (clear) => {
+      const uses = clear ? null : [...box.querySelectorAll('.colour-row')].map(r => {
+        const v = r.querySelector('.colour-pick').value;
+        return v ? (v[0] === 's' ? { slot: parseInt(v.slice(1)), grams: parseFloat(r.dataset.grams) } : { filament_id: parseInt(v.slice(1)), grams: parseFloat(r.dataset.grams) }) : null;
+      }).filter(Boolean);
+      const r2 = await jsonRequest('PATCH', `/api/queue/${item.id}`, { uses: uses && uses.length ? uses : null });
+      if (r2.ok) loadQueue(); else showNotice(await sourceErrorText(r2));
+    };
+    box.querySelector('.colours-save').onclick = () => save(false);
+    box.querySelector('.colours-clear').onclick = () => save(true);
   });
   $$('.queue-slot').forEach(sel => sel.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { slot: sel.value ? parseInt(sel.value) : null });
@@ -3721,6 +3796,19 @@ $('#notify-events').addEventListener('change', (e) => {
   if (!e.target.classList.contains('notify-event')) return;
   saveSetting({ [`notify_${e.target.dataset.event}`]: e.target.checked ? 'true' : 'false' });
 });
+async function saveOffsite() {
+  return saveSetting({ offsite_kind: $('#offsite-kind').value, offsite_path: $('#offsite-path').value.trim(), offsite_url: $('#offsite-url').value.trim(),
+    offsite_user: $('#offsite-user').value.trim(), offsite_password: $('#offsite-password').value, offsite_keep: $('#offsite-keep').value });
+}
+$('#offsite-save').addEventListener('click', async () => { $('#offsite-status').textContent = (await saveOffsite()) ? 'Saved.' : 'Could not save.'; });
+for (const [id, url, label] of [['#offsite-test', '/api/backup/offsite/test', 'Wrote a test file to'], ['#offsite-now', '/api/backup/offsite/now', 'Sent to']]) {
+  $(id).addEventListener('click', async () => {
+    await saveOffsite();
+    $('#offsite-status').textContent = 'Working...';
+    const res = await fetch(url, { method: 'POST' });
+    $('#offsite-status').textContent = res.ok ? `${label} ${(await res.json()).where}` : await sourceErrorText(res);
+  });
+}
 $('#weekly-summary').addEventListener('change', () => saveSetting({ weekly_summary: $('#weekly-summary').checked ? 'true' : '' }));
 $('#weekly-test-btn').addEventListener('click', async () => {
   await saveSetting({ notify_webhook_url: $('#notify-webhook-url').value });
@@ -4195,6 +4283,13 @@ async function loadSettings() {
   $('#bed-z').value = s.bed_z || '';
   $('#notify-webhook-url').value = s.notify_webhook_url || '';
   $('#weekly-summary').checked = s.weekly_summary === 'true';
+  $('#offsite-kind').value = s.offsite_kind || '';
+  $('#offsite-path').value = s.offsite_path || '';
+  $('#offsite-url').value = s.offsite_url || '';
+  $('#offsite-user').value = s.offsite_user || '';
+  $('#offsite-password').value = s.offsite_password || '';
+  $('#offsite-keep').value = s.offsite_keep || '';
+  $('#offsite-status').innerHTML = s.offsite_last_error ? `<span class="error-text">Last problem: ${esc(s.offsite_last_error)}</span>` : (s.offsite_last ? `Last sent: ${esc(s.offsite_last)}` : '');
   await renderSiteSettings(s);
   refreshBackups();
   loadUsers();

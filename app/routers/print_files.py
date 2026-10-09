@@ -1,4 +1,5 @@
 import hashlib
+import json
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -17,7 +18,11 @@ MAX_PER_MODEL = 50
 
 
 def _json(row: PrintFile) -> dict:
-    return {**row.model_dump(exclude={"stored_name"}), "file_exists": print_files.stored_path(row.stored_name).is_file(),
+    try:
+        filaments = json.loads(row.filaments) if row.filaments else []
+    except ValueError:
+        filaments = []
+    return {**row.model_dump(exclude={"stored_name", "filaments"}), "filament_list": filaments, "file_exists": print_files.stored_path(row.stored_name).is_file(),
             "sendable": row.kind in print_files.GCODE_KINDS}
 
 

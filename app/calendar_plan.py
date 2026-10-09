@@ -71,26 +71,26 @@ def _names(session: Session, ids) -> dict:
 
 def filament_shortfalls(session: Session) -> dict:
     """{queue entry id: {"spool_id", "spool", "need", "short_by"}} for planned entries whose spool will not have enough left,
-    taking the planned entries in date order and counting what the earlier ones will use up."""
-    items = session.exec(select(QueueItem).where(QueueItem.planned_date.is_not(None), QueueItem.status.in_(OPEN),
-                                                 QueueItem.estimated_grams > 0)
-                         .order_by(QueueItem.planned_date, QueueItem.position, QueueItem.id)).all()
+    taking the planned entries in date order and counting what the earlier ones will use up. A multicolour entry is checked
+    against each of its spools (the one it is shortest of is reported)."""
     from app import slots
-    chosen = {i.id: slots.effective_filament(session, i) for i in items}          # the spool in the entry's slot, else the one chosen
-    items = [i for i in items if chosen[i.id]]
-    spools = {f.id: f for f in session.exec(select(Filament).where(Filament.id.in_(set(chosen.values()) - {None} or {0}))).all()}
+    items = session.exec(select(QueueItem).where(QueueItem.planned_date.is_not(None), QueueItem.status.in_(OPEN), QueueItem.estimated_grams > 0)
+                         .order_by(QueueItem.planned_date, QueueItem.position, QueueItem.id)).all()
+    parts = {i.id: slots.spool_parts(session, i) for i in items}
+    wanted = {sid for p in parts.values() for sid, _ in p}
+    spools = {f.id: f for f in session.exec(select(Filament).where(Filament.id.in_(wanted or {0}))).all()}
     left = {sid: float(f.remaining_g or 0) for sid, f in spools.items()}
     short = {}
     for item in items:
-        spool = spools.get(chosen[item.id])
-        if not spool:
-            continue
-        have = max(0.0, left[spool.id])
-        need = float(item.estimated_grams)
-        if need > have:
-            label = " ".join(x for x in (spool.material, spool.brand, spool.color) if x) or "a spool"
-            short[item.id] = {"spool_id": spool.id, "spool": label, "need": round(need, 1), "short_by": round(need - have, 1)}
-        left[spool.id] -= need
+        for spool_id, need in parts[item.id]:
+            spool = spools.get(spool_id)
+            if not spool:
+                continue
+            have = max(0.0, left[spool.id])
+            if need > have and need - have > short.get(item.id, {}).get("short_by", 0):
+                label = " ".join(x for x in (spool.material, spool.brand, spool.color) if x) or "a spool"
+                short[item.id] = {"spool_id": spool.id, "spool": label, "need": round(need, 1), "short_by": round(need - have, 1)}
+            left[spool.id] -= need
     return short
 
 

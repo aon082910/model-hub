@@ -123,6 +123,7 @@ class QueueItem(SQLModel, table=True):
     estimate_basis: Optional[str] = None       # manual, history, adjusted, estimate: where estimated_minutes came from
     planned_date: Optional[str] = None         # YYYY-MM-DD, for the calendar
     slot: Optional[int] = None                 # the spool slot of printer_id the job is printed from
+    uses: Optional[str] = None                 # JSON [{slot|filament_id, grams}]: a multicolour job's spools (else filament_id/slot above)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -265,6 +266,7 @@ class PrintLog(SQLModel, table=True):
     outcome: Optional[str] = None           # failed, or empty for a print that worked
     failure_reason: Optional[str] = None    # a key of app.print_outcomes.REASONS
     printer_id: Optional[int] = None        # the printer that made it, when a printer reported it
+    uses: Optional[str] = None              # JSON [{filament_id, grams}] when several spools were used
     timelapse_url: Optional[str] = None     # a link to its time-lapse video
     measured: bool = False                  # minutes is a real time (a printer reported it, or you typed it), not an estimate
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -279,6 +281,9 @@ class Printer(SQLModel, table=True):
     url: str
     api_key: Optional[str] = None
     serial: Optional[str] = None         # a Bambu Lab printer's serial number (its LAN access code is api_key)
+    bed_x: Optional[float] = None        # its print bed in mm, for the "will it fit" checks
+    bed_y: Optional[float] = None
+    bed_z: Optional[float] = None
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -385,6 +390,7 @@ class PrintFile(SQLModel, table=True):
     est_grams: Optional[float] = None
     filament_type: Optional[str] = None
     layer_height: Optional[str] = None
+    filaments: Optional[str] = None       # JSON [{index, type, color, grams}]: each filament the file uses
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
