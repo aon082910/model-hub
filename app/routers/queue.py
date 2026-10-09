@@ -112,18 +112,45 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
     return item
 
 
+def partial_parts(session: Session, item: QueueItem, progress) -> list:
+    """What a failed print probably used: the share of each spool's grams that matches how far it got, or nothing when the
+    progress is not known, the switch in Settings is off, or it is too little to matter."""
+    from app import slots
+    from app.settings_store import get_setting
+    if isinstance(progress, bool) or not isinstance(progress, (int, float)) or not 0 < progress < 100:
+        return []
+    if get_setting(session, "failed_deduct", "") == "false":
+        return []
+    parts = [(spool_id, round(grams * progress / 100, 1)) for spool_id, grams in slots.spool_parts(session, item)]
+    return [p for p in parts if p[1] >= 0.5]
+
+
 def fail_item(session: Session, item: QueueItem, reason: Optional[str] = None, minutes: Optional[float] = None,
-              printer_id: Optional[int] = None) -> None:
-    """Mark a queue entry failed and keep a failed entry in the print log (once per entry). Nothing is taken off a spool:
-    how much was used is not known; edit the log entry's grams if you want it counted."""
+              printer_id: Optional[int] = None, progress=None) -> None:
+    """Mark a queue entry failed and keep a failed entry in the print log (once per entry). When the printer said how far it
+    got, the filament that went into the failed part comes off the spool (a share of the job's grams); otherwise nothing is
+    taken, because how much was used is not known: edit the log entry's grams if you want it counted."""
     from app.routers.prints import log_print
     item.status = "failed"
     session.add(item)
     if not session.exec(select(PrintLog.id).where(PrintLog.queue_item_id == item.id, PrintLog.outcome == "failed")).first():
-        from app import slots
-        log_print(session, item.model_id, filament_id=slots.effective_filament(session, item), minutes=round(minutes, 1) if minutes else None,
-                  notes=item.notes, deduct=False, source="queue", queue_item_id=item.id, outcome="failed", failure_reason=reason,
-                  printer_id=printer_id or item.printer_id)
+        from app import slots, spoolman
+        used = partial_parts(session, item, progress)
+        main = max(used, key=lambda p: p[1])[0] if used else slots.effective_filament(session, item)
+        log = log_print(session, item.model_id, filament_id=main, grams=round(sum(g for _, g in used), 1) if used else None,
+                        minutes=round(minutes, 1) if minutes else None, notes=item.notes, deduct=len(used) == 1, source="queue", queue_item_id=item.id,
+                        outcome="failed", failure_reason=reason, printer_id=printer_id or item.printer_id)
+        if len(used) > 1:                                              # several spools: each loses its share
+            for spool_id, grams in used:
+                spool = session.get(Filament, spool_id)
+                if spool:
+                    spool.remaining_g = max(0.0, spool.remaining_g - grams)
+                    session.add(spool)
+            log.uses = json.dumps([{"filament_id": sid, "grams": g} for sid, g in used])
+        for spool_id, grams in used:
+            spool = session.get(Filament, spool_id)
+            if spool:
+                spoolman.report_usage(session, spool, grams)
 
 
 def _on_done(session: Session, item: QueueItem, printer_id: Optional[int] = None) -> None:

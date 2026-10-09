@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
-from app import printers as printing
+from app import plugs, printers as printing
 from app.models import Model3D, PrintLog, Printer, PrinterJob, PrintFile, QueueItem
 from app.notify import notify_event
 
@@ -23,11 +23,13 @@ logger = logging.getLogger("modelhub.printwatch")
 
 _last: dict = {}          # printer id -> {"state", "file"}
 latest: dict = {}         # printer id -> the full status from the most recent poll
+_energy_start: dict = {}  # printer id -> the plug's energy total when the print began
 
 
 def reset() -> None:
     _last.clear()
     latest.clear()
+    _energy_start.clear()
 
 
 def finished(kind: str, state: str, progress) -> bool:
@@ -46,11 +48,21 @@ def poll(session: Session) -> list:
         latest[printer.id] = {**st, "name": printer.name}
         previous = _last.get(printer.id)
         if st["online"]:
-            _last[printer.id] = {"state": st["state"], "file": st["file"] or (previous or {}).get("file")}
+            progress = st["progress"] if st["state"] == "printing" and st["progress"] is not None else (previous or {}).get("progress")
+            _last[printer.id] = {"state": st["state"], "file": st["file"] or (previous or {}).get("file"), "progress": progress}
+            if st["state"] == "printing" and (not previous or previous["state"] != "printing") and printer.plug_kind:
+                reading = plugs.try_total(printer.plug_kind, printer.plug_host)
+                if reading is not None:
+                    _energy_start[printer.id] = reading
+                else:
+                    _energy_start.pop(printer.id, None)
         if not st["online"] or not previous or previous["state"] != "printing" or st["state"] == "printing":
             continue
         outcome = "done" if finished(printer.kind, st["state"], st["progress"]) else "stopped"
-        _record(session, printer, previous.get("file"), outcome, st.get("duration"))
+        kwh = None
+        if printer.id in _energy_start:
+            kwh = plugs.used(_energy_start.pop(printer.id), plugs.try_total(printer.plug_kind, printer.plug_host))
+        _record(session, printer, previous.get("file"), outcome, st.get("duration"), progress=previous.get("progress"), energy_kwh=kwh)
         ended.append((printer.name, outcome))
     for gone in (set(_last) | set(latest)) - {p.id for p in printers}:
         _last.pop(gone, None)
@@ -73,7 +85,7 @@ def _photograph(session: Session, printer: Printer, model_id: int) -> None:
         logger.info("No photo of the finished print from %s: %s", printer.name, e.__class__.__name__)
 
 
-def _record(session: Session, printer: Printer, filename, outcome: str, duration) -> None:
+def _record(session: Session, printer: Printer, filename, outcome: str, duration, progress=None, energy_kwh=None) -> None:
     job = None
     if filename:
         name = Path(str(filename)).name
@@ -102,7 +114,7 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
             session.flush()
             _photograph(session, printer, model.id)
         elif waiting:
-            fail_item(session, waiting, minutes=minutes, printer_id=printer.id)        # stopped or failed: the log keeps it, with the reason still to be said
+            fail_item(session, waiting, minutes=minutes, printer_id=printer.id, progress=progress)        # stopped or failed: the log keeps it, with the reason still to be said
         else:
             log_print(session, model.id, minutes=round(minutes, 1) if minutes else None, source="printer", deduct=False, outcome="failed",
                       printer_id=printer.id)
@@ -110,6 +122,12 @@ def _record(session: Session, printer: Printer, filename, outcome: str, duration
             session.flush()
             _photograph(session, printer, model.id)             # a picture of what went wrong is worth keeping too
         label = model.filename
+        if energy_kwh is not None:
+            session.flush()
+            log = session.exec(select(PrintLog).where(PrintLog.model_id == model.id).order_by(PrintLog.id.desc())).first()
+            if log and (datetime.utcnow() - log.created_at).total_seconds() < 300:
+                log.energy_kwh = energy_kwh
+                session.add(log)
     session.commit()
     if outcome == "done":
         notify_event(session, "print_done", f"Model Hub: {printer.name} finished", f"{label} is done" +

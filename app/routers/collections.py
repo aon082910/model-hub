@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.db import get_session
@@ -8,9 +9,38 @@ from app.smart_collections import resolve_smart_collection
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
 
+def _cover(session: Session, c: Collection) -> Optional[str]:
+    """The thumbnail that stands for a collection: its chosen cover, else its first model that has a picture."""
+    if c.cover_model_id:
+        chosen = session.get(Model3D, c.cover_model_id)
+        if chosen and chosen.thumbnail_path:
+            return chosen.thumbnail_path
+    return next((m.thumbnail_path for m in sorted(c.models, key=lambda m: m.id) if m.thumbnail_path), None)
+
+
 @router.get("")
 def list_collections(session: Session = Depends(get_session)):
-    return session.exec(select(Collection)).all()
+    return [{**c.model_dump(), "models": len(c.models), "cover": _cover(session, c)} for c in session.exec(select(Collection)).all()]
+
+
+@router.patch("/{collection_id}")
+def update_collection(collection_id: int, payload: dict, session: Session = Depends(get_session)):
+    """Choose the model whose picture stands for the collection (null goes back to the first model's picture)."""
+    c = session.get(Collection, collection_id)
+    if not c:
+        raise HTTPException(404, "Not found")
+    if "cover_model_id" in payload:
+        value = payload["cover_model_id"]
+        if value is None:
+            c.cover_model_id = None
+        else:
+            if isinstance(value, bool) or not isinstance(value, int) or not any(m.id == value for m in c.models):
+                raise HTTPException(400, "The cover must be a model that is in the collection")
+            c.cover_model_id = value
+    session.add(c)
+    session.commit()
+    session.refresh(c)
+    return {**c.model_dump(), "models": len(c.models), "cover": _cover(session, c)}
 
 
 @router.post("")
@@ -43,6 +73,8 @@ def remove_model_from_collection(collection_id: int, model_id: int, session: Ses
         raise HTTPException(404, "Not found")
     if model in collection.models:
         collection.models.remove(model)
+        if collection.cover_model_id == model.id:
+            collection.cover_model_id = None
         session.add(collection)
         session.commit()
     return {"status": "removed"}

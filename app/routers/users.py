@@ -83,6 +83,9 @@ def delete_user(user_id: int, request: Request, session: Session = Depends(get_s
     if not user:
         raise HTTPException(404, "Not found")
     name = user.username
+    from app.models import Favorite
+    for star in session.exec(select(Favorite).where(Favorite.owner == name)).all():
+        session.delete(star)                          # a later login with the same name must not inherit them
     session.delete(user)
     session.commit()
     activity.record(session, activity.actor_of(request), "user", f"Removed the login {name}")

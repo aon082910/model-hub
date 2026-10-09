@@ -29,6 +29,7 @@ class Collection(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     parent_id: Optional[int] = Field(default=None, foreign_key="collection.id")
+    cover_model_id: Optional[int] = None    # the model whose picture stands for the collection
     models: List["Model3D"] = Relationship(back_populates="collections", link_model=ModelCollectionLink)
 
 
@@ -273,6 +274,7 @@ class PrintLog(SQLModel, table=True):
     printer_id: Optional[int] = None        # the printer that made it, when a printer reported it
     uses: Optional[str] = None              # JSON [{filament_id, grams}] when several spools were used
     timelapse_url: Optional[str] = None     # a link to its time-lapse video
+    energy_kwh: Optional[float] = None      # what the printer's smart plug measured for this print
     measured: bool = False                  # minutes is a real time (a printer reported it, or you typed it), not an estimate
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -289,6 +291,8 @@ class Printer(SQLModel, table=True):
     bed_x: Optional[float] = None        # its print bed in mm, for the "will it fit" checks
     bed_y: Optional[float] = None
     bed_z: Optional[float] = None
+    plug_kind: Optional[str] = None      # a smart plug that measures its power: tasmota or shelly
+    plug_host: Optional[str] = None      # its address on your network
     watch_failures: Optional[bool] = None   # look at its camera now and then for a failing print (needs a camera and a local vision model)
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
@@ -460,3 +464,11 @@ class AppSettings(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str = Field(index=True, unique=True)
     value: str
+
+
+class Favorite(SQLModel, table=True):
+    """A model someone starred. Each login has its own stars."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner: str = Field(index=True)
+    model_id: int = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)

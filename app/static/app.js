@@ -141,7 +141,7 @@ async function loadModels() {
   }
   $('#f-status').textContent = '';
   libraryTotal = parseInt(res.headers.get('X-Total-Count') || '0') || 0;
-  const models = await res.json();
+  const [models] = await Promise.all([res.json(), loadFavorites()]);
   renderGrid(models);
 }
 
@@ -285,6 +285,7 @@ function libraryParams() {
   if ($('#f-notes').checked) params.set('has_notes', 'true');
   if ($('#f-latest').checked) params.set('latest_only', 'true');
   if ($('#f-failed').checked) params.set('failed_before', 'true');
+  if ($('#f-favorite').checked) params.set('favorite', 'true');
   put('fits_printer', $('#f-fits-printer').value);
   return params;
 }
@@ -303,6 +304,7 @@ function setLibraryFilters(values) {
   $('#f-notes').checked = values.has_notes === true || values.has_notes === 'true';
   $('#f-latest').checked = values.latest_only === true || values.latest_only === 'true';
   $('#f-failed').checked = values.failed_before === true || values.failed_before === 'true';
+  $('#f-favorite').checked = values.favorite === true || values.favorite === 'true';
   $('#f-fits-printer').value = values.fits_printer ? String(values.fits_printer) : '';
 }
 
@@ -326,7 +328,7 @@ async function loadFilterChoices() {
 let savedSearches = [];
 
 ['#f-designer', '#f-license'].forEach(sel => $(sel).addEventListener('input', debounce(filtersChanged, 400)));
-['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed', '#f-fits-printer'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
+['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed', '#f-favorite', '#f-fits-printer'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
 $('#library-filters').addEventListener('toggle', () => { if ($('#library-filters').open) loadFilterChoices(); });
 $('#f-clear').addEventListener('click', () => { setLibraryFilters({}); filtersChanged(); });
 $('#f-saved').addEventListener('change', () => {
@@ -406,6 +408,29 @@ $('#bulk-apply').addEventListener('click', async () => {
   if (res.ok) loadModels();
 });
 
+// ---------- Starred models (each login has its own) ----------
+let favoriteIds = new Set();
+async function loadFavorites() {
+  const res = await fetch('/api/favorites');
+  favoriteIds = new Set(res.ok ? (await res.json()).ids : []);
+}
+function paintStar() {
+  const button = $('#model-star');
+  const on = !!currentModel && favoriteIds.has(currentModel.id);
+  button.innerHTML = on ? '&#9733;' : '&#9734;';
+  button.classList.toggle('on', on);
+  button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  button.title = on ? 'Starred: click to remove the star' : 'Star this model';
+}
+$('#model-star').addEventListener('click', async () => {
+  if (!currentModel) return;
+  const on = !favoriteIds.has(currentModel.id);
+  const res = await fetch(`/api/favorites/${currentModel.id}`, { method: on ? 'PUT' : 'DELETE' });
+  if (!res.ok) return;
+  if (on) favoriteIds.add(currentModel.id); else favoriteIds.delete(currentModel.id);
+  paintStar();
+});
+
 // one library card (used by the Library grid and the Search page)
 function libraryCard(m) {
   const card = document.createElement('a');
@@ -419,7 +444,7 @@ function libraryCard(m) {
   card.innerHTML = `
     ${thumb ? `<img src="${thumb}" loading="lazy" alt="">` : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:#666">${esc(m.extension)}</div>`}
     <div class="meta">
-      <div class="fname" title="${esc(m.filename)}">${esc(m.filename)}</div>
+      <div class="fname" title="${esc(m.filename)}">${favoriteIds.has(m.id) ? '<span class="fav-badge" title="Starred">&#9733;</span>' : ''}${esc(m.filename)}</div>
       <div class="tags">${esc((m.tags || []).map(t => t.name).join(', '))}</div>
       ${m.print_count ? `<div class="printed-badge" title="Last printed ${esc(String(m.last_printed_at || '').slice(0, 10))}">&#10003; printed${m.print_count > 1 ? ` x${m.print_count}` : ''}</div>` : ''}
     </div>`;
@@ -553,6 +578,7 @@ function renderModelPage(model) {
   renderSlicerPanel(model);
   renderCostPanel(model);
   renderHealthPanel(model);
+  loadFavorites().then(paintStar);
   renderVersions(model);
   renderSlicedFiles(model);
   renderSharePanel('#model-share-panel', 'model', model.id);
@@ -868,6 +894,7 @@ async function renderModelPrints(model) {
           ${l.rating ? `<span class="stars" title="${l.rating} of 5">${ratingText(l.rating)}</span>` : ''}
           ${l.grams != null ? `<span class="muted">${l.grams} g${l.filament_id && spoolById.get(l.filament_id) ? ' of ' + esc(spoolText(spoolById.get(l.filament_id))) : ''}</span>` : ''}
           ${l.minutes != null ? `<span class="muted">${Math.round(l.minutes)} min</span>` : ''}
+          ${l.energy_kwh != null ? `<span class="muted" title="Measured by the printer's smart plug">${l.energy_kwh} kWh</span>` : ''}
           ${l.source === 'queue' ? '<span class="muted">from the print queue</span>' : ''}
           ${l.notes ? `<div>${esc(l.notes)}</div>` : ''}
         </div>
@@ -3116,8 +3143,25 @@ $('#linked-unlink-all').addEventListener('click', () => {
 // ---------- Collections ----------
 async function loadCollections() {
   const cols = await (await fetch('/api/collections')).json();
-  $('#collections-list').innerHTML = cols.map(c => `<li data-id="${c.id}">${esc(c.name)} <button data-id="${c.id}" class="share-col">share</button> <button data-id="${c.id}" class="del-col">delete</button>
+  $('#collections-list').innerHTML = cols.map(c => `<li data-id="${c.id}">${c.cover ? `<img class="col-cover" src="/api/library/thumbnails/${esc(c.cover)}" alt="">` : ''}<b class="col-name">${esc(c.name)}</b> <span class="muted">${c.models} model${c.models === 1 ? '' : 's'}</span>
+    <button data-id="${c.id}" class="cover-col" title="Choose the picture that stands for this collection">cover</button> <button data-id="${c.id}" class="share-col">share</button> <button data-id="${c.id}" class="del-col">delete</button>
+    <div class="panel hidden collection-cover-panel" id="collection-cover-${c.id}"></div>
     <div class="panel hidden collection-share-panel" id="collection-share-${c.id}"></div></li>`).join('');
+  $$('.cover-col').forEach(b => b.onclick = async () => {
+    const panel = $(`#collection-cover-${b.dataset.id}`);
+    panel.classList.toggle('hidden');
+    if (panel.classList.contains('hidden')) return;
+    const col = cols.find(c => String(c.id) === b.dataset.id);
+    const res = await fetch(`/api/library/models?collection_id=${b.dataset.id}&limit=60`);
+    const models = res.ok ? await res.json() : [];
+    panel.innerHTML = models.length ? `<div class="muted">Pick the model whose picture stands for the collection.</div>
+      <div class="cover-choices">${models.filter(m => m.thumbnail_path).map(m => `<button data-model="${m.id}" class="${col && col.cover_model_id === m.id ? 'chosen' : ''}" title="${esc(m.filename)}"><img src="/api/library/thumbnails/${esc(m.thumbnail_path)}" alt="${esc(m.filename)}" loading="lazy"></button>`).join('')}</div>
+      <p><button class="cover-reset">Use the first model's picture</button></p>` : '<p class="muted">Put a model in the collection first.</p>';
+    const choose = async (modelId) => { await jsonRequest('PATCH', `/api/collections/${b.dataset.id}`, { cover_model_id: modelId }); loadCollections(); };
+    panel.querySelectorAll('.cover-choices button').forEach(x => x.onclick = () => choose(parseInt(x.dataset.model)));
+    const reset = panel.querySelector('.cover-reset');
+    if (reset) reset.onclick = () => choose(null);
+  });
   $$('.share-col').forEach(b => b.onclick = () => {
     const panel = $(`#collection-share-${b.dataset.id}`);
     panel.classList.toggle('hidden');
@@ -3263,6 +3307,12 @@ async function loadPrinters() {
         <p class="muted">Every two minutes while it prints, one picture goes to your own vision model (Settings, AI: local with a vision model). It only warns you and never stops the printer. A warning needs two bad looks in a row and the model can be wrong, so take it as a hint.</p>
         <div class="row"><button class="printer-watch-try">Ask the model about the picture now</button><span class="printer-watch-result muted"></span></div>
       </details>
+      <details class="printer-plug"><summary>Smart plug${p.plug_kind ? ` (${esc(p.plug_kind)})` : ''}</summary>
+        <p class="muted">A Tasmota or Shelly plug that counts energy, with the printer plugged into it. Model Hub reads its running total when a print starts and ends and keeps the difference (kWh) with the print. The address is the plug's own, like 192.168.1.70.</p>
+        <div class="row"><select class="printer-plug-kind" aria-label="Plug make"><option value="">none</option><option value="tasmota" ${p.plug_kind === 'tasmota' ? 'selected' : ''}>Tasmota</option><option value="shelly" ${p.plug_kind === 'shelly' ? 'selected' : ''}>Shelly</option></select>
+          <input class="printer-plug-host" value="${esc(p.plug_host || '')}" placeholder="192.168.1.70" aria-label="Plug address">
+          <button class="printer-plug-save">Save</button><button class="printer-plug-try">Read it now</button><span class="printer-plug-result muted"></span></div>
+      </details>
     </div>`).join('') : '<p class="muted">No printers yet.</p>';
   $('#send-printer').innerHTML = printerInfo.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   refreshPrinterStatuses();
@@ -3324,6 +3374,20 @@ $('#printers-list').addEventListener('click', async (e) => {
     if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
     const url = URL.createObjectURL(await res.blob());
     out.innerHTML = `<img src="${url}" alt="Picture from the printer camera" style="max-width:320px;border-radius:6px">`;
+    return;
+  }
+  if (row && e.target.classList.contains('printer-plug-save')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { plug_kind: row.querySelector('.printer-plug-kind').value, plug_host: row.querySelector('.printer-plug-host').value.trim() });
+    row.querySelector('.printer-plug-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('printer-plug-try')) {
+    const out = row.querySelector('.printer-plug-result');
+    out.textContent = 'Asking the plug...';
+    const saved = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { plug_kind: row.querySelector('.printer-plug-kind').value, plug_host: row.querySelector('.printer-plug-host').value.trim() });
+    if (!saved.ok) { out.textContent = await sourceErrorText(saved); return; }
+    const res = await fetch(`/api/printers/${row.dataset.id}/plug-test`, { method: 'POST' });
+    out.textContent = res.ok ? `Its energy total is ${(await res.json()).total_kwh} kWh.` : await sourceErrorText(res);
     return;
   }
   if (row && e.target.classList.contains('printer-watch-try')) {
@@ -4554,6 +4618,7 @@ async function loadSettings() {
   $('#est-infill').value = s.est_infill || '15';
   $('#cost-kwh-price').value = s.cost_kwh_price || '';
   $('#cost-printer-watts').value = s.cost_printer_watts || '';
+  $('#failed-deduct').checked = s.failed_deduct !== 'false';
   $('#cost-machine-hour').value = s.cost_machine_per_hour || '';
   $('#cost-failure-pct').value = s.cost_failure_pct || '';
   $('#cost-margin-pct').value = s.cost_margin_pct || '';
@@ -4631,6 +4696,7 @@ $('#save-estimate-settings-btn').addEventListener('click', async () => {
       est_infill: $('#est-infill').value,
       cost_kwh_price: $('#cost-kwh-price').value,
       cost_printer_watts: $('#cost-printer-watts').value,
+      failed_deduct: $('#failed-deduct').checked ? '' : 'false',
       cost_machine_per_hour: $('#cost-machine-hour').value, cost_failure_pct: $('#cost-failure-pct').value,
       cost_margin_pct: $('#cost-margin-pct').value, cost_default_per_kg: $('#cost-default-kg').value,
       bed_x: $('#bed-x').value, bed_y: $('#bed-y').value, bed_z: $('#bed-z').value,

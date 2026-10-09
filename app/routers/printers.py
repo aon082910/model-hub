@@ -19,7 +19,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures),
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
             "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
@@ -83,6 +83,20 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
         if payload["watch_failures"] and not snapshot:
             raise HTTPException(400, "Watching needs the printer's camera picture address first")
         out["watch_failures"] = payload["watch_failures"]
+    if "plug_kind" in payload or "plug_host" in payload:
+        from app import plugs
+        kind = payload["plug_kind"] if "plug_kind" in payload else (existing.plug_kind if existing else None)
+        host = payload["plug_host"] if "plug_host" in payload else (existing.plug_host if existing else None)
+        if kind in (None, "") and host in (None, ""):
+            out["plug_kind"], out["plug_host"] = None, None
+        else:
+            if kind not in plugs.KINDS:
+                raise HTTPException(400, "plug_kind must be tasmota or shelly")
+            try:
+                out["plug_host"] = printing.clean_host(host)
+            except printing.PrinterError as e:
+                raise HTTPException(400, str(e))
+            out["plug_kind"] = kind
     if "api_key" in payload:                       # "" clears it; leaving it out keeps the current one
         key = payload["api_key"]
         if key is not None and not isinstance(key, str):
@@ -174,6 +188,19 @@ def control_printer(printer_id: int, payload: dict, request: Request, session: S
         raise HTTPException(502, str(e))
     activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: {action} sent" + (f" ({state['file']})" if state.get("file") else ""))
     return {"status": "sent", "action": action, "was": state["state"]}
+
+
+@router.post("/{printer_id}/plug-test")
+def plug_test(printer_id: int, session: Session = Depends(get_session)):
+    """Read the smart plug's energy total now."""
+    from app import plugs
+    printer = _get(session, printer_id)
+    if not printer.plug_kind or not printer.plug_host:
+        raise HTTPException(400, "Give the printer its smart plug first")
+    try:
+        return {"total_kwh": round(plugs.read_total_kwh(printer.plug_kind, printer.plug_host), 3)}
+    except plugs.PlugError as e:
+        raise HTTPException(502, str(e))
 
 
 @router.post("/{printer_id}/watch-test")

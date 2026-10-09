@@ -82,6 +82,7 @@
         <label class="inline-check"><input type="checkbox" id="f-notes"> Has notes</label>
         <label class="inline-check"><input type="checkbox" id="f-latest"> Latest versions only</label>
         <label class="inline-check"><input type="checkbox" id="f-failed"> Failed before</label>
+        <label class="inline-check"><input type="checkbox" id="f-favorite"> Starred</label>
         <label>Fits printer <select id="f-fits-printer"><option value="">any</option></select></label>
       </div>
       <div class="row">
@@ -561,6 +562,7 @@
       <label>Allowance for failed prints % <small>(empty: your own record once there are 10 prints, else 5%)</small> <input id="cost-failure-pct" type="number" min="0" step="0.5" placeholder="auto"></label>
       <label>Margin on top % <input id="cost-margin-pct" type="number" min="0" step="1" placeholder="30"></label>
       <label>Price per kg when a spool has none <input id="cost-default-kg" type="number" min="0" step="0.5" placeholder="20"></label>
+      <label class="inline-check"><input type="checkbox" id="failed-deduct"> Take the filament a failed print used off its spool (a share of the job's grams, from how far the printer got)</label>
       <label>Printer build volume (mm) <small>(for the library's "fits my printer's bed" filter; a model may be turned flat)</small>
         <span class="row"><input id="bed-x" type="number" min="0" placeholder="X"><input id="bed-y" type="number" min="0" placeholder="Y"><input id="bed-z" type="number" min="0" placeholder="Z"></span>
       </label>
@@ -768,6 +770,7 @@
   <section id="page-model" class="tab page">
     <div class="page-bar">
       <a href="#/library" class="back-link">&larr; Library</a>
+      <button id="model-star" class="star-button" aria-pressed="false" title="Star this model">&#9734;</button>
     </div>
     <h2 id="model-title" class="page-title"></h2>
     <div class="page-grid">

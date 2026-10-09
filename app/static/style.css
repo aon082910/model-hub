@@ -401,3 +401,16 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 .bar-row .bar { height: 10px; border-radius: 5px; background: var(--accent); min-width: 2px; }
 .issue-list { margin: 6px 0 0 18px; padding: 0; }
 .dry-due { color: #ff6b6b; }
+
+/* stars, collection covers */
+.star-button { background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer; color: var(--muted); padding: 0 6px; vertical-align: middle; }
+.star-button.on, .fav-badge { color: #f5c542; }
+.fav-badge { margin-right: 4px; }
+.col-cover { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; vertical-align: middle; margin-right: 8px; background: #1b1e24; }
+.cover-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 8px; margin-top: 8px; }
+.cover-choices button { padding: 2px; background: none; border: 2px solid transparent; border-radius: 8px; cursor: pointer; }
+.cover-choices button.chosen { border-color: var(--accent); }
+.cover-choices img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; display: block; }
+#collections-list li { flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; }
+#collections-list li .panel { flex-basis: 100%; }
+#collections-list li .col-name { flex: 1; }

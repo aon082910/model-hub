@@ -40,6 +40,15 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.19.0
+A printer's smart plug (Tasmota or Shelly) can measure what each print used,
+shown in kWh in the print history. When a printer reports a failed print, the
+share of filament that went into it comes off the spool (a switch in Settings
+turns this off). Models can be starred (each login has its own stars) with a
+Starred filter in the Library, and collections show a cover picture you can
+choose. No new settings are required; new columns and tables are added
+automatically on first start.
+
 ### 2.18.0
 A printer's camera can be watched for a failed print by your own local vision
 model (off until you switch it on; it only tells you, it never stops a

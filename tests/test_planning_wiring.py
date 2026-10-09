@@ -101,3 +101,11 @@ def test_stage_18_controls_are_in_the_page():
     assert "renderHealthPanel" in JS and "/health" in JS and "/repair" in JS
     assert "printer-watch" in JS and "watch-test" in JS and "watch_failures" in JS
     assert "fil-dried" in JS and "fil-opened" in JS and "/api/filament/drying/overview" in JS
+
+
+def test_stage_19_controls_are_in_the_page():
+    for element in ("model-star", "f-favorite", "failed-deduct"):
+        assert f'id="{element}"' in HTML, element
+    assert "/api/favorites" in JS and "loadFavorites" in JS and "favorite" in JS and "paintStar" in JS
+    assert "printer-plug-save" in JS and "printer-plug-try" in JS and "plug_kind" in JS and "/plug-test" in JS and "energy_kwh" in JS
+    assert "cover-col" in JS and "cover_model_id" in JS and "failed_deduct" in JS

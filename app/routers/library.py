@@ -10,6 +10,7 @@ from typing import Optional
 
 from app import library_filters
 from app.families import family_summary
+from app.routers.favorites import owner_of
 from app.db import get_session
 from app import print_outcomes
 from app.models import (
@@ -52,6 +53,7 @@ def thumbnail_regeneration_job_status():
 
 @router.get("/models")
 def list_models(
+    request: Request,
     response: Response,
     q: Optional[str] = None,
     tag: Optional[str] = None,
@@ -68,6 +70,7 @@ def list_models(
     latest_only: bool = False,
     failed_before: bool = False,
     fits_printer: Optional[int] = None,
+    favorite: bool = False,
     sort: Optional[str] = None,
     limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
@@ -83,6 +86,7 @@ def list_models(
         "designer": designer, "license": license, "collection_id": collection_id, "project_id": project_id,
         "linked": linked, "fits_bed": fits_bed or None, "has_notes": has_notes or None,
         "latest_only": latest_only or None, "failed_before": failed_before or None, "fits_printer": fits_printer,
+        "favorite": favorite or None, "_owner": owner_of(request, session),
     }
     try:
         conditions = library_filters.conditions(session, filters)

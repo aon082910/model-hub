@@ -223,6 +223,12 @@ collections. I also tried *GitHub repositories* (search by topic): the results w
 maintenance schedules, open in slicer, a weekly summary. Ones I looked at and left for later: order tracking for people who sell prints, NFC tags for spools (the QR labels do the job from a phone camera), and staggered start for
 farms with limited power.
 
+**Research for versions 2.16 to 2.19:** I asked what else people want from a self-hosted 3D-print library and what other tools are praised for, and built the
+ones that fit this program: every spool of a multicolour print, pause/resume/cancel, bed sizes and "will it fit", off-site backups, a cost calculator, orders for people who sell prints, choosing the printer, Spoolman, watching a camera for a failed print (with your own local vision model,
+not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models and collection covers. Looked at and left for later: NFC tags for spools (the QR labels do the job from a phone camera),
+staggered starts for farms with limited power, and automatic pausing when the camera sees a failure (a wrong guess would ruin a good print, so it only tells you). More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
+their models are mostly made for screens, not for printing, or need an account or a key, so none was added.
+
 Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
 MakerWorld, Thingiverse, MyMiniFactory, Cults3D, Sketchfab, NIH 3D, Smithsonian and NASA (all dealt with above) plus: *Thangs* and *Free3D* refuse requests from a server (403) and have no public
 API; *Creality Cloud* has no public API either (its pages run on a private app interface, and downloads need a login, which is the case where the browser extension is the way); *3DExport*, *3DSky*,
@@ -546,6 +552,25 @@ due sends one **A spool in a printer is due for drying** notification (and again
 ## Storage
 
 **Settings → Storage** shows where the disk space goes: the library by file type, the biggest models, the space taken by duplicates, Model Hub's own folders (thumbnails, source pictures, print photos, kept sliced files, backups, downloads) and the database, and the free space on both disks.
+
+## What a print really used (smart plug)
+
+If the printer is plugged into a **Tasmota** or **Shelly** smart plug that counts energy, give the printer its plug (printer card, *Smart plug*: the make and the plug's address, then *Read it now* to test). Model Hub reads the plug's running energy total when a print starts and when it ends and
+keeps the difference, in kWh, with that print (shown in the model's print history). If the plug does not answer, or its counter went backwards, the print is simply recorded without a figure.
+The kWh is only shown (the cost calculator still estimates from the printer's watts), so check it against your electricity price yourself.
+
+## Failed prints and the spool
+
+When a printer reports a print stopped or failed, the filament that went into the failed part now comes off the spool: the same share of the job's grams as how far the printer had got (a print stopped at 40% of 100 g takes 40 g), for every spool of a multicolour job, and
+the failed entry in the print log shows those grams (deleting the entry puts them back). It is an estimate, so you can still edit the grams. A print with no known progress takes nothing. **Settings → Costs** has a switch to turn this off.
+
+## Starred models
+
+A star on a model's page (and a star on its card in the Library) marks it as one of yours. Every login has its own stars, and the Library filter *Starred* shows only yours (also usable in a saved search, where it always means whoever is looking).
+
+## Collection covers
+
+Each collection shows a picture and how many models it holds. *cover* lets you pick which model's picture stands for it; without a choice it uses its first model's picture.
 
 ## Multicolour prints
 
