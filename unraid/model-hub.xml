@@ -40,6 +40,14 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.22.0
+Maintenance keeps a history of what was done, with an optional note for each.
+Print settings can be saved as named profiles and put on any model. A status
+page for a wall display shows each printer's state and progress and the queue
+without a sign-in; it is off until you switch it on, its link holds a secret,
+and it never shows addresses, keys or camera links. No new settings are
+required; new tables are added automatically on first start.
+
 ### 2.21.0
 From a round of research into what other print-farm and library tools offer:
 waiting prints get a priority, a hold box and an optional needed tag (printers

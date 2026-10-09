@@ -477,3 +477,22 @@ class Favorite(SQLModel, table=True):
     owner: str = Field(index=True)
     model_id: int = Field(index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MaintenanceLog(SQLModel, table=True):
+    """One time a maintenance task was done: kept even when the task or its schedule is changed."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(index=True)
+    task_id: Optional[int] = None
+    name: str
+    done_at: datetime = Field(default_factory=datetime.utcnow)
+    print_hours: float = 0                  # the printer's print hours at that moment
+    note: Optional[str] = None
+
+
+class PrintProfile(SQLModel, table=True):
+    """A named set of print settings (material, temperatures, layer height...) that can be put on any model."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    settings: str                           # JSON, the same fields as a model's "what worked"
+    created_at: datetime = Field(default_factory=datetime.utcnow)

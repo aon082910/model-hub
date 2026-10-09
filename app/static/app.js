@@ -694,7 +694,41 @@ function renderPrintSettings(model) {
       ${PRINT_SETTING_FIELDS.map(([key, label]) => `<label>${esc(label)} <input class="ps-field" data-key="${key}" value="${esc(saved[key] || '')}"></label>`).join('')}
       <label>Notes <textarea class="ps-field" data-key="notes" rows="3" placeholder="Orientation, tricks, what to avoid...">${esc(saved.notes || '')}</textarea></label>
       <div class="row"><button id="ps-save">Save</button><button id="ps-again" title="Queue it again with the filament and grams of its last print">Print again</button><span id="ps-status" class="muted"></span></div>
+      <div class="row"><select id="ps-profile" aria-label="Saved profile"><option value="">(a saved profile...)</option></select>
+        <button id="ps-profile-fill" title="Only fill the boxes that are empty">Fill empty boxes</button><button id="ps-profile-replace" title="Overwrite the boxes the profile has">Apply all</button>
+        <button id="ps-profile-save" title="Keep these settings as a named profile for other models">Save as profile</button><button id="ps-profile-delete">Delete profile</button></div>
     </div>`;
+  fetch('/api/profiles').then(r => (r.ok ? r.json() : { profiles: [] })).then(data => {
+    const select = $('#ps-profile');
+    if (!select) return;
+    select.innerHTML = '<option value="">(a saved profile...)</option>' + data.profiles.map(p => `<option value="${p.id}" title="${esc(Object.entries(p.settings).map(([k, v]) => k.replace('_', ' ') + ' ' + v).join(', '))}">${esc(p.name)}</option>`).join('');
+  });
+  const applyProfile = async (mode) => {
+    const id = $('#ps-profile').value;
+    if (!id) { $('#ps-status').textContent = 'Choose a profile first.'; return; }
+    const res = await jsonRequest('POST', `/api/profiles/${id}/apply/${model.id}`, { mode });
+    if (!res.ok) { $('#ps-status').textContent = await sourceErrorText(res); return; }
+    model.print_settings = JSON.stringify((await res.json()).print_settings);
+    renderPrintSettings(model);
+    $('#ps-status').textContent = 'Applied.';
+  };
+  $('#ps-profile-fill').onclick = () => applyProfile('fill');
+  $('#ps-profile-replace').onclick = () => applyProfile('replace');
+  $('#ps-profile-save').onclick = async () => {
+    const name = prompt('Name for this profile (for example "PETG 0.2 draft")');
+    if (!name) return;
+    const settings = {};
+    $$('#model-settings-panel .ps-field').forEach(f => { if (f.dataset.key !== 'notes' && f.value.trim()) settings[f.dataset.key] = f.value; });
+    const res = await jsonRequest('POST', '/api/profiles', { name, settings });
+    $('#ps-status').textContent = res.ok ? 'Profile saved.' : await sourceErrorText(res);
+    if (res.ok) renderPrintSettings(Object.assign(model, { print_settings: JSON.stringify(Object.assign({}, saved, settings)) }));
+  };
+  $('#ps-profile-delete').onclick = async () => {
+    const id = $('#ps-profile').value;
+    if (!id || !confirm('Delete this profile? Models that used it keep their settings.')) return;
+    await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
+    renderPrintSettings(model);
+  };
   fetch(`/api/library/models/${model.id}/suggested-settings`).then(r => (r.ok ? r.json() : null)).then(data => {
     if (!data || !$('#ps-status')) return;
     const sg = data.suggested, have = data.current || {};
@@ -3584,7 +3618,8 @@ async function loadMaintenance() {
       <select id="maint-printer">${data.printers.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
       <select id="maint-preset"><option value="">(a common task...)</option>${data.presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('')}</select></div>
       <div class="row"><input id="maint-name" placeholder="What has to be done" maxlength="80"><input id="maint-hours" type="number" min="1" placeholder="every ... print hours"><input id="maint-days" type="number" min="1" placeholder="or every ... days">
-      <button id="maint-add" class="primary">Add</button><span id="maint-status" class="muted"></span></div></details>`}`;
+      <button id="maint-add" class="primary">Add</button><span id="maint-status" class="muted"></span></div></details>`}
+    <details id="maint-history"><summary>History of what was done</summary><div id="maint-history-body" class="muted">Loading...</div></details>`;
   const preset = $('#maint-preset');
   if (preset) preset.onchange = () => {
     const p = data.presets[parseInt(preset.value)];
@@ -3598,7 +3633,22 @@ async function loadMaintenance() {
     const res2 = await jsonRequest('POST', '/api/maintenance', body);
     if (res2.ok) loadMaintenance(); else $('#maint-status').textContent = await sourceErrorText(res2);
   };
-  panel.querySelectorAll('.maint-done').forEach(b => b.onclick = async () => { await fetch(`/api/maintenance/${b.closest('.maint-row').dataset.id}/done`, { method: 'POST' }); loadMaintenance(); });
+  panel.querySelectorAll('.maint-done').forEach(b => b.onclick = async () => {
+    const note = prompt('Done. Anything to note about it? (optional; Cancel keeps it as not done)', '');
+    if (note === null) return;
+    await jsonRequest('POST', `/api/maintenance/${b.closest('.maint-row').dataset.id}/done`, { note });
+    loadMaintenance();
+  });
+  const history = $('#maint-history');
+  if (history) history.addEventListener('toggle', async () => {
+    if (!history.open) return;
+    const res2 = await fetch('/api/maintenance/log?limit=100');
+    const log = res2.ok ? (await res2.json()).log : [];
+    $('#maint-history-body').innerHTML = log.length ? log.map(r => `<div class="row maint-log-row"><b>${esc(String(r.done_at).slice(0, 10))}</b> ${esc(r.printer)}: ${esc(r.name)}
+      <span class="muted">at ${r.print_hours} print hours${r.note ? ' &middot; ' + esc(r.note) : ''}</span>${readOnly ? '' : ` <button class="maint-log-delete" data-id="${r.id}" title="Remove this entry">&times;</button>`}</div>`).join('')
+      : '<p class="muted">Nothing has been marked done yet.</p>';
+    $$('.maint-log-delete').forEach(x => x.onclick = async () => { await fetch(`/api/maintenance/log/${x.dataset.id}`, { method: 'DELETE' }); history.open = false; history.open = true; });
+  });
   panel.querySelectorAll('.maint-delete').forEach(b => b.onclick = async () => {
     if (!confirm('Remove this maintenance task?')) return;
     await fetch(`/api/maintenance/${b.closest('.maint-row').dataset.id}`, { method: 'DELETE' });
@@ -4732,6 +4782,28 @@ async function makeStepThumbnails() {
 }
 $('#step-thumbs-btn').addEventListener('click', makeStepThumbnails);
 
+async function loadStatusPage() {
+  const box = $('#status-page-box');
+  if (!box) return;
+  const res = await fetch('/api/settings/status-page');
+  if (!res.ok) { box.textContent = ''; return; }
+  const st = await res.json();
+  const post = async (body) => { const r = await jsonRequest('POST', '/api/settings/status-page', body); if (r.ok) loadStatusPage(); else box.insertAdjacentHTML('beforeend', `<p class="error-text">${esc(await sourceErrorText(r))}</p>`); };
+  if (!st.enabled) {
+    box.innerHTML = '<button id="status-on">Turn the status page on</button>';
+    $('#status-on').onclick = () => post({ enabled: true });
+    return;
+  }
+  const link = location.origin + st.path;
+  box.innerHTML = `<div class="row"><input id="status-link" readonly value="${esc(link)}" aria-label="The status page link" style="min-width:24em"><button id="status-copy">Copy</button><a class="button-link" href="${esc(st.path)}" target="_blank" rel="noopener">Open it</a></div>
+    <label class="inline-check"><input type="checkbox" id="status-files" ${st.show_files ? 'checked' : ''}> Also show the name of the file each printer is printing</label>
+    <div class="row"><button id="status-rotate">Make a new link</button><button id="status-off">Turn it off</button></div>`;
+  $('#status-copy').onclick = async () => { $('#status-link').select(); try { await navigator.clipboard.writeText(link); } catch (e) { /* selected: copy by hand */ } };
+  $('#status-files').onchange = (e) => post({ show_files: e.target.checked });
+  $('#status-rotate').onclick = () => { if (confirm('The old link stops working. Make a new one?')) post({ rotate: true }); };
+  $('#status-off').onclick = () => post({ enabled: false });
+}
+
 async function loadStorage() {
   const body = $('#storage-body');
   const res = await fetch('/api/storage');
@@ -4750,6 +4822,7 @@ $('#storage-refresh').addEventListener('click', loadStorage);
 
 async function loadSettings() {
   loadStorage();
+  loadStatusPage();
   const s = await (await fetch('/api/settings')).json();
   $('#ai-mode').value = s.ai_mode || 'local';
   $('#ollama-host').value = s.ollama_host || '';

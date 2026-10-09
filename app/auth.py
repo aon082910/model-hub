@@ -19,7 +19,7 @@ SECRET_KEY_PATH = CONFIG_PATH / "secret.key"
 # itself, static assets needed to render the login page, and the browser
 # extension's own upload endpoint (which authenticates via API key instead).
 PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/manifest.webmanifest", "/sw.js"}
-PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/")
+PUBLIC_PREFIXES = ("/assets/", "/share/", "/dl/", "/status/")
 
 # The extension API key is intentionally weaker than a full login session: it's
 # stored in a browser extension, a lower-trust place than the server admin's own
@@ -31,7 +31,7 @@ API_KEY_ALLOWED_PATHS = {"/api/library/import"}
 # they have their own dedicated, access-controlled endpoints instead. Without
 # this, anyone holding only the (lower-trust) extension API key could read the
 # password hash or overwrite it outright via a plain PUT to /api/settings.
-RESERVED_SETTING_KEYS = {"auth_username", "auth_password_hash", "extension_api_key"}
+RESERVED_SETTING_KEYS = {"auth_username", "auth_password_hash", "extension_api_key", "status_token"}
 
 
 def _secret_key() -> bytes:

@@ -533,6 +533,21 @@ looks failed (loose strings, a part knocked off, a blob). Two bad looks in a row
 Under the watching switch, *Also pause the print after three bad looks in a row* lets Model Hub pause the print (Klipper, OctoPrint or Bambu), never cancel it. The warning still comes after two bad looks; the pause after a third, six minutes in, and you are told it
 was paused (or that it could not be, and why). Resume or cancel from the printer card once you have looked. It is off by default and can only be switched on for a printer that is watched; a vision model can be wrong, so a pause costs you a click, never a print.
 
+## Maintenance history
+
+Pressing *Done* on a maintenance task now asks for an optional note (what you used, what you found) and adds a line to **History of what was done** under the maintenance list: the date, the printer, the task, the printer's print hours at that moment and your note. The history stays when a task is removed or its schedule
+changed, and goes only when its printer is removed (or you delete an entry with the cross).
+
+## Print profiles
+
+A model's *What worked* box can now use named **profiles**: a saved set of material, layer height, temperatures, speed and so on (for example "PETG 0.2 draft"). *Save as profile* keeps the settings in the boxes (never the notes) under a name; choose a profile and *Fill empty boxes* puts its values only where the model has none,
+*Apply all* overwrites the boxes the profile has. Profiles belong to the whole library, so a setup you found once can go on any model; deleting a profile leaves the models that used it as they are.
+
+## Status page for a wall display
+
+**Settings → Status page** can switch on a page for a tablet or monitor: each printer's state, progress and temperatures and how many prints are waiting or on hold, refreshed every 10 seconds, with no sign-in. It is off by default. The link contains a secret (anyone who has the link can look, and *Make a new link* cancels the old one); it shows only what
+the background poll already knows (it never contacts a printer itself) and never an address, key, serial number or camera link, and the file name of each print only if you tick the box. The link is kept out of backups and out of the settings list.
+
 ## Queue: priority, hold, tags and order
 
 Each waiting print has a **priority** (high, normal, low), a **hold** box and an optional **needs tag**. A held print is not suggested, assigned or sent until you release it (useful when someone must look at it first). Printers can carry **tags** (a room, a group, a nozzle size: printer card, *Tags*);

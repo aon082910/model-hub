@@ -1,11 +1,13 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlmodel import Session, select
 
 from app import activity, maintenance
 from app.db import get_session
-from app.models import MaintenanceTask, Printer
+from app.models import MaintenanceLog, MaintenanceTask, Printer
 
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
 MAX_TASKS = 200
@@ -50,15 +52,42 @@ def add_task(payload: dict, request: Request, session: Session = Depends(get_ses
     return next(r for r in maintenance.overview(session) if r["id"] == task.id)
 
 
+@router.get("/log")
+def history(printer_id: Optional[int] = None, limit: int = 100, session: Session = Depends(get_session)):
+    """What was done, newest first (all printers, or one)."""
+    stmt = select(MaintenanceLog).order_by(MaintenanceLog.done_at.desc(), MaintenanceLog.id.desc())
+    if printer_id is not None:
+        stmt = stmt.where(MaintenanceLog.printer_id == printer_id)
+    names = {p.id: p.name for p in session.exec(select(Printer)).all()}
+    rows = session.exec(stmt.limit(max(1, min(limit, 500)))).all()
+    return {"log": [{"id": r.id, "printer_id": r.printer_id, "printer": names.get(r.printer_id), "name": r.name, "done_at": r.done_at.isoformat(),
+                     "print_hours": r.print_hours, "note": r.note} for r in rows if r.printer_id in names]}
+
+
+@router.delete("/log/{log_id}")
+def delete_log(log_id: int, session: Session = Depends(get_session)):
+    row = session.get(MaintenanceLog, log_id)
+    if not row:
+        raise HTTPException(404, "Not found")
+    session.delete(row)
+    session.commit()
+    return {"status": "deleted"}
+
+
 @router.post("/{task_id}/done")
-def mark_done(task_id: int, request: Request, session: Session = Depends(get_session)):
-    """Say it was done now: the clock starts again from this moment and from the printer's print hours so far."""
+def mark_done(task_id: int, request: Request, payload: Optional[dict] = Body(default=None), session: Session = Depends(get_session)):
+    """Say it was done now: the clock starts again from this moment and from the printer's print hours so far. An optional note is kept in the history."""
     task = session.get(MaintenanceTask, task_id)
     if not task:
         raise HTTPException(404, "Not found")
+    note = (payload or {}).get("note")
+    if note is not None and not isinstance(note, str):
+        raise HTTPException(400, "note must be text")
     task.last_done_at = datetime.utcnow()
     task.last_done_hours = maintenance.print_hours(session, task.printer_id)
     session.add(task)
+    session.add(MaintenanceLog(printer_id=task.printer_id, task_id=task.id, name=task.name, print_hours=task.last_done_hours,
+                               note=note.strip()[:300] if note and note.strip() else None))
     session.commit()
     printer = session.get(Printer, task.printer_id)
     activity.record(session, activity.actor_of(request), "maintenance", f"Maintenance done: {task.name} on {printer.name if printer else 'a printer'}")

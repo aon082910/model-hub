@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
-from app.models import MaintenanceTask, Printer, PrintLog
+from app.models import MaintenanceLog, MaintenanceTask, Printer, PrintLog
 from app.notify import notify_event
 from app.settings_store import get_setting, set_setting
 
@@ -62,6 +62,8 @@ def overview(session: Session) -> list:
 def forget_printer(session: Session, printer_id: int) -> None:
     for task in session.exec(select(MaintenanceTask).where(MaintenanceTask.printer_id == printer_id)).all():
         session.delete(task)
+    for row in session.exec(select(MaintenanceLog).where(MaintenanceLog.printer_id == printer_id)).all():
+        session.delete(row)                                    # SQLite reuses ids: a history must never pass to a later printer
 
 
 def check_and_notify(session: Session) -> list:
