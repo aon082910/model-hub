@@ -3277,6 +3277,42 @@ async function loadFilament() {
   }
   $$('.del-fil').forEach(b => b.onclick = async () => { await fetch(`/api/filament/${b.dataset.id}`, { method: 'DELETE' }); loadFilament(); });
 }
+let presetHex = '';
+async function filDbStatus() {
+  const res = await fetch('/api/filament/db/status');
+  if (!res.ok) return;
+  const st = await res.json();
+  $('#fil-db-status').textContent = st.present ? `${st.colours.toLocaleString()} colours, downloaded ${st.age_days < 1 ? 'today' : Math.round(st.age_days) + ' days ago'}${st.old ? ' (a while ago: update it)' : ''}` : 'Not downloaded yet.';
+}
+$('#fil-db-box').addEventListener('toggle', () => { if ($('#fil-db-box').open) filDbStatus(); });
+$('#fil-db-update').addEventListener('click', async () => {
+  $('#fil-db-status').textContent = 'Downloading...';
+  const res = await fetch('/api/filament/db/update', { method: 'POST' });
+  if (!res.ok) { $('#fil-db-status').textContent = await sourceErrorText(res); return; }
+  filDbStatus();
+});
+async function filDbSearch() {
+  const q = $('#fil-db-q').value.trim();
+  if (!q) return;
+  const res = await fetch(`/api/filament/db/search?q=${encodeURIComponent(q)}`);
+  if (!res.ok) { $('#fil-db-results').innerHTML = `<p class="muted">${esc(await sourceErrorText(res))}</p>`; return; }
+  const rows = (await res.json()).results;
+  $('#fil-db-results').innerHTML = rows.length ? rows.map((r, n) => `<div class="fil-db-row">
+      <span class="fil-db-swatch" style="background:${esc(r.hex || 'transparent')}"></span>
+      <span><b>${esc(r.brand)}</b> ${esc(r.name)} &middot; ${esc(r.color)} <span class="muted">${esc(r.material)}${r.grams.length ? ' &middot; ' + r.grams.map(g => g + ' g').join(', ') : ''}${r.nozzle[0] ? ` &middot; nozzle ${r.nozzle[0]}-${r.nozzle[1] || '?'}\u00b0` : ''}${r.bed[0] ? ` &middot; bed ${r.bed[0]}-${r.bed[1] || '?'}\u00b0` : ''}</span></span>
+      <button class="fil-db-use" data-n="${n}">Use</button></div>`).join('') : '<p class="muted">Nothing matches every word.</p>';
+  $$('.fil-db-use').forEach(b => b.onclick = () => {
+    const r = rows[parseInt(b.dataset.n)];
+    $('#fil-material').value = r.material;
+    $('#fil-brand').value = r.brand;
+    $('#fil-color').value = r.color;
+    $('#fil-weight').value = r.grams.includes(1000) ? 1000 : (r.grams.length ? Math.max(...r.grams) : 1000);
+    presetHex = r.hex || '';
+    $('#fil-cost').focus();
+  });
+}
+$('#fil-db-search').addEventListener('click', filDbSearch);
+$('#fil-db-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') filDbSearch(); });
 $('#add-filament-btn').addEventListener('click', async () => {
   await fetch('/api/filament', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3285,8 +3321,10 @@ $('#add-filament-btn').addEventListener('click', async () => {
       color: $('#fil-color').value, spool_weight_g: parseFloat($('#fil-weight').value) || 1000,
       remaining_g: parseFloat($('#fil-weight').value) || 1000,
       cost: $('#fil-cost').value.trim() === '' ? null : parseFloat($('#fil-cost').value),
+      ...(presetHex ? { color_hex: presetHex } : {}),
     }),
   });
+  presetHex = '';
   loadFilament();
 });
 
@@ -3332,6 +3370,10 @@ async function loadPrinters() {
         <p class="muted">In mm. With it, Model Hub can say which models fit this printer and warn when a queued model is too big.</p>
         <div class="row"><input type="number" class="printer-bed-x" min="10" max="5000" value="${p.bed_x || ''}" placeholder="width" aria-label="Bed width"><input type="number" class="printer-bed-y" min="10" max="5000" value="${p.bed_y || ''}" placeholder="depth" aria-label="Bed depth"><input type="number" class="printer-bed-z" min="10" max="5000" value="${p.bed_z || ''}" placeholder="height" aria-label="Build height">
         <button class="printer-bed-save">Save</button><span class="printer-bed-result muted"></span></div>
+      </details>
+      <details class="printer-tags-box"><summary>Tags${(p.tags || []).length ? ` (${p.tags.map(esc).join(', ')})` : ''}</summary>
+        <p class="muted">Labels such as a room, a group or a nozzle size, separated by commas. A waiting print can be set to need a tag (on the queue), and is then only suggested for and sent to a printer that has it.</p>
+        <div class="row"><input class="printer-tags-input" value="${esc((p.tags || []).join(', '))}" placeholder="garage, 0.6 nozzle" aria-label="Tags"><button class="printer-tags-save">Save</button><span class="printer-tags-result muted"></span></div>
       </details>
       <details class="printer-slotcount"><summary>Spool slots${p.slot_count ? ` (${p.slot_count})` : ''}</summary>
         <p class="muted">How many spools it can hold at once (an AMS has 4, a toolchanger one per tool). Leave 0 for a printer with one spool.</p>
@@ -3414,6 +3456,11 @@ $('#printers-list').addEventListener('click', async (e) => {
     if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
     const url = URL.createObjectURL(await res.blob());
     out.innerHTML = `<img src="${url}" alt="Picture from the printer camera" style="max-width:320px;border-radius:6px">`;
+    return;
+  }
+  if (row && e.target.classList.contains('printer-tags-save')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { tags: row.querySelector('.printer-tags-input').value });
+    row.querySelector('.printer-tags-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
     return;
   }
   if (row && e.target.classList.contains('printer-plug-save')) {
@@ -3607,6 +3654,14 @@ async function renderSlotsPanel(printers) {
 }
 
 // ---------- Queue ----------
+for (const [id, mode] of [['#queue-sort-priority', 'priority'], ['#queue-sort-shortest', 'shortest']]) {
+  $(id).addEventListener('click', async () => {
+    const res = await jsonRequest('POST', '/api/queue/sort', { mode });
+    showNotice(res.ok ? 'The waiting prints are in the new order.' : await sourceErrorText(res));
+    loadQueue();
+  });
+}
+
 async function loadQueue() {
   loadPrinters();
   const [slotData, hints] = await Promise.all([
@@ -3641,13 +3696,16 @@ async function loadQueue() {
       .filter(Boolean).join(' · ');
     return `
     <li>
-      <span>#${i.position} ${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
+      <span>#${i.position} ${i.held ? '<span class="status-badge status-failed">on hold</span> ' : ''}${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
         ${fitData[i.id] && !fitData[i.id].fits ? `<span class="warn-text" title="model ${fitData[i.id].model.map(v => Math.round(v)).join(' x ')} mm, bed ${fitData[i.id].bed.filter(Boolean).join(' x ')} mm">&#9888; too big for ${esc(fitData[i.id].printer)}'s bed</span>` : ''}
         ${i.uses ? `<span class="muted">${JSON.parse(i.uses).length} spools counted</span>` : ''}
         ${suggestions[i.id] ? `<span class="muted" title="${esc(suggestions[i.id][0].reasons.join('; '))}">suggested: ${esc(suggestions[i.id][0].name)}${suggestions[i.id][0].slot ? ' slot ' + suggestions[i.id][0].slot : ''}
           <button class="queue-suggest" data-id="${i.id}" data-printer="${suggestions[i.id][0].printer_id}" data-slot="${suggestions[i.id][0].slot || ''}">Use</button></span>` : ''}
         ${hints[i.model_id] && ['queued', 'printing'].includes(i.status) ? `<span class="warn-text" title="${esc(hints[i.model_id].tip || '')}">&#9888; ${esc(hintText(hints[i.model_id]))}</span>` : ''}</span>
       <span>
+        ${i.status === 'queued' ? `<select class="queue-priority" data-id="${i.id}" aria-label="Priority" title="Priority"><option value="1" ${i.priority === 1 ? 'selected' : ''}>high</option><option value="0" ${!i.priority ? 'selected' : ''}>normal</option><option value="-1" ${i.priority === -1 ? 'selected' : ''}>low</option></select>
+          <label class="inline-check queue-hold-label" title="Keep it from being suggested, assigned or sent until someone has looked at it"><input type="checkbox" class="queue-hold" data-id="${i.id}" ${i.held ? 'checked' : ''}> hold</label>
+          <input class="queue-tag" data-id="${i.id}" value="${esc(i.printer_tag || '')}" placeholder="needs tag" aria-label="Needs a printer with this tag" title="Only a printer with this tag may print it">` : ''}
         ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
         ${printers.length ? `<select data-id="${i.id}" class="queue-printer" aria-label="Printer">
           <option value="">any printer</option>${printers.map(p => `<option value="${p.id}" ${p.id === i.printer_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
@@ -3662,6 +3720,20 @@ async function loadQueue() {
       </span>
     </li>`;
   }).join('');
+  $$('.queue-priority').forEach(sel => sel.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { priority: parseInt(sel.value) });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+  });
+  $$('.queue-hold').forEach(box => box.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${box.dataset.id}`, { held: box.checked });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
+  $$('.queue-tag').forEach(input => input.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { printer_tag: input.value.trim() });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
   $$('.queue-date').forEach(input => input.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { planned_date: input.value || null });
     if (!res.ok) showNotice(await sourceErrorText(res));
@@ -3732,7 +3804,7 @@ async function loadQueue() {
     let res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start });
     if (res.status === 409 && start) {
       const detail = (await res.clone().json().catch(() => ({}))).detail || '';
-      if (detail.startsWith('Wait: ') && confirm(`${detail.slice(6)}.\n\nStart it anyway?`)) res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start, force: true });
+      if (/^(Wait|Low): /.test(detail) && confirm(`${detail.replace(/^(Wait|Low): /, '')}.\n\nStart it anyway?`)) res = await jsonRequest('POST', `/api/queue/${b.dataset.id}/send`, { start, force: true });
     }
     showNotice(res.ok ? (start ? 'Sent, and the printer started it.' : 'Sent. It is waiting on the printer.') : await sourceErrorText(res));
     loadQueue();
@@ -4261,6 +4333,24 @@ $('#rules-status').addEventListener('click', async (e) => {
 
 // ---------- Orders ----------
 let ordersOpen = new Set();
+async function importOrders(dry) {
+  const file = $('#order-import-file').files[0];
+  if (!file) { $('#order-import-status').textContent = 'Choose the CSV file first.'; return; }
+  const form = new FormData();
+  form.append('file', file);
+  $('#order-import-status').textContent = 'Working...';
+  const res = await fetch(`/api/orders/import${dry ? '?dry=true' : ''}`, { method: 'POST', body: form });
+  if (!res.ok) { $('#order-import-status').textContent = await sourceErrorText(res); $('#order-import-result').innerHTML = ''; return; }
+  const r = await res.json();
+  $('#order-import-status').textContent = `${dry ? 'Would import' : 'Imported'} ${r.orders.length} order${r.orders.length === 1 ? '' : 's'} (${r.matched} of ${r.lines} lines matched a model)${r.skipped.length ? `, ${r.skipped.length} already imported` : ''}.`;
+  $('#order-import-result').innerHTML = r.orders.map(o => `<div class="panel"><b>${esc(o.customer)}</b> <span class="muted">order ${esc(o.order)}</span>
+    ${o.matched.map(m => `<div>${esc(m.filename)} x ${m.quantity}${m.unit_price != null ? ` at ${money2(m.unit_price)}` : ''}</div>`).join('')}
+    ${o.unmatched.length ? `<div class="warn-text">Not matched to a model: ${o.unmatched.map(esc).join('; ')}</div>` : ''}</div>`).join('');
+  if (!dry) loadOrders();
+}
+$('#order-import-preview').addEventListener('click', () => importOrders(true));
+$('#order-import-go').addEventListener('click', () => importOrders(false));
+
 async function loadOrders() {
   const res = await fetch('/api/orders');
   if (!res.ok) { $('#orders-list').innerHTML = '<p class="error-text">Could not load the orders.</p>'; return; }

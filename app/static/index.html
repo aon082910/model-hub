@@ -418,6 +418,12 @@
       <input id="fil-cost" type="number" min="0" step="0.01" placeholder="Spool price">
       <button id="add-filament-btn">Add Spool</button>
     </div>
+    <details id="fil-db-box"><summary>Find a spool in the Open Filament Database</summary>
+      <p class="muted">A community list of filaments (brand, material, colour and the weights sold). It is downloaded once (about 6 MB) from api.openfilamentdatabase.org and searched here; nothing is sent there. Pick one to fill in the form above.</p>
+      <div class="row"><input id="fil-db-q" placeholder="e.g. prusament galaxy black" aria-label="Search the filament database"><button id="fil-db-search">Search</button>
+        <button id="fil-db-update">Download or update the list</button><span id="fil-db-status" class="muted"></span></div>
+      <div id="fil-db-results"></div>
+    </details>
     <div class="table-scroll">
       <table id="filament-table"><thead><tr>
         <th>Material</th><th>Brand</th><th>Color</th><th>Remaining</th><th>Price</th><th></th>
@@ -433,6 +439,11 @@
       <div class="row"><input id="order-notes" placeholder="Notes"><button id="order-create" class="primary">Create</button><span id="order-status-msg" class="muted"></span></div>
     </details>
     <div class="row"><a class="button-link" href="/api/orders/export.csv" download>Orders as a spreadsheet</a></div>
+    <details id="order-import-box"><summary>Import orders from a shop's export</summary>
+      <p class="muted">The spreadsheet (CSV) you can download from Shopify, Etsy, WooCommerce, eBay and most other shops: one order per order number, each line matched to a library model by its SKU or title. Lines that match nothing are kept in the order's notes, and importing the same file twice makes no copies. <b>Preview</b> changes nothing.</p>
+      <div class="row"><input type="file" id="order-import-file" accept=".csv,text/csv"><button id="order-import-preview">Preview</button><button id="order-import-go" class="primary">Import</button><span id="order-import-status" class="muted"></span></div>
+      <div id="order-import-result"></div>
+    </details>
     <div id="orders-list"></div>
   </section>
 
@@ -507,6 +518,8 @@
     <div id="maintenance-panel" class="panel"></div>
     <h2>Print Queue</h2>
     <div id="queue-summary" class="muted"></div>
+    <div class="row" id="queue-sort-row"><span class="muted">Order the waiting prints:</span><button id="queue-sort-priority">By priority</button><button id="queue-sort-shortest">Shortest first, inside each priority</button>
+      <span class="muted">(anything waiting two days or more goes first of its priority)</span></div>
     <ul id="queue-list"></ul>
   </section>
 

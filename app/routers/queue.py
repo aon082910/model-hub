@@ -53,6 +53,28 @@ def check_slot(session: Session, printer_id, slot):
     return slot
 
 
+def clean_priority(value) -> int:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, bool) or value not in (-1, 0, 1):
+        raise HTTPException(400, "priority must be -1 (low), 0 (normal) or 1 (high)")
+    return value
+
+
+def clean_tag(value) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,23}", value.strip()):
+        raise HTTPException(400, "A tag is up to 24 letters, numbers, spaces, dashes or underscores")
+    return value.strip().lower()
+
+
+def clean_held(value) -> bool:
+    if not isinstance(value, bool):
+        raise HTTPException(400, "held must be true or false")
+    return value
+
+
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -104,6 +126,8 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
         estimated_minutes=minutes,
         estimate_basis=basis if minutes else None,
         planned_date=clean_date(payload.get("planned_date")),
+        priority=clean_priority(payload.get("priority")) or None, held=clean_held(payload["held"]) if "held" in payload else None,
+        printer_tag=clean_tag(payload.get("printer_tag")),
         position=position,
     )
     session.add(item)
@@ -284,6 +308,52 @@ def summary(session: Session = Depends(get_session)):
     return {"printers": [{**r, "minutes": round(r["minutes"])} for r in ordered]}
 
 
+def printer_tags(printer: Printer) -> list:
+    return [t for t in (printer.tags or "").split(",") if t]
+
+
+def low_filament(session: Session, item: QueueItem, fallback_grams: Optional[float] = None) -> Optional[str]:
+    """Says so when the spool(s) this entry will print from hold less than the print is expected to use."""
+    from app import slots
+    parts = slots.spool_parts(session, item)
+    if not parts and fallback_grams:
+        spool_id = slots.effective_filament(session, item)
+        parts = [(spool_id, float(fallback_grams))] if spool_id else []
+    for spool_id, grams in parts:
+        spool = session.get(Filament, spool_id)
+        if spool and spool.remaining_g < grams:
+            name = " ".join(x for x in (spool.material, spool.brand, spool.color) if x) or "The spool"
+            return f"{name} has {spool.remaining_g:g} g left and this print needs about {grams:g} g"
+    return None
+
+
+@router.post("/sort")
+def sort_queue(payload: dict, session: Session = Depends(get_session)):
+    """Reorder the waiting entries: by priority (high first, then the order they were added), or shortest first inside each priority.
+    Anything that has waited two days or more goes first of its priority, so a long print is never starved by short ones."""
+    from datetime import datetime, timedelta
+    mode = payload.get("mode")
+    if mode not in ("priority", "shortest"):
+        raise HTTPException(400, "mode must be priority or shortest")
+    waiting = session.exec(select(QueueItem).where(QueueItem.status == "queued").order_by(QueueItem.position, QueueItem.id)).all()
+    now = datetime.utcnow()
+
+    def key(item):
+        old = (now - item.created_at) >= timedelta(days=2)
+        minutes = float(item.estimated_minutes) if item.estimated_minutes else 10 ** 9
+        return (-(item.priority or 0), 0 if old else 1, minutes if mode == "shortest" else 0, item.position, item.id)
+    ordered = sorted(waiting, key=key)
+    slots_ = sorted(i.position for i in waiting)                       # the waiting entries keep the positions they already hold
+    moved = 0
+    for item, position in zip(ordered, slots_):
+        if item.position != position:
+            item.position = position
+            session.add(item)
+            moved += 1
+    session.commit()
+    return {"moved": moved, "order": [i.id for i in ordered]}
+
+
 @router.post("/{item_id}/send")
 def send_item(item_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
     """Send this queue entry to its printer: the model's newest kept G-code file. start=true also starts the print.
@@ -297,6 +367,10 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
         raise HTTPException(400, "Choose a printer for this job first")
     if item.status not in ("queued", "failed"):
         raise HTTPException(409, f"This job is already {item.status}")
+    if item.held:
+        raise HTTPException(409, "This entry is on hold for review: release it first")
+    if item.printer_tag and item.printer_tag not in printer_tags(printer):
+        raise HTTPException(409, f"This entry asked for a printer tagged \"{item.printer_tag}\" and {printer.name} does not have that tag")
     kept = [f for f in session.exec(select(PrintFile).where(PrintFile.model_id == item.model_id)
                                     .order_by(PrintFile.created_at.desc(), PrintFile.id.desc())).all() if f.kind in print_files.GCODE_KINDS]
     path = print_files.stored_path(kept[0].stored_name) if kept else None
@@ -308,6 +382,9 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
         wait = stagger.reason_to_wait(session, printer)
         if wait:
             raise HTTPException(409, "Wait: " + wait)
+        low = low_filament(session, item, kept[0].est_grams)
+        if low:
+            raise HTTPException(409, "Low: " + low)
     state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
     if not state["online"]:
         raise HTTPException(502, state.get("message") or "The printer cannot be reached")
@@ -368,6 +445,12 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         if item.slot and "filament_id" not in payload:
             from app import slots
             item.filament_id = slots.loaded(session, new_printer, item.slot) or item.filament_id
+    if "priority" in payload:
+        item.priority = clean_priority(payload["priority"]) or None
+    if "held" in payload:
+        item.held = clean_held(payload["held"]) or None
+    if "printer_tag" in payload:
+        item.printer_tag = clean_tag(payload["printer_tag"])
     if "uses" in payload:
         item.uses = check_uses(session, payload.get("printer_id", item.printer_id), payload["uses"])
         if item.uses and "estimated_grams" not in payload:

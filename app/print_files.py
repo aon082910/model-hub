@@ -70,6 +70,35 @@ def _filaments_from_gcode(text: str) -> Optional[str]:
                              "color": colours[i] if i < len(colours) else None, "grams": round(g, 2)} for i, g in enumerate(grams)])
 
 
+DENSITY = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21, "PA": 1.14, "NYLON": 1.14, "PC": 1.2, "PVA": 1.23, "HIPS": 1.04, "PP": 0.9}
+
+
+def grams_from_length(mm: float, filament_type: Optional[str] = None, diameter: float = 1.75) -> Optional[float]:
+    """Weight of a length of filament: its volume (a cylinder of the filament's diameter) times the material's density."""
+    if not isinstance(mm, (int, float)) or mm <= 0 or not 0.5 <= diameter <= 4:
+        return None
+    key = (filament_type or "").upper().replace("-", "").replace(" ", "")
+    density = next((d for name, d in DENSITY.items() if key.startswith(name)), 1.24)
+    cm3 = 3.141592653589793 * (diameter / 2) ** 2 * mm / 1000
+    return round(cm3 * density, 2)
+
+
+def _length_mm(text: str) -> Optional[float]:
+    """Millimetres of filament the slicer says the print uses (PrusaSlicer and Orca: [mm], one per extruder; Cura: metres)."""
+    used = _first(r"^\s*;\s*(?:total )?filament used \[mm\]\s*[=:]\s*([^\n]+)", text)
+    if used:
+        values = []
+        for part in re.split(r"[,;]", used):
+            try:
+                values.append(float(part.strip()))
+            except ValueError:
+                pass
+        if values:
+            return sum(values)
+    metres = _first(r"^\s*;\s*Filament used:\s*([\d.]+)\s*m\b", text)
+    return float(metres) * 1000 if metres else None
+
+
 def parse_gcode_text(text: str) -> dict:
     """What PrusaSlicer, OrcaSlicer, Bambu Studio and Cura write in their G-code comments."""
     slicer = _first(r"^\s*;\s*generated (?:by|with) ([^\n]{2,60}?)(?:\s+on\s+\d|\s*$)", text)
@@ -85,6 +114,11 @@ def parse_gcode_text(text: str) -> dict:
     grams = _first(r"^\s*;\s*(?:total )?filament (?:used \[g\]|weight \[g\])\s*[=:]\s*([\d.]+)", text)
     filament = _first(r"^\s*;\s*filament_type\s*=\s*([^\n;]+)", text) or _first(r"^\s*;\s*filament_type\s*:\s*([^\n;]+)", text)
     layer = _first(r"^\s*;\s*layer_height\s*[=:]\s*([\d.]+)", text) or _first(r"^\s*;\s*Layer height:\s*([\d.]+)", text)
+    if not grams:                                              # no weight written: work it out from the length of filament
+        length = _length_mm(text)
+        diameter = _first(r"^\s*;\s*filament_diameter\s*[=:]\s*([\d.]+)", text)
+        worked = grams_from_length(length, filament, float(diameter) if diameter else 1.75) if length else None
+        grams = str(worked) if worked else None
     return {"slicer": slicer[:80] if slicer else None, "est_minutes": minutes,
             "est_grams": round(float(grams), 2) if grams else None,
             "filament_type": filament[:40] if filament else None, "layer_height": layer,

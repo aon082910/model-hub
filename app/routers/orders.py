@@ -143,6 +143,119 @@ def _get(session: Session, order_id: int) -> Order:
     return order
 
 
+HEADERS = {
+    "order": ("order id", "order number", "order #", "order no", "order", "name", "id"),
+    "customer": ("shipping name", "ship name", "full name", "billing name", "buyer", "customer name", "customer", "buyer name"),
+    "contact": ("email", "buyer email", "customer email", "billing email"),
+    "item": ("lineitem name", "item name", "product name", "title", "item", "product"),
+    "sku": ("lineitem sku", "sku", "product sku", "variation sku"),
+    "quantity": ("lineitem quantity", "quantity", "qty", "quantity ordered"),
+    "price": ("lineitem price", "item price", "price", "item cost", "unit price", "price per item"),
+}
+MAX_IMPORT_BYTES = 2 * 1024 * 1024
+MAX_IMPORT_ROWS = 3000
+
+
+def _columns(header: list) -> dict:
+    names = {h.strip().lower(): h for h in header if h}
+    found = {}
+    for key, options in HEADERS.items():
+        for option in options:
+            if option in names:
+                found[key] = names[option]
+                break
+    return found
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _match_model(models: list, sku: str, title: str) -> Optional[Model3D]:
+    """A library model for a shop line: its SKU equal to the model's file name, else its title containing or contained in the file name (only if exactly one fits)."""
+    stems = [(m, _norm(m.filename.rsplit(".", 1)[0])) for m in models]
+    for wanted in (_norm(sku), _norm(title)):
+        if wanted and len(wanted) >= 3:
+            exact = [m for m, stem in stems if stem == wanted]
+            if len(exact) == 1:
+                return exact[0]
+    wanted = _norm(title)
+    if len(wanted) >= 4:
+        near = [m for m, stem in stems if len(stem) >= 4 and (stem in wanted or wanted in stem)]
+        if len(near) == 1:
+            return near[0]
+    return None
+
+
+def _money(text) -> Optional[float]:
+    match = re.search(r"\d+(?:[.,]\d{1,2})?", str(text or "").replace(" ", ""))
+    return round(float(match.group(0).replace(",", ".")), 2) if match else None
+
+
+@router.post("/import")
+async def import_orders(request: Request, session: Session = Depends(get_session)):
+    """Turn a shop's order export (Shopify, Etsy, WooCommerce, eBay or any spreadsheet with similar columns) into orders: one per order number,
+    their lines matched to library models by SKU or title. Lines that match nothing are kept in the order's notes. ?dry=true only reports."""
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(400, "Choose the CSV file from your shop")
+    raw = await upload.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(400, "That file is larger than 2 MB")
+    dry = request.query_params.get("dry") == "true"
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    reader = csv.DictReader(io.StringIO(text))
+    cols = _columns(reader.fieldnames or [])
+    if "item" not in cols and "sku" not in cols:
+        raise HTTPException(400, "No column for the item or its SKU was found. Expected headers like Lineitem name, Item Name or SKU")
+    models = session.exec(select(Model3D)).all()
+    existing = " ".join(n for n in session.exec(select(Order.notes).where(Order.notes.is_not(None))).all() if n)
+    groups: dict = {}
+    for n, row in enumerate(reader):
+        if n >= MAX_IMPORT_ROWS:
+            break
+        get = lambda key: (row.get(cols[key]) or "").strip() if key in cols else ""
+        key = get("order") or f"row-{n + 1}"
+        g = groups.setdefault(key, {"customer": "", "contact": "", "lines": []})
+        g["customer"] = g["customer"] or get("customer")
+        g["contact"] = g["contact"] or get("contact")
+        qty = _money(get("quantity")) or 1
+        g["lines"].append({"item": get("item"), "sku": get("sku"), "quantity": max(1, min(10000, int(qty))), "price": _money(get("price"))})
+    report = {"orders": [], "skipped": [], "lines": 0, "matched": 0, "dry": dry}
+    for key, g in groups.items():
+        marker = f"[import:{key}]"
+        if marker in existing:
+            report["skipped"].append(key)
+            continue
+        matched, missing = [], []
+        for line in g["lines"]:
+            model = _match_model(models, line["sku"], line["item"])
+            if model:
+                matched.append((model, line))
+            else:
+                missing.append(f"{line['item'] or line['sku'] or 'an item'} x {line['quantity']}")
+        report["lines"] += len(g["lines"])
+        report["matched"] += len(matched)
+        report["orders"].append({"order": key, "customer": g["customer"] or f"Order {key}", "matched": [{"filename": m.filename, "quantity": l["quantity"], "unit_price": l["price"]} for m, l in matched], "unmatched": missing})
+        if dry:
+            continue
+        notes = f"Imported from a shop export {marker}" + (f". Not matched to a model: {'; '.join(missing)}" if missing else "")
+        order = Order(customer=(g["customer"] or f"Order {key}")[:120], contact=g["contact"][:200] or None, status="accepted", notes=notes[:4000])
+        session.add(order)
+        session.commit()
+        session.refresh(order)
+        for model, line in matched[:100]:
+            session.add(OrderItem(order_id=order.id, model_id=model.id, quantity=line["quantity"], unit_price=line["price"]))
+        session.commit()
+    if not dry and report["orders"]:
+        activity.record(session, activity.actor_of(request), "order", f"Imported {len(report['orders'])} order(s) from a shop export")
+    return report
+
+
 @router.get("/export.csv")
 def export_csv(session: Session = Depends(get_session)):
     """Every order as a spreadsheet (cells that start like a formula are stored as text)."""

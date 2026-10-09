@@ -414,3 +414,9 @@ tr.flash td { animation: flash-row 1.2s ease-in-out 2; }
 #collections-list li { flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; }
 #collections-list li .panel { flex-basis: 100%; }
 #collections-list li .col-name { flex: 1; }
+
+/* queue controls, spool database */
+.queue-tag { width: 7em; }
+.queue-hold-label { display: inline-flex !important; }
+.fil-db-row { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.fil-db-swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border); flex: none; }

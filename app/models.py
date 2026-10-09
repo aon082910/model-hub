@@ -130,6 +130,9 @@ class QueueItem(SQLModel, table=True):
     order_id: Optional[int] = Field(default=None, index=True)       # the order this print is for
     order_item_id: Optional[int] = None
     uses: Optional[str] = None                 # JSON [{slot|filament_id, grams}]: a multicolour job's spools (else filament_id/slot above)
+    priority: Optional[int] = None             # -1 low, 0 or empty normal, 1 high
+    held: Optional[bool] = None                # waiting for someone to look at it: not suggested, assigned or sent until released
+    printer_tag: Optional[str] = None          # only a printer with this tag may print it
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -293,6 +296,7 @@ class Printer(SQLModel, table=True):
     bed_z: Optional[float] = None
     plug_kind: Optional[str] = None      # a smart plug that measures its power: tasmota or shelly
     plug_host: Optional[str] = None      # its address on your network
+    tags: Optional[str] = None           # comma-separated labels (a room, a group, a nozzle size) a queue entry can ask for
     pause_on_failure: Optional[bool] = None   # with watching on: pause the print after three bad looks in a row
     watch_failures: Optional[bool] = None   # look at its camera now and then for a failing print (needs a camera and a local vision model)
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool

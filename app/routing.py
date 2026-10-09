@@ -8,6 +8,10 @@ from app import fit, slots
 from app.models import Filament, Model3D, Printer, QueueItem
 
 
+def tag_list(printer: Printer) -> list:
+    return [t for t in (printer.tags or "").split(",") if t]
+
+
 def _load_minutes(session: Session, printer_id: int) -> float:
     return sum(float(q.estimated_minutes or 60) for q in session.exec(select(QueueItem).where(QueueItem.printer_id == printer_id, QueueItem.status.in_(["queued", "printing"]))).all())
 
@@ -18,6 +22,8 @@ def suggest_for(session: Session, item: QueueItem, printers: list, overview: dic
     out = []
     for printer in printers:
         reasons, score, slot = [], 100.0, None
+        if item.printer_tag and item.printer_tag.lower() not in tag_list(printer):
+            continue                                                      # it asked for a tag this printer does not have
         verdict = fit.fits(model, printer) if model else None
         if verdict is False:
             continue                                                      # it does not fit: not an option
@@ -34,6 +40,9 @@ def suggest_for(session: Session, item: QueueItem, printers: list, overview: dic
                 score += 30
                 slot = exact["slot"]
                 reasons.append(f"has that spool in slot {slot}")
+                if item.estimated_grams and spool.remaining_g < item.estimated_grams:
+                    score -= 60
+                    reasons.append(f"but only {spool.remaining_g:g} g of it is left, and this print needs about {item.estimated_grams:g} g")
             elif same:
                 score += 12
                 slot = same["slot"]
@@ -49,7 +58,7 @@ def suggestions(session: Session, item_ids: Optional[list] = None) -> dict:
     """{queue entry id: [candidates, best first]} for waiting entries that have no printer yet."""
     printers = session.exec(select(Printer).order_by(Printer.name)).all()
     overview = {p["id"]: p for p in slots.overview(session)}
-    stmt = select(QueueItem).where(QueueItem.status == "queued", QueueItem.printer_id.is_(None)).order_by(QueueItem.position)
+    stmt = select(QueueItem).where(QueueItem.status == "queued", QueueItem.printer_id.is_(None), QueueItem.held.is_not(True)).order_by(QueueItem.position)
     result = {}
     for item in session.exec(stmt).all():
         if item_ids is not None and item.id not in item_ids:

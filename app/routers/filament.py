@@ -49,6 +49,33 @@ def _note_price(session: Session, f: Filament) -> None:
         session.commit()
 
 
+@router.get("/db/status")
+def db_status():
+    """Whether the Open Filament Database list has been downloaded, and how old it is."""
+    from app import filament_db
+    return filament_db.status()
+
+
+@router.post("/db/update")
+def db_update():
+    """Download (or refresh) the Open Filament Database list. The only address ever contacted is api.openfilamentdatabase.org."""
+    from app import filament_db
+    try:
+        return filament_db.update()
+    except filament_db.DatabaseError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.get("/db/search")
+def db_search(q: str = "", limit: int = 30):
+    """Spool presets matching every word of q (brand, name, material or colour)."""
+    from app import filament_db
+    try:
+        return {"results": filament_db.search(q, max(1, min(limit, 100)))}
+    except filament_db.DatabaseError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.get("/drying/overview")
 def drying_overview(session: Session = Depends(get_session)):
     """{spool id: how dry it should be} for spools that have an opened or dried date."""

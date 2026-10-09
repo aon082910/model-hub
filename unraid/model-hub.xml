@@ -40,6 +40,16 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.21.0
+From a round of research into what other print-farm and library tools offer:
+waiting prints get a priority, a hold box and an optional needed tag (printers
+can carry tags), with ordering by priority or shortest first. Starting a print
+checks the spool has enough filament. A G-code file with no weight gets one
+worked out from its length. Spools can be looked up in the Open Filament
+Database (downloaded once on request). Orders can be imported from a shop's
+CSV export (Shopify, Etsy, WooCommerce, eBay). No new settings are required;
+new columns are added automatically on first start.
+
 ### 2.20.0
 Starts can be kept apart: set a number of minutes between starts and/or a most
 printers printing at once (Settings, Print planning) and Model Hub says why it

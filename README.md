@@ -225,7 +225,7 @@ farms with limited power.
 
 **Research for versions 2.16 to 2.19:** I asked what else people want from a self-hosted 3D-print library and what other tools are praised for, and built the
 ones that fit this program: every spool of a multicolour print, pause/resume/cancel, bed sizes and "will it fit", off-site backups, a cost calculator, orders for people who sell prints, choosing the printer, Spoolman, watching a camera for a failed print (with your own local vision model,
-not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models, collection covers, NFC tags for spools, staggered starts with a power limit, and an optional pause when the camera sees a failure (it never cancels, because a wrong guess would ruin a good print). More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
+not a service), mesh check and repair, sharing from a phone, creator pages, drying reminders, where the disk space goes, smart-plug energy, filament for part-printed failures, starred models, collection covers, NFC tags for spools, staggered starts with a power limit, and an optional pause when the camera sees a failure (it never cancels, because a wrong guess would ruin a good print). A further research round (a multi-source search checked claim by claim) added queue priority, hold and tags, the low-spool check, filament weight from G-code length, the spool database and the shop-order import. Left out on purpose: *ActivityPub federation* (a large project with no sign of demand here), mounting external folders (the library folder is already read in place) and direct shop connections (credentials I cannot test). *NIH 3D* has no documented interface (its site runs on private calls), so it was not added; *Sketchfab* and *MyMiniFactory* downloads need your own login, which is what the existing sources already ask of you. More model sources were searched for as well (museum, scan and asset libraries such as Europeana, MorphoSource and Poly Haven):
 their models are mostly made for screens, not for printing, or need an account or a key, so none was added.
 
 Seven more lists of free-model sites (WeNext, Phrozen, Kingroon, eufyMake, 3Dprinting.com, 3Dnatives and Creality Cloud's own tag pages) added no new site. Their picks are Printables,
@@ -532,6 +532,28 @@ looks failed (loose strings, a part knocked off, a blob). Two bad looks in a row
 
 Under the watching switch, *Also pause the print after three bad looks in a row* lets Model Hub pause the print (Klipper, OctoPrint or Bambu), never cancel it. The warning still comes after two bad looks; the pause after a third, six minutes in, and you are told it
 was paused (or that it could not be, and why). Resume or cancel from the printer card once you have looked. It is off by default and can only be switched on for a printer that is watched; a vision model can be wrong, so a pause costs you a click, never a print.
+
+## Queue: priority, hold, tags and order
+
+Each waiting print has a **priority** (high, normal, low), a **hold** box and an optional **needs tag**. A held print is not suggested, assigned or sent until you release it (useful when someone must look at it first). Printers can carry **tags** (a room, a group, a nozzle size: printer card, *Tags*);
+a print that needs a tag is only suggested for, and only sent to, a printer that has it. **By priority** puts high priority first and keeps the order they were added; **Shortest first** orders by estimated time inside each priority, but anything that has waited two days or more goes first of its priority, so a long print
+is never starved. A suggested printer whose loaded spool is nearly empty for that print ranks last.
+
+## Filament from the length, and a low-spool check
+
+When a kept G-code file has no weight in it (some slicers only write the length), Model Hub works the weight out from the length of filament, the filament's diameter (1.75 mm unless the file says otherwise) and the material's density (PLA 1.24, PETG 1.27, ABS 1.04 and so on), so it is a good estimate but not a measurement.
+Starting a print from the queue now checks the spool: if it holds less than the print is expected to use, Model Hub says how much is left and asks before starting anyway. Sending without starting is not checked.
+
+## Spool presets (Open Filament Database)
+
+On **Filament**, *Find a spool in the Open Filament Database* searches a community list of about 14 000 colours (brand, material, colour, hex colour and the spool weights sold), kept by the Open Filament Collective and published under the MIT licence. Press *Download or update the list* once (about 6 MB, only from
+api.openfilamentdatabase.org; nothing is sent there); then search by any words (*prusament galaxy black*) and *Use* fills the form, colour included. The list is only a convenience: you can still type any spool by hand.
+
+## Importing a shop's orders
+
+**Orders → Import orders from a shop's export** reads the CSV you can download from Shopify, Etsy, WooCommerce, eBay and most other shops (it recognises their usual column names: order number or id, customer or shipping name, email, item name or title, SKU, quantity, price). Each order number becomes one order (status *accepted*);
+each line is matched to a library model when its SKU equals the model's file name, or when its title and exactly one model's name contain each other (a title that fits several models is never guessed). Lines that match nothing are listed in the order's notes so nothing is lost, and the same file imported twice makes no copies. *Preview* shows the result without saving. Connecting a shop directly
+(its API and webhooks) is not done: that needs each shop's credentials and was not something I could test here.
 
 ## Staggered starts and a power limit
 
