@@ -108,6 +108,13 @@ def printer(monkeypatch, authed):
     assert r.status_code == 200, r.text
     state["id"] = r.json()["id"]
     yield state
+    from sqlmodel import Session, select
+    from app.db import engine
+    from app.models import PrinterJob
+    with Session(engine) as s:                       # leave no sent-job rows for other tests to trip over
+        for job in s.exec(select(PrinterJob).where(PrinterJob.printer_id == state["id"])).all():
+            s.delete(job)
+        s.commit()
     for p in authed.get("/api/printers").json()["printers"]:
         authed.delete(f"/api/printers/{p['id']}")
 
