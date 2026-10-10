@@ -496,6 +496,12 @@
       <div id="printers-bulk" class="row hidden"><span class="muted">Ticked printers:</span><button id="bulk-pause">Pause</button><button id="bulk-resume">Resume</button><button id="bulk-cancel" class="danger">Cancel the print</button>
         <button id="bulk-select-printing">Tick the printing ones</button><button id="bulk-select-none">Tick none</button><span id="printers-bulk-msg" class="muted"></span></div>
       <div id="printers-list"></div>
+      <details id="discover-box">
+        <summary>Find printers on my network</summary>
+        <p class="muted">Looks for Klipper (Moonraker) and OctoPrint printers in a network range of your own (like <code>192.168.1.0/24</code>; private ranges only, at most 256 addresses) and for addresses that look like a Bambu Lab printer. Nothing is changed; pick one to fill in the form below. Model Hub runs in a container: use the range of your real network, not the container's.</p>
+        <div class="row"><input id="discover-range" placeholder="192.168.1.0/24" value=""><button id="discover-go">Scan</button><span id="discover-status" class="muted"></span></div>
+        <div id="discover-results"></div>
+      </details>
       <details id="printers-add-box">
         <summary>Add a printer</summary>
         <div class="row">
@@ -623,6 +629,11 @@
       <button id="save-notify-btn">Save Notification Settings</button>
       <button id="notify-test-btn">Send a test message</button>
       <span id="notify-test-status" class="muted"></span>
+      <div class="row"><label>Quiet from <input id="quiet-start" type="time" style="width:8em"></label><label>to <input id="quiet-end" type="time" style="width:8em"></label>
+        <span class="muted">(ordinary messages wait and arrive together when it ends; a failure or a failed backup always comes at once)</span></div>
+      <div class="row"><label class="inline-check"><input type="checkbox" id="digest-daily"> Send ordinary messages once a day, together, at</label><input id="digest-time" type="time" style="width:8em">
+        <button id="quiet-save">Save</button><span id="quiet-status" class="muted"></span></div>
+      <p class="muted">Times are the server's own clock (set the container's <code>TZ</code> to your zone).</p>
       <p class="muted">Tell me about:</p>
       <div id="notify-events"></div>
       <div class="row"><label>Tell me every <input id="notify-progress-step" type="number" min="1" max="50" placeholder="10" style="width:5em"> % of a print (when that is switched on)</label>
@@ -655,6 +666,12 @@
       </details>
       <details><summary>Bark (iPhone)</summary>
         <div class="row"><input id="bark-key" type="password" autocomplete="new-password" placeholder="Device key"><input id="bark-server" placeholder="https://api.day.app (leave empty for the default)"></div>
+      </details>
+      <details><summary>E-mail (SMTP)</summary>
+        <div class="row"><input id="smtp-host" placeholder="smtp.example.com"><input id="smtp-port" placeholder="port (587)" style="width:9em" inputmode="numeric">
+          <select id="smtp-security" aria-label="Connection security"><option value="starttls">STARTTLS (587)</option><option value="ssl">SSL/TLS (465)</option><option value="none">none (a mail server on your own network)</option></select></div>
+        <div class="row"><input id="smtp-user" placeholder="User name (if needed)" autocomplete="off"><input id="smtp-password" type="password" autocomplete="new-password" placeholder="Password"></div>
+        <div class="row"><input id="smtp-from" placeholder="From: hub@example.com"><input id="smtp-to" placeholder="To: you@example.com, other@example.com"></div>
       </details>
       <div class="row"><button id="channels-save">Save</button><button id="channels-test">Send a test message</button><span id="channels-status" class="muted"></span></div>
     </div>
@@ -799,6 +816,20 @@
       <p class="muted"><b>Quotes:</b> on an order that is still a quote, <i>Make a link for the customer</i> gives a page where they can look at the quote and accept or decline it, without signing in. It shows only the items, prices, total and date.</p>
       <div class="row"><input id="shop-name" placeholder="Your shop name on the quote page" maxlength="80"><input id="quote-currency" placeholder="Currency sign, like $" maxlength="6" style="width:10em"><button id="quote-save">Save</button><span id="quote-status" class="muted"></span></div>
       <label class="inline-check"><input type="checkbox" id="stock-auto-restock"> Keep the shelf stocked: when finished parts fall below their minimum (an order took them, or you sold some), put prints for them in the queue by themselves</label>
+    </div>
+
+    <h2>Camera wall</h2>
+    <div class="settings-form" id="wall-box">
+      <p class="muted">One page with the latest camera picture of every printer that has a camera address, for a tablet or a TV, without anyone signing in. The pictures are <b>stills that refresh every few seconds</b>, not live video, and each camera is asked at most once every two seconds however many people look. The link holds a secret: anyone who has it can look. Home Assistant, Frigate or a kiosk can use <code>/wall/&lt;secret&gt;/cam/&lt;printer id&gt;.jpg</code> as a still-picture camera.</p>
+      <div id="wall-body"></div>
+    </div>
+
+    <h2>Log and support</h2>
+    <div class="settings-form" id="log-box">
+      <p class="muted">The latest log lines (secrets blanked), and a zip you can send when asking for help: version, what is stored (counts only), which settings are set (names, never values), printers without their keys, and the log.</p>
+      <div class="row"><select id="log-level"><option value="INFO">info and worse</option><option value="WARNING">warnings and errors</option><option value="ERROR">errors only</option></select>
+        <input id="log-filter" placeholder="Search the log" style="min-width:14em"><button id="log-refresh">Show</button><a class="button-link" href="/api/system/support-bundle.zip" download>Download a support bundle</a></div>
+      <pre id="log-lines" class="muted" style="max-height:18em;overflow:auto;white-space:pre-wrap;font-size:12px"></pre>
     </div>
 
     <h2>Status page for a wall display</h2>

@@ -45,7 +45,7 @@ def snapshot(session: Session) -> dict:
     printers = []
     for p in session.exec(select(Printer).order_by(Printer.name)).all():
         st = printwatch.latest.get(p.id) or {}
-        printers.append({"name": p.name, "online": bool(st.get("online")), "state": st.get("state") or "unknown", "progress": st.get("progress"),
+        printers.append({"name": p.name, "online": bool(st.get("online")), "state": "out of service" if p.out_of_service else (st.get("state") or "unknown"), "progress": st.get("progress"),
                          "nozzle": st.get("nozzle"), "bed": st.get("bed"), "file": (st.get("file") if show_files else None)})
     waiting = session.exec(select(QueueItem).where(QueueItem.status == "queued")).all()
     return {"updated": datetime.utcnow().isoformat() + "Z", "printers": printers,

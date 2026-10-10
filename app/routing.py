@@ -61,8 +61,8 @@ def suggest_for(session: Session, item: QueueItem, printers: list, overview: dic
     strict = strict_wanted(session, item) and spool is not None
     for printer in printers:
         reasons, score, slot = [], 100.0, None
-        if sensors.hold_reason(session, printer.id):
-            continue                                                      # a sensor says it should not be started now
+        if printer.out_of_service or sensors.hold_reason(session, printer.id):
+            continue                                                      # out of service, or a sensor says it should not be started now
         if only is not None and printer.id not in only:
             continue                                                      # its sliced files are all made for other printers
         if strict and not exact_match_in(spool, overview.get(printer.id), session):

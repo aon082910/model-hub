@@ -320,7 +320,7 @@ def _bambu_status(host, serial, code, result):
     percent = report.get("mc_percent")
     result.update(online=True, state=state, progress=float(percent) if isinstance(percent, (int, float)) and not isinstance(percent, bool) else None,
                   file=(report.get("subtask_name") or report.get("gcode_file") or None),
-                  nozzle=_number(report.get("nozzle_temper")), bed=_number(report.get("bed_temper")), ams=_bambu_ams(report), hms=_bambu_hms(report))
+                  nozzle=_number(report.get("nozzle_temper")), bed=_number(report.get("bed_temper")), chamber=_number(report.get("chamber_temper")), ams=_bambu_ams(report), hms=_bambu_hms(report))
     return result
 
 

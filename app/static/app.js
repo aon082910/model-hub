@@ -3444,6 +3444,12 @@ async function loadPrinters() {
       <span class="printer-state muted">checking...</span>
       ${(printerInfo.plate_awaiting || []).includes(p.id) ? '<span class="badge plate-badge" title="A print ended here and nobody has said the plate is clear">plate not cleared</span> <button class="printer-plate-clear">Plate is clear</button>' : ''}
       <button class="printer-delete">Remove</button>
+      <label class="inline-check" title="Never suggested for a print, and starting one on it asks first"><input type="checkbox" class="printer-parked" ${p.out_of_service ? 'checked' : ''}> out of service</label>
+      <button class="printer-diagnose">Why can't it connect?</button><div class="printer-diagnose-result muted" style="flex-basis:100%;width:100%"></div>
+      <details class="printer-temps" style="flex-basis:100%;width:100%"><summary>Temperatures</summary>
+        <div class="row"><select class="temps-hours" aria-label="How far back"><option value="1">last hour</option><option value="6" selected>last 6 hours</option><option value="24">last 24 hours</option></select></div>
+        <div class="temps-chart muted">Open to load.</div>
+      </details>
       <details class="printer-bed"><summary>Bed size${p.bed_x && p.bed_y ? ` (${p.bed_x} x ${p.bed_y}${p.bed_z ? ' x ' + p.bed_z : ''})` : ''}</summary>
         <p class="muted">In mm. With it, Model Hub can say which models fit this printer and warn when a queued model is too big.</p>
         <div class="row"><input type="number" class="printer-bed-x" min="10" max="5000" value="${p.bed_x || ''}" placeholder="width" aria-label="Bed width"><input type="number" class="printer-bed-y" min="10" max="5000" value="${p.bed_y || ''}" placeholder="depth" aria-label="Bed depth"><input type="number" class="printer-bed-z" min="10" max="5000" value="${p.bed_z || ''}" placeholder="height" aria-label="Build height">
@@ -3500,6 +3506,56 @@ $('#printer-add').addEventListener('click', async () => {
   $('#printers-status').textContent = res.ok ? 'Added.' : await sourceErrorText(res);
   if (res.ok) { $('#printer-name').value = ''; $('#printer-url').value = ''; $('#printer-key').value = ''; $('#printer-snapshot').value = ''; loadPrinters(); }
 });
+function drawTemps(box, data) {
+  const pts = data.samples.filter(s => s.t);
+  if (pts.length < 2) { box.innerHTML = 'Not enough readings yet: a reading is kept about once a minute while the printer is printing or hot.'; return; }
+  const w = 560, h = 160, pad = 28;
+  const t0 = Date.parse(pts[0].t), t1 = Date.parse(pts[pts.length - 1].t) || t0 + 1;
+  const vals = pts.flatMap(s => [s.nozzle, s.bed, s.chamber]).filter(v => typeof v === 'number');
+  const top = Math.max(60, Math.ceil(Math.max(...vals) / 20) * 20);
+  const x = t => pad + (Date.parse(t) - t0) / Math.max(1, t1 - t0) * (w - pad - 6);
+  const y = v => h - pad / 2 - (v / top) * (h - pad);
+  const line = (key, colour) => {
+    const path = pts.filter(s => typeof s[key] === 'number').map(s => `${x(s.t).toFixed(1)},${y(s[key]).toFixed(1)}`).join(' ');
+    return path ? `<polyline fill="none" stroke="${colour}" stroke-width="1.6" points="${path}"/>` : '';
+  };
+  const grid = [0, 0.5, 1].map(f => `<line x1="${pad}" x2="${w - 6}" y1="${y(top * f)}" y2="${y(top * f)}" stroke="currentColor" opacity="0.15"/><text x="2" y="${y(top * f) + 4}" font-size="10" fill="currentColor" opacity="0.6">${Math.round(top * f)}</text>`).join('');
+  const last = pts[pts.length - 1];
+  const deg = v => (typeof v === 'number' ? Math.round(v) : '-');
+  box.innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-width:${w}px" role="img" aria-label="Temperature history">${grid}${line('nozzle', '#ef4444')}${line('bed', '#3b82f6')}${line('chamber', '#22c55e')}</svg>
+    <div class="muted"><span style="color:#ef4444">&#9632;</span> nozzle ${deg(last.nozzle)} &middot; <span style="color:#3b82f6">&#9632;</span> bed ${deg(last.bed)}${pts.some(s => typeof s.chamber === 'number') ? ` &middot; <span style="color:#22c55e">&#9632;</span> chamber ${deg(last.chamber)}` : ''} &middot; &deg;C, ${new Date(pts[0].t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to ${new Date(last.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>`;
+}
+async function loadTemps(row) {
+  const box = row.querySelector('.temps-chart');
+  const res = await fetch(`/api/printers/${row.dataset.id}/temps?hours=${row.querySelector('.temps-hours').value}`);
+  if (!res.ok) { box.textContent = await sourceErrorText(res); return; }
+  drawTemps(box, await res.json());
+}
+$('#printers-list').addEventListener('toggle', (e) => {
+  if (e.target.classList && e.target.classList.contains('printer-temps') && e.target.open) loadTemps(e.target.closest('.printer-row'));
+}, true);
+
+$('#discover-go').addEventListener('click', async () => {
+  const out = $('#discover-results');
+  $('#discover-status').textContent = 'Scanning (a /24 takes about half a minute)...';
+  out.innerHTML = '';
+  const res = await jsonRequest('POST', '/api/printers/discover', { range: $('#discover-range').value.trim() });
+  if (!res.ok) { $('#discover-status').textContent = await sourceErrorText(res); return; }
+  const d = await res.json();
+  $('#discover-status').textContent = `Looked at ${d.scanned} addresses, found ${d.found.length}.`;
+  out.innerHTML = d.found.map((f, i) => `<div class="row" data-i="${i}"><b>${esc(f.name)}</b><span class="muted">${esc(f.note)} &middot; ${esc(f.ip)}</span>${f.added ? '<span class="badge">already added</span>' : '<button class="discover-pick">Use this</button>'}</div>`).join('') || '<p class="muted">Nothing that looks like a printer answered.</p>';
+  out.onclick = (e) => {
+    if (!e.target.classList.contains('discover-pick')) return;
+    const f = d.found[parseInt(e.target.closest('.row').dataset.i)];
+    $('#printers-add-box').open = true;
+    $('#printer-kind').value = f.kind;
+    $('#printer-kind').dispatchEvent(new Event('change'));
+    $('#printer-name').value = f.name === f.ip ? '' : f.name;
+    $('#printer-url').value = f.kind === 'bambu' ? f.ip : f.url;
+    $('#printer-name').focus();
+  };
+});
+
 $('#printers-list').addEventListener('click', async (e) => {
   const row = e.target.closest('.printer-row');
   if (row && e.target.classList.contains('printer-bed-save')) {
@@ -3557,6 +3613,15 @@ $('#printers-list').addEventListener('click', async (e) => {
     out.textContent = res.ok ? `Its energy total is ${(await res.json()).total_kwh} kWh.` : await sourceErrorText(res);
     return;
   }
+  if (row && e.target.classList.contains('printer-diagnose')) {
+    const out = row.querySelector('.printer-diagnose-result');
+    out.textContent = 'Checking...';
+    const res = await fetch(`/api/printers/${row.dataset.id}/diagnose`, { method: 'POST' });
+    if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+    const d = await res.json();
+    out.innerHTML = '<br>' + d.steps.map(s => `${s.ok ? '&#10003;' : '&#10007;'} <b>${esc(s.step)}</b>: ${esc(s.detail)}`).join('<br>');
+    return;
+  }
   if (row && e.target.classList.contains('printer-plate-clear')) {
     await fetch(`/api/printers/${row.dataset.id}/plate-cleared`, { method: 'POST' });
     loadPrinters();
@@ -3587,6 +3652,13 @@ $('#printers-list').addEventListener('change', async (e) => {
   const row = e.target.closest('.printer-row');
   if (!row) return;
   const out = row.querySelector('.printer-watch-result');
+  if (e.target.classList.contains('temps-hours')) { loadTemps(row); return; }
+  if (e.target.classList.contains('printer-parked')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { out_of_service: e.target.checked });
+    if (!res.ok) { e.target.checked = !e.target.checked; showNotice(await sourceErrorText(res)); return; }
+    showNotice(e.target.checked ? 'Marked out of service: it will not be suggested for prints.' : 'Back in service.');
+    return;
+  }
   if (e.target.classList.contains('printer-plate-check')) {
     const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { plate_check: e.target.checked });
     if (!res.ok) { e.target.checked = !e.target.checked; out.textContent = await sourceErrorText(res); return; }
@@ -5355,8 +5427,8 @@ $('#quote-save').addEventListener('click', async () => {
 });
 $('#stock-auto-restock').addEventListener('change', () => saveSetting({ stock_auto_restock: $('#stock-auto-restock').checked ? 'true' : '' }));
 
-const CHANNEL_SECRETS = ['telegram_token', 'pushover_token', 'pushover_user', 'gotify_token', 'matrix_token', 'bark_key'];
-const CHANNEL_PLAIN = ['telegram_chat_id', 'telegram_topic', 'gotify_url', 'matrix_url', 'matrix_room', 'bark_server'];
+const CHANNEL_SECRETS = ['telegram_token', 'pushover_token', 'pushover_user', 'gotify_token', 'matrix_token', 'bark_key', 'smtp_password'];
+const CHANNEL_PLAIN = ['telegram_chat_id', 'telegram_topic', 'gotify_url', 'matrix_url', 'matrix_room', 'bark_server', 'smtp_host', 'smtp_port', 'smtp_security', 'smtp_user', 'smtp_from', 'smtp_to'];
 function loadChannels(s) {
   for (const k of CHANNEL_SECRETS) {
     const el = $('#' + k.replace(/_/g, '-'));
@@ -5397,6 +5469,38 @@ $('#metrics-save').addEventListener('click', async () => {
   $('#metrics-status').textContent = (await saveSetting(body)) ? 'Saved.' : 'Could not save.';
   loadMetrics();
 });
+
+function loadQuiet(s) {
+  $('#quiet-start').value = s.quiet_start || '';
+  $('#quiet-end').value = s.quiet_end || '';
+  $('#digest-daily').checked = s.digest_daily === 'true';
+  $('#digest-time').value = s.digest_time || '08:00';
+}
+$('#quiet-save').addEventListener('click', async () => {
+  const ok = await saveSetting({ quiet_start: $('#quiet-start').value, quiet_end: $('#quiet-end').value, digest_daily: $('#digest-daily').checked ? 'true' : '', digest_time: $('#digest-time').value });
+  $('#quiet-status').textContent = ok ? 'Saved.' : 'Could not save.';
+});
+
+async function loadWall() {
+  const box = $('#wall-body');
+  const res = await fetch('/api/settings/camera-wall');
+  if (!res.ok) { box.textContent = ''; return; }
+  const st = await res.json();
+  const post = async (body) => { const r = await jsonRequest('POST', '/api/settings/camera-wall', body); if (r.ok) loadWall(); else box.insertAdjacentHTML('beforeend', `<p class="error-text">${esc(await sourceErrorText(r))}</p>`); };
+  if (!st.enabled) { box.innerHTML = '<button id="wall-on">Turn the camera wall on</button>'; $('#wall-on').onclick = () => post({ enabled: true }); return; }
+  const link = location.origin + st.path;
+  box.innerHTML = `<div class="row"><input id="wall-link" readonly value="${esc(link)}" aria-label="The camera wall link" style="min-width:24em"><button id="wall-copy">Copy</button><a class="button-link" href="${esc(st.path)}" target="_blank" rel="noopener">Open it</a></div>
+    <div class="row"><button id="wall-rotate">Make a new link</button><button id="wall-off">Turn it off</button></div>`;
+  $('#wall-copy').onclick = async () => { $('#wall-link').select(); try { await navigator.clipboard.writeText(link); } catch (e) { /* selected: copy by hand */ } };
+  $('#wall-rotate').onclick = () => { if (confirm('The old link stops working. Make a new one?')) post({ rotate: true }); };
+  $('#wall-off').onclick = () => post({ enabled: false });
+}
+
+async function loadLog() {
+  const res = await fetch(`/api/system/logs?level=${$('#log-level').value}&q=${encodeURIComponent($('#log-filter').value.trim())}&limit=300`);
+  $('#log-lines').textContent = res.ok ? (await res.json()).lines.map(l => `${l.at.slice(11, 19)} ${l.level.slice(0, 4)} ${l.logger.replace('modelhub.', '')}: ${l.message}`).join('\n') || '(nothing at that level yet)' : await sourceErrorText(res);
+}
+$('#log-refresh').addEventListener('click', loadLog);
 
 async function loadStatusPage() {
   const box = $('#status-page-box');
@@ -5489,6 +5593,9 @@ async function loadSettings() {
   $('#plate-clear-gate').checked = s.plate_clear_gate === 'true';
   loadSignin(s);
   loadShops(s);
+  loadQuiet(s);
+  loadWall();
+  loadLog();
   loadChannels(s);
   loadMetrics();
   $('#notify-progress-step').value = s.notify_progress_step || '';

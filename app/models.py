@@ -301,12 +301,33 @@ class Printer(SQLModel, table=True):
     plug_kind: Optional[str] = None      # a smart plug that measures its power: tasmota or shelly
     plug_host: Optional[str] = None      # its address on your network
     tags: Optional[str] = None           # comma-separated labels (a room, a group, a nozzle size) a queue entry can ask for
+    out_of_service: Optional[bool] = None    # taken out of use for now (maintenance): never suggested, and starting a print on it asks first
     plate_check: Optional[bool] = None       # after a print, let the camera say whether the plate looks empty (needs a camera and a local vision model)
     pause_on_failure: Optional[bool] = None   # with watching on: pause the print after three bad looks in a row
     watch_failures: Optional[bool] = None   # look at its camera now and then for a failing print (needs a camera and a local vision model)
     slot_count: Optional[int] = None     # how many spool slots it has (an AMS, an MMU, a toolchanger...); none or 0 = one spool
     snapshot_url: Optional[str] = None   # the printer camera's still-picture address, for a photo when a print finishes
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TempSample(SQLModel, table=True):
+    """A printer's temperatures at one moment (about one a minute while it is printing or hot), kept for a day for the charts."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    printer_id: int = Field(index=True)
+    at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    nozzle: Optional[float] = None
+    bed: Optional[float] = None
+    chamber: Optional[float] = None
+
+
+class HeldNotice(SQLModel, table=True):
+    """A notification kept back by quiet hours or the daily digest, sent later as one message."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    at: datetime = Field(default_factory=datetime.now)          # the server's local time, as the digest times are
+    title: str
+    message: str
+    level: str = "normal"
+    event: Optional[str] = None
 
 
 class Order(SQLModel, table=True):

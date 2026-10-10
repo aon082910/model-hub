@@ -13,7 +13,7 @@ import secrets
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # Keys never echoed back in plaintext to the frontend after being set
-SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key"} | set(ACCESS_SECRETS) | secret_setting_keys()   # site tokens / API keys
+SECRET_KEYS = {"ai_api_key", "mqtt_password", "offsite_password", "ha_token", "metrics_token", "telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key", "smtp_password"} | set(ACCESS_SECRETS) | secret_setting_keys()   # site tokens / API keys
 
 
 @router.get("")
@@ -78,7 +78,7 @@ def notify_test(session: Session = Depends(get_session)):
     from app.settings_store import get_setting
     if not get_setting(session, "notify_webhook_url") and not channels.configured(session):
         raise HTTPException(400, "Save a webhook URL, or set up Telegram, Pushover, Gotify, Matrix or Bark, first")
-    if not notify(session, "Model Hub: test", "If you can read this, notifications work."):
+    if not notify(session, "Model Hub: test", "If you can read this, notifications work.", hold=False):          # a test is sent at once, even in quiet hours
         raise HTTPException(502, "Nothing accepted the message (check the addresses and keys)")
     return {"status": "sent", "channels": (["webhook"] if get_setting(session, "notify_webhook_url") else []) + channels.configured(session)}
 

@@ -40,6 +40,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-09</Date>
   <Changes>
+### 2.28.0
+Quiet hours and a daily digest for notifications (alarms always come at
+once), e-mail (SMTP) as another way to be told, and a printer can be marked
+out of service so it is never suggested or started without asking. A camera
+wall page shows every printer's latest camera picture (stills that refresh
+every few seconds) for a tablet or TV, and each picture can be used as a
+still camera in Home Assistant. Each printer card has a temperature chart for
+the last day and a "Why can't it connect?" check; a network scan finds
+Klipper and OctoPrint printers; Settings has a log viewer and a support
+bundle with no secrets in it. New tables and columns are added automatically.
+
 ### 2.27.0
 Sign-in: two-step sign-in with an authenticator app and single-use backup
 codes, single sign-on (OpenID Connect: Authentik, Keycloak, Authelia and

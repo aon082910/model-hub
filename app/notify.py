@@ -88,10 +88,18 @@ def notify_event(session: Session, event: str, title: str, message: str, fields:
     return notify(session, title, apply_template(session, event, message, fields), image, level=level_of(event), event=event, fields=fields)
 
 
-def notify(session: Session, title: str, message: str, image: Optional[bytes] = None, level: str = "normal", event: Optional[str] = None, fields: Optional[dict] = None) -> bool:
-    """Tell you: to the webhook (if set) and to every other channel that is set up (Telegram, Pushover, Gotify, Matrix, Bark). True if any took it."""
+def notify(session: Session, title: str, message: str, image: Optional[bytes] = None, level: str = "normal", event: Optional[str] = None, fields: Optional[dict] = None,
+           hold: bool = True) -> bool:
+    """Tell you: to the webhook (if set) and to every other channel that is set up (Telegram, Pushover, Gotify, Matrix, Bark, e-mail). True if any took it.
+    During quiet hours, or with the daily digest on, an ordinary message is kept and sent later with the others (an alarm never is; hold=False sends at once)."""
     from datetime import datetime
-    from app import channels
+    from app import channels, digest
+    if hold and digest.should_hold(session, level):
+        from app import channels as _c
+        if get_setting(session, "notify_webhook_url") or _c.configured(session):
+            digest.hold(session, title, message, level, event)
+            return True
+        return False
     sent = bool(channels.send_all(session, title, message, image, level))
     url = get_setting(session, "notify_webhook_url")
     if not url:

@@ -59,7 +59,9 @@ def status_text(session: Session) -> str:
     lines = []
     for p in session.exec(select(Printer).order_by(Printer.name)).all():
         st = printwatch.latest.get(p.id) or {}
-        if not st:
+        if p.out_of_service:
+            lines.append(f"{p.name}: out of service")
+        elif not st:
             lines.append(f"{p.name}: not seen yet")
         elif not st.get("online"):
             lines.append(f"{p.name}: offline")

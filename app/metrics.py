@@ -48,7 +48,7 @@ def render(session: Session) -> str:
     r = Registry()
     r.add("modelhub_info", "Which Model Hub this is.", "gauge", [({"version": version.VERSION}, 1)])
     printers = session.exec(select(Printer).order_by(Printer.id)).all()
-    ups, states, progress, nozzle, bed = [], [], [], [], []
+    ups, states, progress, nozzle, bed, chamber, parked = [], [], [], [], [], [], []
     for p in printers:
         st = printwatch.latest.get(p.id) or {}
         who = {"printer": p.name, "kind": p.kind}
@@ -59,11 +59,15 @@ def render(session: Session) -> str:
         progress.append((who, st.get("progress")))
         nozzle.append((who, st.get("nozzle")))
         bed.append((who, st.get("bed")))
+        chamber.append((who, st.get("chamber")))
+        parked.append((who, 1 if p.out_of_service else 0))
     r.add("modelhub_printer_up", "1 when the printer answered its last poll.", "gauge", ups)
     r.add("modelhub_printer_state", "1 for the printer's current state (printing, paused, idle...).", "gauge", states)
     r.add("modelhub_printer_progress_percent", "Progress of the print that is running.", "gauge", progress)
     r.add("modelhub_printer_nozzle_celsius", "Nozzle temperature.", "gauge", nozzle)
     r.add("modelhub_printer_bed_celsius", "Bed temperature.", "gauge", bed)
+    r.add("modelhub_printer_chamber_celsius", "Chamber temperature (printers that report it).", "gauge", chamber)
+    r.add("modelhub_printer_out_of_service", "1 when the printer is marked out of service.", "gauge", parked)
 
     logs = session.exec(select(PrintLog)).all()
     names = {p.id: p.name for p in printers}

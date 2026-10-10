@@ -23,6 +23,8 @@ def reason_to_wait(session: Session, printer: Printer, now: Optional[datetime] =
     """Why this printer should not be started right now, or None."""
     from app import printwatch
     now = now or datetime.utcnow()
+    if printer.out_of_service:
+        return f"{printer.name} is out of service (switch that off on its card when it is ready again)"
     from app import sensors
     held = sensors.hold_reason(session, printer.id)
     if held:

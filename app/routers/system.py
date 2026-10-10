@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from sqlmodel import Session
 
 from app import update_check, version
@@ -14,6 +17,20 @@ def get_version(request: Request, session: Session = Depends(get_session)):
     if user.get("role") == "admin":
         return update_check.status(session)
     return {"current": version.VERSION}
+
+
+@router.get("/logs")
+def get_logs(level: str = "INFO", q: Optional[str] = None, limit: int = Query(200, ge=1, le=1000)):
+    """The latest log lines (administrator only), newest last, with secrets blanked."""
+    from app import logbuffer
+    return {"lines": logbuffer.lines(level, q, limit)}
+
+
+@router.get("/support-bundle.zip")
+def support_bundle(session: Session = Depends(get_session)):
+    """A zip for asking for help: version, what is stored (counts), which settings are set (names only), printers without keys, and the recent log."""
+    from app import discovery
+    return Response(discovery.support_bundle(session), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="modelhub-support.zip"'})
 
 
 @router.post("/update-check")

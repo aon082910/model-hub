@@ -30,6 +30,8 @@ _progress_sent: dict = {} # printer id -> the last progress step announced
 
 
 def reset() -> None:
+    from app import temps
+    temps.reset()
     _last.clear()
     latest.clear()
     _energy_start.clear()
@@ -50,6 +52,11 @@ def poll(session: Session) -> list:
     for printer in printers:
         st = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
         latest[printer.id] = {**st, "name": printer.name}
+        try:
+            from app import temps
+            temps.record(session, printer.id, st)
+        except Exception as e:                   # a full disk or a database hiccup must never stop the poll
+            logger.info("Temperature reading not kept: %s", e.__class__.__name__)
         previous = _last.get(printer.id)
         if st["online"]:
             _announce(session, printer, previous, st)

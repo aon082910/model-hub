@@ -623,6 +623,28 @@ Every sign-in, failed sign-in, sign-out and security change is written to the ac
 **Quotes for customers.** On an order that is still a *quote*, **Make a link for the customer** gives a page that needs no sign-in: the items with quantity and prices, the total, the date wanted, your shop name, and *Accept* and *Decline* buttons (with an optional name and message). It never shows your costs, profit, notes or the customer's contact details, an answer changes the order once (*accepted* or *cancelled*) and you are told, and a link can be replaced or removed at any time.
 **Keeping the shelf stocked.** Tick *Keep the shelf stocked* and, whenever finished parts fall below their minimum (an order took some, or you sold some), prints for them are put in the queue by themselves, as many as are short counting what is already queued (at most 50 in one round); it adds nothing until something sells.
 
+## Quiet hours, a daily digest and e-mail
+
+**Settings → Notifications.** Set **quiet hours** (like 22:00 to 07:00) and ordinary messages are not sent during them but kept, and arrive together as one message when they end; or tick **once a day** and a time, and ordinary messages are collected all day and sent together at that time. A failure or a failed backup (an *alarm*) always comes straight through, and *Send a test message* is sent at once. Times are the server's own clock (set the container's `TZ` variable to your zone). At most 200 messages are held, as plain text (a camera picture is not kept), and they are not part of a backup.
+**E-mail** (Settings → More ways to be told → E-mail) sends the same messages by SMTP: STARTTLS (587), SSL/TLS (465) or, for a mail server on your own network, no encryption. A password is never sent unencrypted to a server outside your network. An alarm is marked *[ALARM]* and high priority; the password is kept out of backups.
+
+## A printer out of service
+
+On a printer's card, **out of service** takes it out of use for now (maintenance, a repair): it is never suggested for a print or picked by the automatic assignment, starting a print on it asks first (you can always start anyway), and it shows as *out of service* on the status page, the camera wall, in Telegram's `/status` and in the metrics (`modelhub_printer_out_of_service`).
+
+## Camera wall
+
+**Settings → Camera wall** gives a page with the latest camera picture of every printer that has a camera address, for a tablet or a TV, without anyone signing in. The pictures are **stills that refresh every four seconds, not live video**, and each camera is asked at most once every two seconds however many people look. The link holds a secret (anyone who has it can look); it can be replaced or switched off. Each picture is also at `/wall/<secret>/cam/<printer id>.jpg`, which Home Assistant, Frigate or a kiosk can use as a still-picture camera. It never shows an address or a key.
+
+## Temperature history
+
+Each printer's card has **Temperatures**: a chart of the nozzle, bed and (printers that report it, such as Bambu Lab) chamber temperature over the last hour, 6 hours or 24 hours. A reading is kept about once a minute while the printer is printing or hot, for a day; the readings are not part of a backup.
+
+## Finding printers, and why one cannot connect
+
+**Find printers on my network** (Print Queue page) scans a network range you give (like `192.168.1.0/24`: private ranges only, at most 256 addresses; Model Hub runs in a container, so give the range of your real network) for Klipper (Moonraker) and OctoPrint printers, and lists addresses that look like a Bambu Lab printer (both its ports open; adding one still needs its serial number and access code). Nothing is changed by a scan. **Why can't it connect?** on a printer's card checks step by step: does the address resolve, is the port open, does it answer and accept the key, does the camera give a picture, does the smart plug answer.
+**Settings → Log and support** shows the latest log lines (with anything that looks like a key, token, password or secret link blanked) and downloads a **support bundle**: the version, how much is stored (counts only), which settings are set (names, never values), the printers without their keys, and the log, to send when asking for help.
+
 ## The report
 
 **Stats → Report** shows any stretch of time (the last 30 days to start with) with filters for printer and material: print jobs, print time, success rate (finished over all prints), filament used, prints per day, the average print, how long the printers ran, and the cost of the prints (filament, electricity and machine time from Settings, Costs; a failed print costs only its filament). Below are a jobs-per-day chart and tables by printer

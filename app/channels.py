@@ -20,8 +20,11 @@ LEVELS = ("silent", "normal", "alarm")
 TELEGRAM_API = "https://api.telegram.org"
 PUSHOVER_API = "https://api.pushover.net/1/messages.json"
 BARK_DEFAULT = "https://api.day.app"
-CHANNELS = ("telegram", "pushover", "gotify", "matrix", "bark")
-SECRET_SETTINGS = ("telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key")
+CHANNELS = ("telegram", "pushover", "gotify", "matrix", "bark", "email")
+SECRET_SETTINGS = ("telegram_token", "pushover_token", "pushover_user", "gotify_token", "matrix_token", "bark_key", "smtp_password")
+SMTP_SECURITY = ("starttls", "ssl", "none")
+_ADDRESS = re.compile(r"^[^@\s,;<>()\[\]\"\\]{1,64}@[A-Za-z0-9.-]{1,200}\.[A-Za-z]{2,}$")
+_HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
 def _s(session: Session, key: str) -> str:
@@ -51,7 +54,69 @@ def configured(session: Session) -> list:
         out.append("matrix")
     if _s(session, "bark_key"):
         out.append("bark")
+    if email_ready(session):
+        out.append("email")
     return out
+
+
+def email_addresses(session: Session) -> list:
+    return [a for a in re.split(r"[\s,;]+", _s(session, "smtp_to")) if _ADDRESS.match(a)]
+
+
+def email_ready(session: Session) -> bool:
+    return bool(_HOST.match(_s(session, "smtp_host")) and _ADDRESS.match(_s(session, "smtp_from")) and email_addresses(session))
+
+
+def _private_host(host: str) -> bool:
+    import ipaddress
+    import socket
+    try:
+        ip = ipaddress.ip_address(socket.gethostbyname(host))
+    except (OSError, ValueError):
+        return False
+    return ip.is_private or ip.is_loopback
+
+
+def _email(session: Session, title: str, message: str, image: Optional[bytes], level: str) -> bool:
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    host, security = _s(session, "smtp_host"), _s(session, "smtp_security") or "starttls"
+    if security not in SMTP_SECURITY:
+        security = "starttls"
+    try:
+        port = int(_s(session, "smtp_port") or {"ssl": 465, "starttls": 587, "none": 25}[security])
+    except ValueError:
+        return False
+    user, password = _s(session, "smtp_user"), _s(session, "smtp_password")
+    if security == "none" and user and not _private_host(host):
+        logger.warning("E-mail not sent: a password would travel unencrypted to a host outside your network")
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = (("[ALARM] " if level == "alarm" else "") + re.sub(r"[\r\n]+", " ", title))[:200]
+    msg["From"] = _s(session, "smtp_from")
+    msg["To"] = ", ".join(email_addresses(session))
+    if level in ("alarm", "silent"):
+        msg["X-Priority"] = "1" if level == "alarm" else "5"
+    msg.set_content(message or "-")
+    if image:
+        msg.add_attachment(image, maintype="image", subtype="jpeg", filename="snapshot.jpg")
+    context = ssl.create_default_context()
+    try:
+        if security == "ssl":
+            server = smtplib.SMTP_SSL(host, port, timeout=20, context=context)
+        else:
+            server = smtplib.SMTP(host, port, timeout=20)
+        with server:
+            if security == "starttls":
+                server.starttls(context=context)
+            if user:
+                server.login(user, password)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        logger.warning("E-mail failed: %s", e.__class__.__name__)
+        return False
 
 
 def telegram_chats(session: Session) -> list:
@@ -129,7 +194,7 @@ def _bark(session: Session, title: str, message: str, image: Optional[bytes], le
         return False
 
 
-SENDERS = {"telegram": _telegram, "pushover": _pushover, "gotify": _gotify, "matrix": _matrix, "bark": _bark}
+SENDERS = {"telegram": _telegram, "pushover": _pushover, "gotify": _gotify, "matrix": _matrix, "bark": _bark, "email": _email}
 
 
 def send_all(session: Session, title: str, message: str, image: Optional[bytes] = None, level: str = "normal") -> list:

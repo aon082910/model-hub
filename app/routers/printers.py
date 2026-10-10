@@ -20,7 +20,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "plate_check": bool(printer.plate_check), "tags": [t for t in (printer.tags or "").split(",") if t], "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "plate_check": bool(printer.plate_check), "out_of_service": bool(printer.out_of_service), "tags": [t for t in (printer.tags or "").split(",") if t], "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
             "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
@@ -108,6 +108,10 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
             if tag.strip().lower() not in clean:
                 clean.append(tag.strip().lower())
         out["tags"] = ",".join(clean) or None
+    if "out_of_service" in payload:
+        if not isinstance(payload["out_of_service"], bool):
+            raise HTTPException(400, "out_of_service must be true or false")
+        out["out_of_service"] = payload["out_of_service"]
     if "plate_check" in payload:
         if not isinstance(payload["plate_check"], bool):
             raise HTTPException(400, "plate_check must be true or false")
@@ -183,6 +187,9 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     maintenance.forget_printer(session, printer_id)
     sensors.forget_printer(session, printer_id)
     plate.forget_printer(session, printer_id)
+    from sqlmodel import delete as _delete
+    from app.models import TempSample
+    session.exec(_delete(TempSample).where(TempSample.printer_id == printer_id))          # ids are reused: a new printer must not inherit the old one's readings
     for kept in session.exec(select(PrintFile).where(PrintFile.printer_id == printer_id)).all():
         kept.printer_id = None                         # a file made for a printer that is gone suits any printer again (ids are reused)
         session.add(kept)
@@ -190,6 +197,31 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     session.commit()
     activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")
     return {"status": "deleted"}
+
+
+@router.get("/{printer_id}/temps")
+def printer_temps(printer_id: int, hours: float = 6, session: Session = Depends(get_session)):
+    """The printer's nozzle, bed and chamber temperatures over the last few hours (at most 24), about one reading a minute while it was printing or hot."""
+    from app import temps
+    _get(session, printer_id)
+    return temps.history(session, printer_id, max(0.25, min(24.0, hours)))
+
+
+@router.post("/{printer_id}/diagnose")
+def diagnose_printer(printer_id: int, session: Session = Depends(get_session)):
+    """Check, step by step, why a printer cannot be reached (address, port, answer, key, camera, plug)."""
+    from app import discovery
+    return discovery.diagnose(_get(session, printer_id))
+
+
+@router.post("/discover")
+def discover_printers(payload: dict, session: Session = Depends(get_session)):
+    """Look for Klipper and OctoPrint printers in a private network range (like 192.168.1.0/24), and list addresses that look like a Bambu Lab printer."""
+    from app import discovery
+    try:
+        return discovery.scan(session, payload.get("range") or "")
+    except discovery.ScanError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/{printer_id}/snapshot")

@@ -12,11 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, engine
 from app.config import SCAN_INTERVAL_SECONDS
-from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, costs, orders, spoolman_router, share_target, creators, storage_router, favorites, profiles, status_page, budgets, sensors_router, analytics, stock_router, attachments_router, datasets_router, virtual_printer, metrics_router, shop_router, quote_router, queue, settings, ai, slicer, auth_router
+from app.routers import library, tags, collections, filament, inventory, projects, sources, source_match, discover, wishlist, backup, prints, duplicates, designers, source_updates, users, printers, bulk, saved_searches, families, shares, labels, system, stats, tokens, print_files, activity, library_io, filing_rules, estimates, planner, slots, maintenance, slicer_links, fit, offsite_router, costs, orders, spoolman_router, share_target, creators, storage_router, favorites, profiles, status_page, budgets, sensors_router, analytics, stock_router, attachments_router, datasets_router, virtual_printer, metrics_router, shop_router, quote_router, camera_wall_router, queue, settings, ai, slicer, auth_router
 from app.routers import bambu_send
 from app.auth import path_requires_auth, current_user, forbidden_reason, bootstrap_from_env, ensure_extension_api_key
 
 logging.basicConfig(level=logging.INFO)
+from app import logbuffer
+logbuffer.install()                       # the last log lines can be read in Settings and go in a support bundle
 logger = logging.getLogger("modelhub")
 
 @asynccontextmanager
@@ -109,6 +111,8 @@ app.include_router(status_page.public_router)
 app.include_router(shop_router.router)
 app.include_router(shop_router.public_router)
 app.include_router(quote_router.public_router)
+app.include_router(camera_wall_router.router)
+app.include_router(camera_wall_router.public_router)
 app.include_router(creators.router)
 app.include_router(storage_router.router)
 app.include_router(orders.router)
