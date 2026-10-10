@@ -33,6 +33,7 @@ EVENTS = {
     "dry_due": "A spool in a printer is due for drying",
     "stock_low": "Finished parts on the shelf are at or below their minimum",
     "slicer_upload": "A sliced file arrived from a slicer (the virtual printer)",
+    "schedule_blocked": "A print set to start by itself is waiting, or was given up",
     "order_new": "A new order came in from a shop",
     "quote_answer": "A customer accepted or declined a quote",
     "plate_clear": "A printer is waiting for its plate to be cleared (off until you switch it on)",

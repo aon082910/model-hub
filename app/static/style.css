@@ -446,3 +446,17 @@ table.facts a, .stat-cards a, .panel table a { color: var(--accent); }
 
 .stock-row a, .file-row a { color: var(--accent); }
 .file-row a.button-link { color: inherit; }
+
+
+/* themes (chosen per browser in Settings, Appearance) */
+:root[data-theme="light"] { color-scheme: light; --bg: #f4f6f9; --panel: #ffffff; --text: #1c2330; --muted: #5b6677; --border: #d3d9e2; --accent: #2563eb; }
+:root[data-theme="light"] .notice-bar { background: #fff4d6; color: #7a5a00; border-bottom-color: #d4a017; }
+:root[data-theme="light"] .creator-models img, :root[data-theme="light"] .col-cover { background: #e8ebf0; }
+:root[data-theme="light"] .card img { background: #e8ebf0; }
+:root[data-accent="green"] { --accent: #2e9e5b; }
+:root[data-accent="orange"] { --accent: #e0802b; }
+:root[data-accent="purple"] { --accent: #8b5cf6; }
+:root[data-accent="pink"] { --accent: #e0498f; }
+#shortcuts-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: center; }
+kbd { background: var(--panel); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font: 12px ui-monospace, monospace; }
+.compare-table td.diff { background: rgba(224, 168, 0, .18); }

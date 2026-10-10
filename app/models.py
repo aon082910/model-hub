@@ -137,6 +137,8 @@ class QueueItem(SQLModel, table=True):
     printer_tag: Optional[str] = None          # only a printer with this tag may print it
     cost_centre_id: Optional[int] = None      # the budget this print is charged to
     strict_match: Optional[bool] = None       # True: only a printer with exactly this material and colour loaded; None: follow Settings
+    start_at: Optional[datetime] = None       # start it by itself at this time (UTC), when Settings allows scheduled starts
+    start_note: Optional[str] = None          # why a scheduled start is waiting or was given up
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -499,6 +501,16 @@ class AppUser(SQLModel, table=True):
     password_hash: str
     role: str = "member"
     source: str = "local"                  # local, ldap or oidc: where this account's identity is proved
+    group_id: Optional[int] = None         # an access group that narrows what this role may do
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AccessGroup(SQLModel, table=True):
+    """A named set of limits for logins: areas they may not use, and which printers they may use. It only narrows what a login's role already allows."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    deny_json: str = "[]"                  # areas denied (keys of auth.GROUP_AREAS)
+    printers_json: Optional[str] = None    # a JSON list of printer ids that may be used; empty means every printer
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

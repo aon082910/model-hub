@@ -148,9 +148,12 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
 
 
 @router.get("")
-def list_printers(session: Session = Depends(get_session)):
+def list_printers(request: Request, session: Session = Depends(get_session)):
     rows = session.exec(select(Printer).order_by(Printer.name)).all()
     from app import plate
+    from app.auth import printer_allowed
+    user = getattr(request.state, "user", None)
+    rows = [p for p in rows if printer_allowed(user, p.id)]
     return {"printers": [_json(p) for p in rows], "plate_awaiting": sorted(plate.awaiting(session)) if plate.gate_enabled(session) else [], "slicer_ready": printing.slicer_ready(), "slicer_note": printing.slicer_note()}
 
 
@@ -197,6 +200,66 @@ def delete_printer(printer_id: int, request: Request, session: Session = Depends
     session.commit()
     activity.record(session, activity.actor_of(request), "printer", f"Removed the printer {name}")
     return {"status": "deleted"}
+
+
+def _online_printer(session: Session, printer_id: int) -> Printer:
+    printer = _get(session, printer_id)
+    state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
+    if not state["online"]:
+        raise HTTPException(502, state.get("message") or "The printer cannot be reached")
+    return printer
+
+
+@router.post("/{printer_id}/adjust")
+def adjust_printer(printer_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Change one thing on a printer: nozzle or bed target (degrees, 0 = off), speed (a percentage; a level 1-4 for Bambu Lab), fan (percent) or light (true/false, Bambu Lab).
+    Numbers outside safe limits are refused. Administrator only; the printer must answer."""
+    keys = [k for k in ("nozzle", "bed", "speed", "fan", "light") if k in payload]
+    if len(keys) != 1:
+        raise HTTPException(400, "Change one thing at a time: nozzle, bed, speed, fan or light")
+    key = keys[0]
+    printer = _online_printer(session, printer_id)
+    args = (printer.kind, printer.url, printer.api_key, printer.serial)
+    try:
+        if key in ("nozzle", "bed"):
+            printing.set_temperature(*args, key, payload[key])
+        elif key == "speed":
+            printing.set_speed(*args, payload[key])
+        elif key == "fan":
+            printing.set_fan(*args, payload[key])
+        else:
+            printing.set_light(*args, payload[key])
+    except printing.PrinterError as e:
+        raise HTTPException(400 if "must be" in str(e) or "Only" in str(e) or "is on or off" in str(e) else 502, str(e))
+    activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: {key} set to {payload[key]}")
+    return {"status": "sent", key: payload[key]}
+
+
+@router.get("/{printer_id}/objects")
+def printer_objects(printer_id: int, session: Session = Depends(get_session)):
+    """The objects of the print that is running (Klipper, when the file has object labels), so one can be skipped."""
+    printer = _get(session, printer_id)
+    try:
+        return printing.list_objects(printer.kind, printer.url, printer.api_key)
+    except printing.PrinterError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.post("/{printer_id}/skip-object")
+def skip_printer_object(printer_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Stop printing one object of the current print (Klipper). It only works while that printer is printing, and cannot be undone for this print."""
+    printer = _get(session, printer_id)
+    state = printing.status(printer.kind, printer.url, printer.api_key, printer.serial)
+    if not state["online"]:
+        raise HTTPException(502, state.get("message") or "The printer cannot be reached")
+    if state["state"] != "printing":
+        raise HTTPException(409, f"{printer.name} is not printing")
+    try:
+        printing.skip_object(printer.kind, printer.url, printer.api_key, printer.serial, payload.get("name"))
+    except printing.PrinterError as e:
+        raise HTTPException(400 if "cannot be used" in str(e) or "works on" in str(e) else 502, str(e))
+    activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: skipped the object {payload.get('name')}")
+    return {"status": "sent"}
 
 
 @router.get("/{printer_id}/temps")
@@ -265,7 +328,8 @@ def bulk_control(payload: dict, request: Request, session: Session = Depends(get
     action = payload.get("action")
     if action not in printing.CONTROL_ACTIONS:
         raise HTTPException(400, "action must be pause, resume or cancel")
-    everyone = session.exec(select(Printer).order_by(Printer.name)).all()
+    from app.auth import printer_allowed
+    everyone = [p for p in session.exec(select(Printer).order_by(Printer.name)).all() if printer_allowed(getattr(request.state, "user", None), p.id)]
     chosen = {}
     ids, state, tag = payload.get("printer_ids"), payload.get("state"), payload.get("tag")
     if ids is None and state is None and tag is None:

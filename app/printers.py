@@ -375,6 +375,11 @@ CONTROL_ACTIONS = ("pause", "resume", "cancel")
 
 def _bambu_command(host: str, serial: str, code: str, command: str, timeout: float = BAMBU_TIMEOUT) -> None:
     """Publish one print command (pause, resume, stop) to a Bambu printer. (Tests replace this.)"""
+    _bambu_publish(host, serial, code, {"print": {"sequence_id": "2", "command": command, "param": ""}}, timeout)
+
+
+def _bambu_publish(host: str, serial: str, code: str, payload: dict, timeout: float = BAMBU_TIMEOUT) -> None:
+    """Publish one request to a Bambu printer over its LAN MQTT. (Tests replace this.)"""
     import json
     import ssl
     import paho.mqtt.client as mqtt
@@ -386,7 +391,7 @@ def _bambu_command(host: str, serial: str, code: str, command: str, timeout: flo
     try:
         client.connect(host, BAMBU_PORT, keepalive=10)
         client.loop_start()
-        info = client.publish(f"device/{serial}/request", json.dumps({"print": {"sequence_id": "2", "command": command, "param": ""}}), qos=1)
+        info = client.publish(f"device/{serial}/request", json.dumps(payload), qos=1)
         info.wait_for_publish(timeout)
         if not info.is_published():
             raise PrinterError("The printer did not take the command (is the access code right?)")
@@ -415,6 +420,96 @@ def control(kind: str, url: str, api_key: Optional[str], serial: Optional[str], 
             response = _request(client, "POST", f"{url}/api/job", api_key, json=body)
         if response.status_code not in (200, 202, 204):
             raise PrinterError(f"The printer refused ({response.status_code}); is something printing?")
+
+
+# ---------- temperatures, speed, fan, light, skipping an object ----------
+
+MAX_NOZZLE = 300.0                  # hard limits: a number outside them is refused, whatever the printer would accept
+MAX_BED = 120.0
+BAMBU_SPEEDS = {1: "silent", 2: "standard", 3: "sport", 4: "ludicrous"}
+_OBJECT_NAME = re.compile(r"^[A-Za-z0-9_.:+-]{1,120}$")
+
+
+def _gcode(kind: str, url: str, api_key: Optional[str], serial: Optional[str], lines: list) -> None:
+    """Send G-code lines to the printer. Only lines Model Hub built itself from checked numbers are ever passed here."""
+    if kind == "bambu":
+        for line in lines:
+            _bambu_publish(url, serial or "", api_key or "", {"print": {"sequence_id": "2", "command": "gcode_line", "param": line + "\n"}})
+        return
+    with _client() as client:
+        if kind == "moonraker":
+            response = _request(client, "POST", f"{url}/printer/gcode/script", api_key, json={"script": "\n".join(lines)})
+        else:
+            response = _request(client, "POST", f"{url}/api/printer/command", api_key, json={"commands": lines})
+        if response.status_code not in (200, 202, 204):
+            raise PrinterError(f"The printer refused the command ({response.status_code})")
+
+
+def _checked(value, low: float, high: float, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+        raise PrinterError(f"{name} must be a number from {low:g} to {high:g}")
+    return float(value)
+
+
+def set_temperature(kind: str, url: str, api_key: Optional[str], serial: Optional[str], which: str, value) -> None:
+    """Set a heater's target (0 switches it off): which is nozzle or bed."""
+    if which == "nozzle":
+        target = _checked(value, 0, MAX_NOZZLE, "The nozzle temperature")
+        _gcode(kind, url, api_key, serial, [f"M104 S{target:g}"])
+    elif which == "bed":
+        target = _checked(value, 0, MAX_BED, "The bed temperature")
+        _gcode(kind, url, api_key, serial, [f"M140 S{target:g}"])
+    else:
+        raise PrinterError("Set the nozzle or the bed")
+
+
+def set_speed(kind: str, url: str, api_key: Optional[str], serial: Optional[str], value) -> None:
+    """The print speed: a percentage (10 to 300) for Klipper and OctoPrint, a level (1 silent, 2 standard, 3 sport, 4 ludicrous) for Bambu Lab."""
+    if kind == "bambu":
+        level = int(_checked(value, 1, 4, "The speed level"))
+        _bambu_publish(url, serial or "", api_key or "", {"print": {"sequence_id": "2", "command": "print_speed", "param": str(level)}})
+        return
+    percent = _checked(value, 10, 300, "The speed")
+    _gcode(kind, url, api_key, serial, [f"M220 S{int(percent)}"])
+
+
+def set_fan(kind: str, url: str, api_key: Optional[str], serial: Optional[str], value) -> None:
+    """The part-cooling fan, 0 to 100 percent."""
+    percent = _checked(value, 0, 100, "The fan speed")
+    _gcode(kind, url, api_key, serial, [f"M106 S{round(percent * 255 / 100)}"])
+
+
+def set_light(kind: str, url: str, api_key: Optional[str], serial: Optional[str], on) -> None:
+    """The chamber light (Bambu Lab printers only: other printers have no standard way to switch it)."""
+    if kind != "bambu":
+        raise PrinterError("Only Bambu Lab printers can have their light switched from here")
+    if not isinstance(on, bool):
+        raise PrinterError("The light is on or off")
+    _bambu_publish(url, serial or "", api_key or "", {"system": {"sequence_id": "2", "command": "ledctrl", "led_node": "chamber_light", "led_mode": "on" if on else "off",
+                                                                 "led_on_time": 500, "led_off_time": 500, "loop_times": 0, "interval_time": 0}})
+
+
+def list_objects(kind: str, url: str, api_key: Optional[str]) -> dict:
+    """The objects of the print Klipper is making (when it was sliced with object labels): {supported, objects: [{name, excluded, current}]}."""
+    if kind != "moonraker":
+        return {"supported": False, "objects": []}
+    with _client() as client:
+        response = _request(client, "GET", f"{url}/printer/objects/query", api_key, params={"exclude_object": ""})
+        if response.status_code != 200:
+            raise PrinterError(f"The printer answered with an error ({response.status_code})")
+        info = (((_json(response).get("result") or {}).get("status")) or {}).get("exclude_object") or {}
+    skipped = set(info.get("excluded_objects") or [])
+    names = [o.get("name") for o in (info.get("objects") or []) if isinstance(o, dict) and isinstance(o.get("name"), str)]
+    return {"supported": True, "objects": [{"name": n, "excluded": n in skipped, "current": n == info.get("current_object")} for n in names[:200]]}
+
+
+def skip_object(kind: str, url: str, api_key: Optional[str], serial: Optional[str], name) -> None:
+    """Stop printing one object of the current print (Klipper only; it cannot be undone for this print)."""
+    if kind != "moonraker":
+        raise PrinterError("Skipping an object works on Klipper printers only")
+    if not isinstance(name, str) or not _OBJECT_NAME.match(name):
+        raise PrinterError("That object name cannot be used")
+    _gcode(kind, url, api_key, serial, [f"EXCLUDE_OBJECT NAME={name}"])
 
 
 # ---------- sending a file ----------

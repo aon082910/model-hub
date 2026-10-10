@@ -38,8 +38,19 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Date>2026-10-09</Date>
+  <Date>2026-10-10</Date>
   <Changes>
+### 2.29.0
+Printer cards can change the nozzle and bed heat, speed, fan and (Bambu Lab)
+light, and Klipper printers can skip one object of the print that is running,
+all within hard limits and for the administrator only. Queued prints can be
+set to start by themselves at a time you choose (off by default; every wait
+and check of a manual start still applies, and it gives up after two hours).
+Access groups narrow what a login may do (areas and printers). A past print
+can be queued again on any printer, two prints can be compared side by side,
+and there are light and dark themes with accent colours and keyboard
+shortcuts (press ?). New tables and columns are added automatically.
+
 ### 2.28.0
 Quiet hours and a daily digest for notifications (alarms always come at
 once), e-mail (SMTP) as another way to be told, and a printer can be marked

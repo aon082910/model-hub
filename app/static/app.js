@@ -954,6 +954,7 @@ async function renderModelPrints(model) {
   ]);
   const hint = hints[model.id];
   if (!currentModel || currentModel.id !== model.id) return;
+  const reprintPrinters = currentUser.role === 'admin' ? await fetch('/api/printers').then(r => (r.ok ? r.json() : { printers: [] })).then(d => d.printers) : [];
   const spoolText = f => [f.material, f.brand, f.color].filter(Boolean).join(' ');
   const spoolById = new Map(spools.map(f => [f.id, f]));
   const today = new Date().toISOString().slice(0, 10);
@@ -981,6 +982,8 @@ async function renderModelPrints(model) {
           <select class="print-outcome" aria-label="How it went">${outcomeOptions(reasons, l.outcome === 'failed' ? (l.failure_reason || 'other') : '')}</select>
           <label class="button-link print-photo-btn">${l.has_photo ? 'Replace photo' : 'Take photo'}<input type="file" accept="image/*" capture="environment" class="print-photo-input" hidden></label>
           <label class="button-link print-photo-btn">Choose photo<input type="file" accept="image/*" class="print-photo-input" hidden></label>
+          <label class="inline-check" title="Tick two prints to compare them"><input type="checkbox" class="print-compare"> compare</label>
+          <button class="print-reprint" title="Put this print in the queue again, with its filament, grams and time">Reprint</button>${reprintPrinters.length ? `<select class="print-reprint-printer" aria-label="Reprint on"><option value="">same printer</option>${reprintPrinters.map(pr => `<option value="${pr.id}">${esc(pr.name)}</option>`).join('')}</select>` : ''}
           <button class="print-timelapse">Time-lapse</button>
           <button class="print-delete">Delete</button>
         </div>
@@ -1020,6 +1023,16 @@ async function renderModelPrints(model) {
     const res = await jsonRequest('POST', '/api/prints', body);
     if (res.ok) refreshModelPage(); else $('#print-status').textContent = await sourceErrorText(res);
   };
+  $$('#model-prints-panel .print-reprint').forEach(btn => btn.onclick = async () => {
+    const row = btn.closest('.print-row'), pick = row.querySelector('.print-reprint-printer');
+    const res = await jsonRequest('POST', `/api/queue/reprint/${row.dataset.id}`, pick && pick.value ? { printer_id: parseInt(pick.value) } : {});
+    showNotice(res.ok ? 'Put in the print queue.' : await sourceErrorText(res));
+  });
+  $$('#model-prints-panel .print-compare').forEach(box => box.onchange = async () => {
+    const ticked = [...$$('#model-prints-panel .print-compare:checked')];
+    if (ticked.length > 2) { box.checked = false; return; }
+    if (ticked.length === 2) await showCompare(...ticked.map(b => b.closest('.print-row').dataset.id));
+  });
   $$('#model-prints-panel .print-timelapse').forEach(btn => btn.onclick = () => btn.closest('.print-row').querySelector('.timelapse-box').classList.toggle('hidden'));
   $$('#model-prints-panel .timelapse-play').forEach(btn => btn.onclick = () => {
     const holder = btn.parentElement;
@@ -1068,6 +1081,22 @@ async function renderModelPrints(model) {
     if (res.ok) refreshModelPage(); else alert(await sourceErrorText(res));
   });
 }
+
+async function showCompare(a, b) {
+  const res = await fetch(`/api/prints/compare?a=${a}&b=${b}`);
+  const body = $('#compare-body');
+  if (!res.ok) { body.textContent = await sourceErrorText(res); }
+  else {
+    const d = await res.json();
+    const cell = v => (v == null || v === '' ? '<span class="muted">-</span>' : esc(String(v)));
+    body.innerHTML = `<table class="compare-table"><thead><tr><th></th><th>Print #${d.a.id}</th><th>Print #${d.b.id}</th></tr></thead><tbody>
+      ${d.fields.map(f => `<tr><th>${esc(f.label)}</th><td class="${f.same ? '' : 'diff'}">${cell(f.a)}</td><td class="${f.same ? '' : 'diff'}">${cell(f.b)}</td></tr>`).join('')}
+      <tr><th>Photo</th><td>${d.a.has_photo ? `<img src="/api/prints/${d.a.id}/photo" alt="" style="max-width:100%">` : '<span class="muted">none</span>'}</td><td>${d.b.has_photo ? `<img src="/api/prints/${d.b.id}/photo" alt="" style="max-width:100%">` : '<span class="muted">none</span>'}</td></tr></tbody></table>
+      <p class="muted">Highlighted rows differ.</p>`;
+  }
+  $('#compare-modal').classList.remove('hidden');
+}
+$('#compare-close').addEventListener('click', () => { $('#compare-modal').classList.add('hidden'); $$('#model-prints-panel .print-compare:checked').forEach(b => { b.checked = false; }); });
 
 function renderModelFacts(m) {
   const dims = m.bbox_x != null && m.bbox_y != null && m.bbox_z != null
@@ -3446,6 +3475,16 @@ async function loadPrinters() {
       <button class="printer-delete">Remove</button>
       <label class="inline-check" title="Never suggested for a print, and starting one on it asks first"><input type="checkbox" class="printer-parked" ${p.out_of_service ? 'checked' : ''}> out of service</label>
       <button class="printer-diagnose">Why can't it connect?</button><div class="printer-diagnose-result muted" style="flex-basis:100%;width:100%"></div>
+      <details class="printer-controls-box" style="flex-basis:100%;width:100%"><summary>Controls</summary>
+        <p class="muted">Change the heat, speed or fan of what the printer is doing. Nozzle up to 300 &deg;C and bed up to 120 &deg;C; 0 switches a heater off. Heating an idle printer and leaving it is on you: be there.</p>
+        <div class="row"><label>Nozzle <input type="number" class="ctl-nozzle" min="0" max="300" step="5" style="width:6em"> &deg;C</label><button class="ctl-set" data-key="nozzle">Set</button>
+          <label>Bed <input type="number" class="ctl-bed" min="0" max="120" step="5" style="width:6em"> &deg;C</label><button class="ctl-set" data-key="bed">Set</button></div>
+        <div class="row"><label>Speed <input type="number" class="ctl-speed" ${p.kind === 'bambu' ? 'min="1" max="4" placeholder="1-4"' : 'min="10" max="300" placeholder="100"'} style="width:6em"> ${p.kind === 'bambu' ? '(1 silent, 2 standard, 3 sport, 4 ludicrous)' : '%'}</label><button class="ctl-set" data-key="speed">Set</button>
+          <label>Fan <input type="number" class="ctl-fan" min="0" max="100" step="5" style="width:6em"> %</label><button class="ctl-set" data-key="fan">Set</button>
+          ${p.kind === 'bambu' ? '<button class="ctl-light" data-on="true">Light on</button><button class="ctl-light" data-on="false">Light off</button>' : ''}</div>
+        ${p.kind === 'moonraker' ? '<div class="row"><button class="ctl-objects">Skip an object of this print...</button></div><div class="ctl-objects-list"></div>' : ''}
+        <span class="ctl-result muted"></span>
+      </details>
       <details class="printer-temps" style="flex-basis:100%;width:100%"><summary>Temperatures</summary>
         <div class="row"><select class="temps-hours" aria-label="How far back"><option value="1">last hour</option><option value="6" selected>last 6 hours</option><option value="24">last 24 hours</option></select></div>
         <div class="temps-chart muted">Open to load.</div>
@@ -3611,6 +3650,33 @@ $('#printers-list').addEventListener('click', async (e) => {
     if (!saved.ok) { out.textContent = await sourceErrorText(saved); return; }
     const res = await fetch(`/api/printers/${row.dataset.id}/plug-test`, { method: 'POST' });
     out.textContent = res.ok ? `Its energy total is ${(await res.json()).total_kwh} kWh.` : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('ctl-set')) {
+    const key = e.target.dataset.key, input = row.querySelector('.ctl-' + key), out = row.querySelector('.ctl-result');
+    if (input.value === '') { out.textContent = 'Type a number first.'; return; }
+    const res = await jsonRequest('POST', `/api/printers/${row.dataset.id}/adjust`, { [key]: parseFloat(input.value) });
+    out.textContent = res.ok ? `Sent: ${key} ${input.value}.` : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('ctl-light')) {
+    const res = await jsonRequest('POST', `/api/printers/${row.dataset.id}/adjust`, { light: e.target.dataset.on === 'true' });
+    row.querySelector('.ctl-result').textContent = res.ok ? 'Sent.' : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('ctl-objects')) {
+    const list = row.querySelector('.ctl-objects-list'), out = row.querySelector('.ctl-result');
+    const res = await fetch(`/api/printers/${row.dataset.id}/objects`);
+    if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+    const d = await res.json();
+    list.innerHTML = d.objects.length ? d.objects.map(o => `<div class="row"><span>${esc(o.name)}${o.current ? ' <span class="badge">printing now</span>' : ''}${o.excluded ? ' <span class="badge">skipped</span>' : ''}</span>${o.excluded ? '' : `<button class="ctl-skip" data-name="${esc(o.name)}">Skip</button>`}</div>`).join('') : '<p class="muted">This print has no labelled objects (the slicer must label them, with "exclude objects" on).</p>';
+    return;
+  }
+  if (row && e.target.classList.contains('ctl-skip')) {
+    if (!confirm(`Stop printing "${e.target.dataset.name}"? It cannot be undone for this print.`)) return;
+    const res = await jsonRequest('POST', `/api/printers/${row.dataset.id}/skip-object`, { name: e.target.dataset.name });
+    row.querySelector('.ctl-result').textContent = res.ok ? `Skipped ${e.target.dataset.name}.` : await sourceErrorText(res);
+    if (res.ok) e.target.closest('.row').querySelector('button').remove();
     return;
   }
   if (row && e.target.classList.contains('printer-diagnose')) {
@@ -3972,6 +4038,8 @@ async function loadQueue() {
           <select class="queue-strict" data-id="${i.id}" aria-label="Exact colour" title="Only a printer with exactly this spool's material and colour loaded"><option value="" ${i.strict_match == null ? 'selected' : ''}>colour: as in Settings</option><option value="true" ${i.strict_match === true ? 'selected' : ''}>colour: exact</option><option value="false" ${i.strict_match === false ? 'selected' : ''}>colour: any</option></select>
           <input class="queue-tag" data-id="${i.id}" value="${esc(i.printer_tag || '')}" placeholder="needs tag" aria-label="Needs a printer with this tag" title="Only a printer with this tag may print it">` : ''}
         ${['queued', 'printing'].includes(i.status) ? `<input type="date" class="queue-date" data-id="${i.id}" value="${esc(i.planned_date || '')}" aria-label="Planned day" title="The day you plan to print this">` : ''}
+        ${i.status === 'queued' && i.printer_id ? `<input type="datetime-local" class="queue-start" data-id="${i.id}" value="${i.start_at ? esc(toLocalInput(i.start_at)) : ''}" aria-label="Start by itself at" title="Start this print by itself at this time (needs the setting in Settings, Print planning)">` : ''}
+        ${i.start_note ? `<span class="warn-text" title="${esc(i.start_note)}">&#9888; ${esc(i.start_note)}</span>` : ''}
         ${printers.length ? `<select data-id="${i.id}" class="queue-printer" aria-label="Printer">
           <option value="">any printer</option>${printers.map(p => `<option value="${p.id}" ${p.id === i.printer_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
           ${slotsByPrinter[i.printer_id] ? `<select data-id="${i.id}" class="queue-slot" aria-label="Spool slot">
@@ -4006,6 +4074,12 @@ async function loadQueue() {
   $$('.queue-tag').forEach(input => input.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { printer_tag: input.value.trim() });
     if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
+  $$('.queue-start').forEach(input => input.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { start_at: input.value ? new Date(input.value).toISOString() : null });
+    if (!res.ok) { showNotice(await sourceErrorText(res)); loadQueue(); return; }
+    if (input.value && !(await (await fetch('/api/settings')).json().catch(() => ({}))).scheduled_starts) showNotice('Saved. Switch on "start queued prints by itself" in Settings, Print planning, or it will not start.');
     loadQueue();
   });
   $$('.queue-date').forEach(input => input.onchange = async () => {
@@ -4841,6 +4915,12 @@ $('#order-create').addEventListener('click', async () => {
 });
 
 // ---------- Calendar ----------
+function toLocalInput(iso) {
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function localMonth(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
@@ -5427,6 +5507,76 @@ $('#quote-save').addEventListener('click', async () => {
 });
 $('#stock-auto-restock').addEventListener('change', () => saveSetting({ stock_auto_restock: $('#stock-auto-restock').checked ? 'true' : '' }));
 
+// ---------- Access groups, appearance, keyboard shortcuts ----------
+async function loadGroups() {
+  const box = $('#groups-list');
+  const res = await fetch('/api/access-groups');
+  if (!res.ok) { box.textContent = ''; return; }
+  const d = await res.json();
+  box.innerHTML = d.groups.map(g => `<div class="project-card access-group" data-id="${g.id}">
+      <div class="row"><b>${esc(g.name)}</b><span class="muted">${g.members} login${g.members === 1 ? '' : 's'}</span><button class="group-delete danger">Remove</button></div>
+      <div class="muted">Not allowed to:</div>
+      ${Object.entries(d.areas).map(([key, label]) => `<label class="inline-check"><input type="checkbox" class="group-deny" data-area="${key}" ${g.deny.includes(key) ? 'checked' : ''}> ${esc(label)}</label>`).join('')}
+      ${d.printers.length ? `<div class="muted">May only use these printers (none ticked: all of them):</div>${d.printers.map(p => `<label class="inline-check"><input type="checkbox" class="group-printer" data-id="${p.id}" ${g.printers && g.printers.includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('')}` : ''}
+    </div>`).join('') || '<p class="muted">No groups yet.</p>';
+  box.onchange = async (e) => {
+    const card = e.target.closest('.access-group');
+    if (!card) return;
+    const res = await jsonRequest('PATCH', `/api/access-groups/${card.dataset.id}`, {
+      deny: [...card.querySelectorAll('.group-deny:checked')].map(c => c.dataset.area),
+      printers: [...card.querySelectorAll('.group-printer:checked')].map(c => parseInt(c.dataset.id)) });
+    $('#groups-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+  };
+  box.onclick = async (e) => {
+    if (!e.target.classList.contains('group-delete')) return;
+    if (!confirm('Remove this group? Its logins go back to what their role allows.')) return;
+    await fetch(`/api/access-groups/${e.target.closest('.access-group').dataset.id}`, { method: 'DELETE' });
+    loadGroups(); loadUsers();
+  };
+}
+$('#group-add').addEventListener('click', async () => {
+  const res = await jsonRequest('POST', '/api/access-groups', { name: $('#group-name').value.trim(), deny: [], printers: [] });
+  $('#groups-status').textContent = res.ok ? 'Made.' : await sourceErrorText(res);
+  if (res.ok) { $('#group-name').value = ''; loadGroups(); loadUsers(); }
+});
+$('#scheduled-starts').addEventListener('change', () => saveSetting({ scheduled_starts: $('#scheduled-starts').checked ? 'true' : '' }));
+
+function applyAppearance() {
+  let theme = 'dark', accent = '';
+  try { theme = localStorage.getItem('modelhub_theme') || 'dark'; accent = localStorage.getItem('modelhub_accent') || ''; } catch (e) { /* the default look */ }
+  const resolved = theme === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
+  document.documentElement.dataset.theme = resolved;
+  if (accent) document.documentElement.dataset.accent = accent; else delete document.documentElement.dataset.accent;
+}
+function loadAppearance() {
+  try { $('#theme-select').value = localStorage.getItem('modelhub_theme') || 'dark'; $('#accent-select').value = localStorage.getItem('modelhub_accent') || ''; } catch (e) { /* the defaults */ }
+}
+for (const [id, key] of [['#theme-select', 'modelhub_theme'], ['#accent-select', 'modelhub_accent']]) {
+  $(id).addEventListener('change', () => { try { localStorage.setItem(key, $(id).value); } catch (e) { /* not kept */ } applyAppearance(); });
+}
+try { matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyAppearance); } catch (e) { /* an old browser */ }
+
+const SHORTCUTS = [['?', 'This list'], ['/', 'Search the library'], ['g l', 'Library'], ['g s', 'Search sites'], ['g w', 'Wishlist'], ['g p', 'Projects'], ['g u', 'Supplies'], ['g f', 'Filament'], ['g t', 'Stats'],
+  ['g o', 'Orders'], ['g q', 'Print Queue'], ['g d', 'Calendar'], ['g e', 'Settings'], ['Esc', 'Close a window']];
+const GO_TO = { l: 'library', s: 'search', w: 'wishlist', p: 'projects', u: 'supplies', f: 'filament', t: 'stats', o: 'orders', q: 'queue', d: 'calendar', e: 'settings' };
+let goPending = 0;
+function openShortcuts() {
+  $('#shortcuts-list').innerHTML = SHORTCUTS.map(([k, what]) => `<span>${k.split(' ').map(x => `<kbd>${esc(x)}</kbd>`).join(' then ')}</span><span>${esc(what)}</span>`).join('');
+  $('#shortcuts-help').classList.remove('hidden');
+}
+$('#shortcuts-close').addEventListener('click', () => $('#shortcuts-help').classList.add('hidden'));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $('#shortcuts-help').classList.add('hidden'); $('#compare-modal').classList.add('hidden'); return; }
+  const t = e.target;
+  if (e.ctrlKey || e.metaKey || e.altKey || (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable))) return;
+  if (!$('#auth-overlay').classList.contains('hidden')) return;
+  if (e.key === '?') { e.preventDefault(); openShortcuts(); return; }
+  if (e.key === '/') { e.preventDefault(); location.hash = '#/library'; setTimeout(() => $('#search-box') && $('#search-box').focus(), 80); return; }
+  if (goPending && Date.now() - goPending < 1500 && GO_TO[e.key]) { e.preventDefault(); goPending = 0; location.hash = '#/' + GO_TO[e.key]; return; }
+  goPending = e.key === 'g' ? Date.now() : 0;
+});
+applyAppearance();
+
 const CHANNEL_SECRETS = ['telegram_token', 'pushover_token', 'pushover_user', 'gotify_token', 'matrix_token', 'bark_key', 'smtp_password'];
 const CHANNEL_PLAIN = ['telegram_chat_id', 'telegram_topic', 'gotify_url', 'matrix_url', 'matrix_room', 'bark_server', 'smtp_host', 'smtp_port', 'smtp_security', 'smtp_user', 'smtp_from', 'smtp_to'];
 function loadChannels(s) {
@@ -5591,6 +5741,9 @@ async function loadSettings() {
   $('#max-printing').value = s.max_printing || '';
   $('#strict-colour').checked = s.strict_colour === 'true';
   $('#plate-clear-gate').checked = s.plate_clear_gate === 'true';
+  $('#scheduled-starts').checked = s.scheduled_starts === 'true';
+  loadAppearance();
+  loadGroups();
   loadSignin(s);
   loadShops(s);
   loadQuiet(s);
@@ -5763,16 +5916,20 @@ $('#whoami-password').addEventListener('click', async () => {
 });
 
 // ---------- People (Settings, administrator) ----------
+let userGroups = [];
 async function loadUsers() {
   const res = await fetch('/api/users');
   if (!res.ok) return;
   const data = await res.json();
+  const g = await fetch('/api/access-groups');
+  userGroups = g.ok ? (await g.json()).groups : [];
   $('#users-list').innerHTML = `
     <div class="user-row"><b>${esc(data.admin || '')}</b> <span class="status-badge status-done">administrator</span></div>
     ${data.users.map(u => `
       <div class="user-row" data-id="${u.id}">
         <b>${esc(u.username)}</b>${u.source && u.source !== 'local' ? ` <span class="badge">${esc(u.source)}</span>` : ''}${u.two_step ? ' <span class="badge">two-step</span>' : ''}
         <select class="user-role">${data.roles.map(r => `<option value="${r}" ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>
+        ${userGroups.length ? `<select class="user-group" aria-label="Access group"><option value="">no group</option>${userGroups.map(g => `<option value="${g.id}" ${g.id === u.group_id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>` : ''}
         ${u.source && u.source !== 'local' ? '' : '<button class="user-reset">Set a new password</button>'}${u.two_step ? '<button class="user-two-step-reset" title="They lost their phone and backup codes">Reset two-step</button>' : ''}
         <button class="user-delete danger">Remove</button>
       </div>`).join('')}`;
@@ -5786,6 +5943,11 @@ $('#add-user-btn').addEventListener('click', async () => {
   if (res.ok) { $('#new-user-name').value = ''; $('#new-user-password').value = ''; loadUsers(); }
 });
 $('#users-list').addEventListener('change', async (e) => {
+  if (e.target.classList.contains('user-group')) {
+    const res = await jsonRequest('PATCH', `/api/users/${e.target.closest('.user-row').dataset.id}`, { group_id: e.target.value ? parseInt(e.target.value) : null });
+    $('#users-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    return;
+  }
   if (!e.target.classList.contains('user-role')) return;
   const res = await jsonRequest('PATCH', `/api/users/${e.target.closest('.user-row').dataset.id}`, { role: e.target.value });
   $('#users-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);

@@ -133,7 +133,7 @@ def me(request: Request, session: Session = Depends(get_session)):
     user = getattr(request.state, "user", None) or {}
     named = user.get("username") or ""
     row = session.exec(select(AppUser).where(AppUser.username == named)).first() if named else None
-    return {"username": user.get("username"), "role": user.get("role"), "totp": signin.totp_enabled(session, named) if named else False,
+    return {"username": user.get("username"), "role": user.get("role"), "group": user.get("group"), "deny": user.get("deny") or [], "totp": signin.totp_enabled(session, named) if named else False,
             "source": (row.source or "local") if row else "local", "can_two_step": bool(named) and not named.startswith("token:") and named != "extension"}
 
 

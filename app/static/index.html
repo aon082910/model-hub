@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Model Hub</title>
+<script>try { var t = localStorage.getItem('modelhub_theme') || 'dark', a = localStorage.getItem('modelhub_accent') || ''; if (t === 'auto') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; document.documentElement.dataset.theme = t; if (a) document.documentElement.dataset.accent = a; } catch (e) { /* the default look */ }</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#14161a">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -784,6 +785,7 @@
         <label>Most printers printing at once <input id="max-printing" type="number" min="0" max="50" step="1" placeholder="no limit"></label>
         <button id="stagger-save">Save</button><span id="stagger-status" class="muted"></span></div>
       <label class="inline-check"><input type="checkbox" id="strict-colour"> Only suggest or send to a printer that has exactly the spool's material and colour loaded (a single print can opt in or out on the queue)</label>
+      <label class="inline-check" id="scheduled-starts-label"><input type="checkbox" id="scheduled-starts"> Let Model Hub start queued prints by itself at the time you set on them (off by default). It sends the file and starts it only if the printer is idle and every wait above says it may (plate cleared, no hold, not out of service, not low on filament); otherwise it keeps trying for two hours, tells you once, and gives up. Nothing starts without a time you chose.</label>
       <label class="inline-check" id="plate-gate"><input type="checkbox" id="plate-clear-gate"> After a print ends, wait for someone to say the plate is cleared before sending the next one (a printer card gets a button; Home Assistant can call <code>POST /api/printers/ID/plate-cleared</code>)</label>
     </div>
 
@@ -932,6 +934,20 @@
       <div class="row"><button id="signin-save">Save</button><a class="button-link" href="/api/activity/export.csv" download>Download the activity record (CSV)</a><span id="signin-status" class="muted"></span></div>
     </div>
 
+    <h2>Access groups</h2>
+    <div class="settings-form wide" id="groups-box">
+      <p class="muted">A group <b>narrows</b> what a login's role allows (it never gives more): take away areas (the library, the queue, orders, money, starting prints) and, for a printer login, say which printers it may use. Put a login in a group with the group choice in the People list above.</p>
+      <div id="groups-list"></div>
+      <div class="row"><input id="group-name" placeholder="Group name, like Weekend helpers" maxlength="40"><button id="group-add">Make the group</button><span id="groups-status" class="muted"></span></div>
+    </div>
+
+    <h2>Appearance</h2>
+    <div class="settings-form" id="theme-box">
+      <p class="muted">For this browser only. Press <kbd>?</kbd> anywhere for the keyboard shortcuts.</p>
+      <div class="row"><label>Theme <select id="theme-select"><option value="dark">dark</option><option value="light">light</option><option value="auto">follow my device</option></select></label>
+        <label>Accent <select id="accent-select"><option value="">blue</option><option value="green">green</option><option value="orange">orange</option><option value="purple">purple</option><option value="pink">pink</option></select></label></div>
+    </div>
+
     <h2>Account</h2>
     <div class="settings-form">
       <label>Current password <input id="cur-password" type="password"></label>
@@ -981,6 +997,20 @@
     <div class="panel" id="project-share-panel"></div>
   </section>
 
+  <div id="shortcuts-help" class="modal hidden">
+    <div class="modal-content" style="width:420px">
+      <button id="shortcuts-close" class="icon-close" aria-label="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;font-size:20px">&times;</button>
+      <h2>Keyboard shortcuts</h2>
+      <div id="shortcuts-list"></div>
+    </div>
+  </div>
+  <div id="compare-modal" class="modal hidden">
+    <div class="modal-content" style="width:760px">
+      <button id="compare-close" aria-label="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;font-size:20px">&times;</button>
+      <h2>Two prints side by side</h2>
+      <div id="compare-body"></div>
+    </div>
+  </div>
   <div id="auth-overlay" class="modal hidden">
     <div class="modal-content" style="width:340px">
       <h2 id="auth-title">Sign in</h2>

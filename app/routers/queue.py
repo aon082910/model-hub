@@ -416,6 +416,9 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
     printer = session.get(Printer, item.printer_id) if item.printer_id else None
     if not printer:
         raise HTTPException(400, "Choose a printer for this job first")
+    from app.auth import printer_allowed
+    if not printer_allowed(getattr(getattr(request, "state", None), "user", None), printer.id):
+        raise HTTPException(403, "Your group may not use that printer.")
     if item.status not in ("queued", "failed"):
         raise HTTPException(409, f"This job is already {item.status}")
     if item.held:
@@ -467,6 +470,26 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
     return {**result, "status": item.status}
 
 
+@router.post("/reprint/{log_id}")
+def reprint(log_id: int, payload: dict, session: Session = Depends(get_session)):
+    """Queue a past print again, with its filament, grams and time, for the printer it was made on or any other you choose (printer_id)."""
+    log = session.get(PrintLog, log_id)
+    if not log:
+        raise HTTPException(404, "That print is not in the history")
+    if not session.get(Model3D, log.model_id):
+        raise HTTPException(404, "Its model is gone")
+    printer_id = payload.get("printer_id", log.printer_id)
+    if printer_id is not None and (isinstance(printer_id, bool) or not isinstance(printer_id, int) or not session.get(Printer, printer_id)):
+        raise HTTPException(400, "That printer does not exist")
+    top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
+    item = QueueItem(model_id=log.model_id, position=(top.position + 1) if top else 0, filament_id=log.filament_id, printer_id=printer_id, estimated_grams=log.grams,
+                     estimated_minutes=log.minutes, estimate_basis=("history" if log.measured else "estimate") if log.minutes else None, notes=f"Reprint of the print on {log.printed_at:%Y-%m-%d}")
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item
+
+
 @router.post("/again/{model_id}")
 def print_again(model_id: int, session: Session = Depends(get_session)):
     """Queue the model again with the filament, grams and time of its most recent print."""
@@ -508,6 +531,15 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
         if item.slot and "filament_id" not in payload:
             from app import slots
             item.filament_id = slots.loaded(session, new_printer, item.slot) or item.filament_id
+    if "start_at" in payload:
+        from app import start_at as start_at_mod
+        item.start_at = start_at_mod.clean(payload["start_at"])
+        item.start_note = None
+        start_at_mod._told.discard(item.id)
+        if item.start_at and not new_printer:
+            raise HTTPException(400, "Choose a printer first: a scheduled start needs one")
+        if item.start_at and item.status != "queued":
+            raise HTTPException(409, f"This job is already {item.status}")
     if "priority" in payload:
         item.priority = clean_priority(payload["priority"]) or None
     if "held" in payload:

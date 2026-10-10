@@ -5,6 +5,7 @@ import re
 import secrets
 import time
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Request
 from sqlmodel import Session, select
@@ -140,7 +141,7 @@ def ensure_extension_api_key(session: Session) -> str:
 ROLES = ("member", "viewer", "printer")
 
 # Only the administrator may use these at all (reading them included)...
-ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/printers", "/api/tokens", "/api/spoolman", "/api/sensors")
+ADMIN_ONLY_PREFIXES = ("/api/settings", "/api/backup", "/api/users", "/api/access-groups", "/api/printers", "/api/tokens", "/api/spoolman", "/api/sensors")
 # ...and these they alone may change (members can still look): they delete files from disk
 ADMIN_ONLY_WRITE_PREFIXES = ("/api/duplicates",)
 ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-check", "/api/activity/export.csv", "/api/system/logs", "/api/system/support-bundle.zip"}
@@ -148,6 +149,64 @@ ADMIN_ONLY_PATHS = {"/api/library/non-model-files/remove", "/api/system/update-c
 SELF_SERVICE = ("/api/auth/me/password", "/api/auth/2fa/")
 # Share links are secrets: viewers may not even list them
 NO_VIEWER_PREFIXES = ("/api/shares",)
+
+
+# Areas an access group can take away from the logins in it (a group only ever narrows what the login's role allows)
+GROUP_AREAS = {
+    "library_write": "Change anything in the library (models, tags, collections, projects, supplies, filament, wishlist, print history)",
+    "queue": "Use the print queue, planner and calendar",
+    "orders": "See or change orders and the finished parts on the shelf",
+    "money": "See costs, budgets and the report",
+    "control": "Start, pause, resume or cancel prints",
+}
+_AREA_PREFIXES = {
+    "library_write": ("/api/library", "/api/tags", "/api/collections", "/api/projects", "/api/inventory", "/api/filament", "/api/wishlist", "/api/bulk", "/api/families", "/api/creators",
+                      "/api/favorites", "/api/saved-searches", "/api/prints", "/api/attachments", "/api/print-files", "/api/profiles", "/api/designers", "/api/library-io", "/api/filing-rules"),
+    "queue": ("/api/queue", "/api/calendar", "/api/estimates", "/api/slots"),
+    "orders": ("/api/orders", "/api/stock"),
+    "money": ("/api/costs", "/api/budgets", "/api/analytics"),
+}
+_PRINTER_PATH = re.compile(r"^/api/printers/(\d+)(/|$)")
+
+
+def group_info(session: Session, row) -> dict:
+    """What a login's access group takes away: {"group", "deny": [...], "printers": [ids] or None}. Empty when it has none."""
+    if not getattr(row, "group_id", None):
+        return {}
+    from app.models import AccessGroup
+    import json as _json
+    group = session.get(AccessGroup, row.group_id)
+    if not group:
+        return {}
+    try:
+        deny = [a for a in _json.loads(group.deny_json or "[]") if a in GROUP_AREAS]
+        printers = _json.loads(group.printers_json) if group.printers_json else None
+    except ValueError:
+        deny, printers = [], None
+    return {"group": group.name, "deny": deny, "printers": [int(p) for p in printers] if isinstance(printers, list) and printers else None}
+
+
+def printer_allowed(user: Optional[dict], printer_id: int) -> bool:
+    """False when this login's access group limits the printers it may use and this is not one of them."""
+    allowed = (user or {}).get("printers")
+    return allowed is None or printer_id in allowed
+
+
+def group_reason(user: dict, method: str, path: str):
+    deny = user.get("deny") or []
+    writing = method not in ("GET", "HEAD")
+    for area in deny:
+        if area == "control":
+            if method == "POST" and START_PRINT.match(path):
+                return "Your group may not start, pause or cancel prints."
+        elif path.startswith(_AREA_PREFIXES[area]) and (writing or area != "library_write"):
+            return f"Your group may not {GROUP_AREAS[area][0].lower() + GROUP_AREAS[area][1:]}."
+    allowed = user.get("printers")
+    if allowed is not None:
+        m = _PRINTER_PATH.match(path)
+        if m and int(m.group(1)) not in allowed:
+            return "Your group may not use that printer."
+    return None
 
 
 def current_user(request: Request, session: Session):
@@ -162,7 +221,7 @@ def current_user(request: Request, session: Session):
         from app.models import AppUser
         row = session.exec(select(AppUser).where(AppUser.username == username)).first()
         if row:
-            return {"username": row.username, "role": row.role if row.role in ROLES else "viewer"}
+            return {"username": row.username, "role": row.role if row.role in ROLES else "viewer", **group_info(session, row)}
     if request.url.path in API_KEY_ALLOWED_PATHS:
         api_key = request.headers.get("x-model-hub-api-key")
         stored_key = get_setting(session, "extension_api_key")
@@ -207,6 +266,10 @@ def printer_role_reason(method: str, path: str):
 
 def forbidden_reason(user: dict, method: str, path: str):
     """Why this signed-in user may not do this, or None if they may."""
+    return _role_reason(user, method, path) or (None if user["role"] in ("admin", "importer") else group_reason(user, method, path))
+
+
+def _role_reason(user: dict, method: str, path: str):
     role = user["role"]
     if role in ("admin", "importer") or path == "/api/auth/logout":
         return None

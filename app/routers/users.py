@@ -18,7 +18,7 @@ _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,39}")
 
 def _json(user: AppUser, session: Session = None) -> dict:
     from app import signin
-    return {"id": user.id, "username": user.username, "role": user.role, "created_at": user.created_at, "source": user.source or "local",
+    return {"id": user.id, "username": user.username, "role": user.role, "created_at": user.created_at, "source": user.source or "local", "group_id": user.group_id,
             "two_step": bool(session is not None and signin.totp_enabled(session, user.username))}
 
 
@@ -69,6 +69,12 @@ def update_user(user_id: int, payload: dict, request: Request, session: Session 
         raise HTTPException(404, "Not found")
     if "role" in payload:
         user.role = _role(payload["role"])
+    if "group_id" in payload:
+        from app.models import AccessGroup
+        gid = payload["group_id"]
+        if gid is not None and (isinstance(gid, bool) or not isinstance(gid, int) or not session.get(AccessGroup, gid)):
+            raise HTTPException(400, "That access group does not exist")
+        user.group_id = gid
     if "password" in payload:
         if (user.source or "local") != "local":
             raise HTTPException(400, f"This login is proved by {user.source}; it has no password here")
@@ -76,7 +82,7 @@ def update_user(user_id: int, payload: dict, request: Request, session: Session 
     session.add(user)
     session.commit()
     session.refresh(user)
-    changes = [x for x, k in (("role to " + user.role, "role"), ("password reset", "password")) if k in payload]
+    changes = [x for x, k in (("role to " + user.role, "role"), ("password reset", "password"), ("access group", "group_id")) if k in payload]
     activity.record(session, activity.actor_of(request), "user", f"Changed the login {user.username}: {', '.join(changes) or 'nothing'}")
     return _json(user)
 

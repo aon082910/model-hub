@@ -127,6 +127,34 @@ def log_print(session: Session, model_id: int, *, printed_at=None, filament_id=N
     return log
 
 
+COMPARE_FIELDS = (("model_filename", "Model"), ("printed_at", "Date"), ("printer", "Printer"), ("outcome", "How it went"), ("minutes", "Minutes"), ("grams", "Grams"), ("filament", "Filament"),
+                  ("rating", "Rating"), ("energy_kwh", "Energy (kWh)"), ("notes", "Notes"))
+
+
+@router.get("/compare")
+def compare_prints(a: int, b: int, session: Session = Depends(get_session)):
+    """Two prints side by side: what was the same and what differed (model, printer, filament, time, grams, outcome, rating, energy, notes), with the photo links."""
+    from app.models import Filament, Printer
+    rows = []
+    for log_id in (a, b):
+        log = session.get(PrintLog, log_id)
+        if not log:
+            raise HTTPException(404, f"Print {log_id} is not in the history")
+        rows.append(log)
+    names = _names(session, rows)
+    out = []
+    for log in rows:
+        printer = session.get(Printer, log.printer_id) if log.printer_id else None
+        spool = session.get(Filament, log.filament_id) if log.filament_id else None
+        out.append({"id": log.id, "model_id": log.model_id, "model_filename": names.get(log.model_id), "printed_at": str(log.printed_at)[:10], "printer": printer.name if printer else None,
+                    "outcome": ("failed: " + (print_outcomes.label(log.failure_reason) or "no reason")) if log.outcome == "failed" else "worked",
+                    "minutes": round(log.minutes) if log.minutes is not None else None, "grams": log.grams,
+                    "filament": " ".join(x for x in (spool.material, spool.brand, spool.color) if x) if spool else None, "rating": log.rating, "energy_kwh": log.energy_kwh,
+                    "notes": log.notes, "has_photo": photo_path(log.id).is_file()})
+    fields = [{"field": k, "label": label, "a": out[0][k], "b": out[1][k], "same": out[0][k] == out[1][k]} for k, label in COMPARE_FIELDS]
+    return {"a": out[0], "b": out[1], "fields": fields}
+
+
 @router.get("/hints")
 def failure_hints(model_id: Optional[int] = None, session: Session = Depends(get_session)):
     """What has gone wrong with models before: {"hints": {model id: {...}}} (only models that failed at least once)."""
