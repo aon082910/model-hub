@@ -2109,7 +2109,63 @@ async function loadShoppingList() {
 // ---------- Supplies on hand ----------
 let suppliesCache = [];
 
+async function loadPurchasing() {
+  const box = $('#purchasing-body');
+  if (!box || currentUser.role === 'viewer') { if (box) box.textContent = ''; return; }
+  const [vRes, oRes, bRes] = await Promise.all([fetch('/api/purchasing/vendors'), fetch('/api/purchasing/orders'), fetch('/api/purchasing/buy-list')]);
+  if (!vRes.ok || !oRes.ok || !bRes.ok) { box.textContent = ''; return; }
+  const vendors = (await vRes.json()).vendors, orders = (await oRes.json()).orders, buy = (await bRes.json()).items;
+  const vName = id => (vendors.find(v => v.id === id) || {}).name || '';
+  box.innerHTML = `
+    <h4>Buy list</h4>
+    ${buy.length ? `<table class="facts"><tbody>${buy.map((b, i) => `<tr data-i="${i}"><td><input type="checkbox" class="buy-pick" checked></td><td>${esc(b.description)}${b.kind === 'part' ? ' <span class="badge">part</span>' : ''}</td><td class="muted">${esc(b.reason)}</td><td><input class="buy-qty" type="number" min="1" value="${b.suggested}" style="width:5em" aria-label="How many"></td></tr>`).join('')}</tbody></table>
+      <div class="row"><select id="buy-vendor"><option value="">no vendor yet</option>${vendors.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select><button id="buy-make">Make a draft purchase order from the ticked</button><span id="buy-msg" class="muted"></span></div>` : '<p class="muted">Nothing looks low right now.</p>'}
+    <h4>Purchase orders</h4>
+    ${orders.length ? orders.map(o => `<div class="panel po-card" data-id="${o.id}"><div class="row"><b>#${o.id}</b> <span class="status-badge ${o.status === 'received' ? '' : 'status-printing'}">${esc(o.status)}</span> ${esc(o.vendor || 'no vendor')} ${o.reference ? `<span class="muted">ref ${esc(o.reference)}</span>` : ''} <span class="muted">${money2(o.total)}${o.expected_on ? ', expected ' + esc(o.expected_on) : ''}</span></div>
+      <ul>${o.lines.map(l => `<li><span>${l.quantity} &times; ${esc(l.description)}${l.kind === 'spool' && l.weight_g ? ` (${l.weight_g} g)` : ''}${l.unit_cost != null ? ` at ${money2(l.unit_cost)}` : ''}</span>${['draft', 'ordered'].includes(o.status) ? `<button class="po-line-del" data-line="${l.id}">remove</button>` : ''}</li>`).join('')}</ul>
+      <div class="row">${o.status === 'draft' ? '<button class="po-ordered">Mark as ordered</button>' : ''}${['draft', 'ordered'].includes(o.status) ? '<button class="po-receive primary">Received: put it in stock</button><button class="po-cancel">Cancel</button>' : ''}${o.status !== 'received' ? '<button class="po-delete danger">Delete</button>' : ''}</div>
+      ${['draft', 'ordered'].includes(o.status) ? `<div class="row"><select class="po-kind"><option value="spool">spool</option><option value="part">part</option></select><input class="po-material" placeholder="material (PLA)" style="width:8em"><input class="po-brand" placeholder="brand" style="width:8em"><input class="po-color" placeholder="colour" style="width:7em"><input class="po-supply" placeholder="supply name (for a part)" style="width:11em" list="po-supplies"><input class="po-qty" type="number" min="1" value="1" style="width:5em" aria-label="How many"><input class="po-cost" type="number" min="0" step="0.01" placeholder="price each" style="width:7em"><input class="po-weight" type="number" min="10" value="1000" style="width:6em" aria-label="Grams per spool"><button class="po-add">Add the line</button></div>` : ''}</div>`).join('') : '<p class="muted">No purchase orders yet.</p>'}
+    <datalist id="po-supplies"></datalist>
+    <div class="row"><select id="po-new-vendor"><option value="">no vendor yet</option>${vendors.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select><input id="po-new-ref" placeholder="their order number" style="width:11em"><button id="po-new">New purchase order</button><span id="po-msg" class="muted"></span></div>
+    <h4>Vendors</h4>
+    <ul>${vendors.map(v => `<li><span><b>${esc(v.name)}</b> ${v.url ? `<a href="${esc(safeUrl(v.url))}" target="_blank" rel="noopener noreferrer">site</a>` : ''} <span class="muted">${esc(v.contact || '')}</span></span><button class="vendor-del" data-id="${v.id}">remove</button></li>`).join('')}</ul>
+    <div class="row"><input id="vendor-name" placeholder="Vendor name"><input id="vendor-url" placeholder="https://..."><input id="vendor-contact" placeholder="Contact"><button id="vendor-add">Add a vendor</button><span id="vendor-msg" class="muted"></span></div>`;
+  const supplies = await fetch('/api/inventory').then(r => (r.ok ? r.json() : []));
+  const list = Array.isArray(supplies) ? supplies : (supplies.items || []);
+  $('#po-supplies').innerHTML = list.map(s => `<option value="${esc(s.name)}"></option>`).join('');
+  const call = async (method, url, body, ok) => { const r = await jsonRequest(method, url, body); if (!r.ok) { showNotice(await sourceErrorText(r)); return null; } if (ok) showNotice(ok); loadPurchasing(); return r; };
+  if ($('#buy-make')) $('#buy-make').onclick = async () => {
+    const picked = [...box.querySelectorAll('tr[data-i]')].filter(tr => tr.querySelector('.buy-pick').checked).map(tr => ({ ...buy[parseInt(tr.dataset.i)], quantity: parseInt(tr.querySelector('.buy-qty').value) || 1 }));
+    if (!picked.length) { $('#buy-msg').textContent = 'Tick something first.'; return; }
+    await call('POST', '/api/purchasing/buy-list/order', { items: picked, vendor_id: $('#buy-vendor').value ? parseInt($('#buy-vendor').value) : null }, 'Draft purchase order made.');
+  };
+  $('#po-new').onclick = () => call('POST', '/api/purchasing/orders', { vendor_id: $('#po-new-vendor').value ? parseInt($('#po-new-vendor').value) : null, reference: $('#po-new-ref').value.trim() || null });
+  $('#vendor-add').onclick = () => call('POST', '/api/purchasing/vendors', { name: $('#vendor-name').value, url: $('#vendor-url').value, contact: $('#vendor-contact').value });
+  box.querySelectorAll('.vendor-del').forEach(b => b.onclick = () => { if (confirm('Remove this vendor? Its orders stay.')) call('DELETE', `/api/purchasing/vendors/${b.dataset.id}`); });
+  box.querySelectorAll('.po-card').forEach(card => {
+    const id = card.dataset.id;
+    const on = (sel, fn) => { const el = card.querySelector(sel); if (el) el.onclick = fn; };
+    on('.po-ordered', () => call('POST', `/api/purchasing/orders/${id}/status`, { status: 'ordered' }));
+    on('.po-cancel', () => call('POST', `/api/purchasing/orders/${id}/status`, { status: 'cancelled' }));
+    on('.po-delete', () => { if (confirm('Delete this purchase order?')) call('DELETE', `/api/purchasing/orders/${id}`); });
+    on('.po-receive', async () => {
+      if (!confirm('Put what was bought in stock? Spool records are made now, and it cannot be done twice.')) return;
+      const r = await call('POST', `/api/purchasing/orders/${id}/receive`, {});
+      if (r) { const d = await r.clone().json(); showNotice(`Received: ${d.spools} spool${d.spools === 1 ? '' : 's'} and ${d.parts} part${d.parts === 1 ? '' : 's'} added.`); loadSupplies(); }
+    });
+    card.querySelectorAll('.po-line-del').forEach(b => b.onclick = () => call('DELETE', `/api/purchasing/orders/${id}/lines/${b.dataset.line}`));
+    on('.po-add', () => {
+      const kind = card.querySelector('.po-kind').value, num = sel => (card.querySelector(sel).value === '' ? null : parseFloat(card.querySelector(sel).value));
+      const body = { kind, quantity: parseInt(card.querySelector('.po-qty').value) || 1, unit_cost: num('.po-cost') };
+      if (kind === 'spool') Object.assign(body, { material: card.querySelector('.po-material').value, brand: card.querySelector('.po-brand').value, color: card.querySelector('.po-color').value, weight_g: num('.po-weight') });
+      else { const hit = list.find(s => s.name === card.querySelector('.po-supply').value.trim()); body.inventory_id = hit ? hit.id : null; }
+      call('POST', `/api/purchasing/orders/${id}/lines`, body);
+    });
+  });
+}
+
 async function loadSupplies() {
+  loadPurchasing();
   const params = new URLSearchParams();
   const q = $('#supply-search').value.trim();
   if (q) params.set('q', q);
@@ -4872,8 +4928,47 @@ async function loadStock() {
   });
 }
 
+async function loadInvoices() {
+  const res = await fetch('/api/invoices');
+  if (!res.ok) return;
+  const d = await res.json();
+  $('#invoices-summary').textContent = d.invoices.length ? `(${d.invoices.length}; ${money2(d.owed)} owed${d.overdue ? `, ${d.overdue} overdue` : ''})` : '';
+  $('#invoices-body').innerHTML = d.invoices.length ? `<table class="facts"><thead><tr><th>Number</th><th>Customer</th><th>Issued</th><th>Due</th><th>Total</th><th>Owed</th><th>Status</th><th></th></tr></thead><tbody>
+    ${d.invoices.map(i => `<tr><td>${esc(i.number)}</td><td>${esc(i.customer)}</td><td>${esc(i.issued_on)}</td><td class="${i.overdue ? 'warn-text' : ''}">${esc(i.due_on)}${i.overdue ? ' (overdue)' : ''}</td><td>${money2(i.total)}</td><td>${money2(i.balance)}</td><td>${esc(i.status)}</td><td><a class="button-link" href="/api/invoices/${i.id}/pdf" download>PDF</a></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No invoices yet.</p>';
+}
+async function loadCustomers() {
+  const res = await fetch('/api/customers');
+  if (!res.ok) return;
+  const d = await res.json();
+  const body = $('#customers-body');
+  body.innerHTML = d.customers.length ? `<table class="facts"><thead><tr><th>Customer</th><th>Pays</th><th>Credit limit</th><th>Discount %</th><th>Owes</th><th></th></tr></thead><tbody>
+    ${d.customers.map(c => `<tr data-name="${esc(c.name)}"><td>${esc(c.name)}</td>
+      <td><select class="cust-terms">${Object.entries(d.terms).map(([k, v]) => `<option value="${k}" ${k === c.payment_terms ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></td>
+      <td><input class="cust-limit" type="number" min="0" step="1" value="${c.credit_limit ?? ''}" placeholder="none" style="width:7em"></td>
+      <td><input class="cust-disc" type="number" min="0" max="100" step="1" value="${c.discount_pct ?? ''}" placeholder="0" style="width:5em"></td>
+      <td>${money2(c.owes)}</td><td><button class="cust-save">Save</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No customers yet.</p>';
+  body.onclick = async (e) => {
+    if (!e.target.classList.contains('cust-save')) return;
+    const row = e.target.closest('tr');
+    const num = sel => (row.querySelector(sel).value === '' ? null : parseFloat(row.querySelector(sel).value));
+    const r = await jsonRequest('PUT', '/api/customers', { name: row.dataset.name, payment_terms: row.querySelector('.cust-terms').value, credit_limit: num('.cust-limit'), discount_pct: num('.cust-disc') });
+    showNotice(r.ok ? 'Saved.' : await sourceErrorText(r));
+    if (r.ok) loadCustomers();
+  };
+}
+$('#suggest-prices').addEventListener('click', async () => {
+  const margin = $('#suggest-margin').value;
+  const r = await jsonRequest('POST', '/api/orders/suggest-prices', margin === '' ? {} : { margin_pct: parseFloat(margin) });
+  if (!r.ok) { $('#suggest-status').textContent = await sourceErrorText(r); return; }
+  const d = await r.json();
+  $('#suggest-status').textContent = `Priced ${d.filled} item${d.filled === 1 ? '' : 's'} at a ${d.margin_pct}% margin${d.skipped.length ? `; ${d.skipped.length} could not be priced (${d.skipped[0].why})` : ''}.`;
+  loadOrders();
+});
+
 async function loadOrders() {
   loadStock();
+  loadInvoices();
+  loadCustomers();
   const res = await fetch('/api/orders');
   if (!res.ok) { $('#orders-list').innerHTML = '<p class="error-text">Could not load the orders.</p>'; return; }
   const data = await res.json();
@@ -4901,10 +4996,11 @@ async function renderOrderBody(id) {
   const centres = await budgetChoices();
   card.querySelector('.order-body').innerHTML = `
     ${o.contact ? `<div class="muted">${esc(o.contact)}</div>` : ''}${o.notes ? `<div>${esc(o.notes)}</div>` : ''}
-    <table class="facts"><thead><tr><th>Model</th><th>How many</th><th>Price each</th><th>Line</th><th>Printed</th><th></th></tr></thead><tbody>
+    <table class="facts"><thead><tr><th>Model</th><th>How many</th><th>Price each</th><th>Disc. %</th><th>Line</th><th>Printed</th><th></th></tr></thead><tbody>
       ${o.items.map(i => `<tr data-item="${i.id}"><td><a href="#/model/${i.model_id}">${esc(i.filename || 'model ' + i.model_id)}</a></td>
         <td><input class="oi-qty" type="number" min="1" value="${i.quantity}" style="width:5em" ${readOnly ? 'disabled' : ''}></td>
         <td><input class="oi-price" type="number" min="0" step="0.01" value="${i.unit_price ?? ''}" placeholder="${i.suggested_price != null ? i.suggested_price + ' (suggested)' : 'price'}" style="width:8em" ${readOnly ? 'disabled' : ''}></td>
+        <td><input class="oi-disc" type="number" min="0" max="100" step="1" value="${i.discount_pct ?? ''}" placeholder="0" style="width:4.5em" aria-label="Discount percent" ${readOnly ? 'disabled' : ''}></td>
         <td>${money2(i.line_price)}</td><td>${i.units_done} / ${i.quantity}${i.units_queued < i.quantity ? ` <span class="muted">(${i.quantity - i.units_queued} not queued)</span>` : ''}</td>
         <td>${readOnly ? '' : '<button class="oi-remove">Remove</button>'}</td></tr>`).join('')}</tbody></table>
     ${readOnly ? '' : `<div class="row"><input class="oi-model" list="order-models-${id}" placeholder="Add a model (type to search)"><datalist id="order-models-${id}"></datalist>
@@ -4914,8 +5010,42 @@ async function renderOrderBody(id) {
       ${centres.length ? `<select class="order-centre" aria-label="Budget" title="Its prints are charged to this budget"><option value="">no budget</option>${centres.map(c => `<option value="${c.id}" ${c.id === o.cost_centre_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
       <button class="order-shelf" title="Fill what is still needed from finished parts on the shelf">Take from the shelf</button><button class="order-queue primary">Put the prints in the queue</button><button class="order-delete danger">Delete</button><span class="order-msg muted"></span></div>
       ${o.suggested_status !== o.status ? `<div class="muted">Looks like it is <b>${esc(o.suggested_status)}</b> now.</div>` : ''}
-      ${o.status === 'quote' || o.quote_path ? '<div class="row order-quote-box"></div>' : ''}`}`;
+      ${o.status === 'quote' || o.quote_path ? '<div class="row order-quote-box"></div>' : ''}
+      <div class="row order-invoice-box">${o.invoice
+        ? `<b>Invoice ${esc(o.invoice.number)}</b> <span class="status-badge ${o.invoice.status === 'paid' ? '' : 'status-printing'}">${esc(o.invoice.status)}</span> <span class="muted">${money2(o.invoice.total)}, ${money2(o.invoice.balance)} still owed, due ${esc(o.invoice.due_on)}</span>
+           <a class="button-link" href="/api/invoices/${o.invoice.id}/pdf" download>PDF</a>
+           ${o.invoice.status === 'issued' ? `<input class="inv-pay" type="number" min="0" step="0.01" placeholder="payment" style="width:7em" aria-label="Payment amount"><button class="inv-pay-go" data-id="${o.invoice.id}">Record a payment</button>` : ''}
+           ${currentUser.role === 'admin' ? `<button class="inv-void danger" data-id="${o.invoice.id}">Void</button>` : ''}`
+        : (o.status !== 'cancelled' && o.items.length ? `<select class="inv-terms" aria-label="Payment terms"><option value="">terms: the customer's own</option><option value="due_on_receipt">due on receipt</option><option value="net_15">net 15</option><option value="net_30">net 30</option><option value="net_60">net 60</option></select><button class="inv-make">Make an invoice</button>` : '')}
+        <span class="inv-msg muted"></span></div>`}`;
   const body = card.querySelector('.order-body');
+  body.querySelectorAll('.oi-disc').forEach(input => input.onchange = async () => {
+    const row = input.closest('tr');
+    const r = await jsonRequest('PATCH', `/api/orders/${id}/items/${row.dataset.item}`, { discount_pct: input.value === '' ? null : parseFloat(input.value) });
+    if (r.ok) loadOrders(); else showNotice(await sourceErrorText(r));
+  });
+  const invMsg = text => { const el = body.querySelector('.inv-msg'); if (el) el.textContent = text; };
+  const invMake = body.querySelector('.inv-make');
+  if (invMake) invMake.onclick = async () => {
+    let r = await jsonRequest('POST', `/api/invoices/from-order/${id}`, { terms: body.querySelector('.inv-terms').value || undefined });
+    if (r.status === 409 && (await r.clone().json()).detail.startsWith('Credit limit') && confirm(`${(await r.clone().json()).detail}\n\nMake the invoice anyway?`)) {
+      r = await jsonRequest('POST', `/api/invoices/from-order/${id}`, { terms: body.querySelector('.inv-terms').value || undefined, force: true });
+    }
+    if (r.ok) loadOrders(); else invMsg(await sourceErrorText(r));
+  };
+  const payGo = body.querySelector('.inv-pay-go');
+  if (payGo) payGo.onclick = async () => {
+    const amount = parseFloat(body.querySelector('.inv-pay').value);
+    if (!(amount > 0)) { invMsg('Type the amount paid.'); return; }
+    const r = await jsonRequest('POST', `/api/invoices/${payGo.dataset.id}/payments`, { amount });
+    if (r.ok) loadOrders(); else invMsg(await sourceErrorText(r));
+  };
+  const voidBtn = body.querySelector('.inv-void');
+  if (voidBtn) voidBtn.onclick = async () => {
+    if (!confirm('Void this invoice? The order can then be invoiced again.')) return;
+    const r = await jsonRequest('POST', `/api/invoices/${voidBtn.dataset.id}/void`, {});
+    if (r.ok) loadOrders(); else invMsg(await sourceErrorText(r));
+  };
   const quoteBox = body.querySelector('.order-quote-box');
   if (quoteBox) {
     const draw = (path) => {
@@ -5702,6 +5832,11 @@ $('#metrics-save').addEventListener('click', async () => {
   loadMetrics();
 });
 
+$('#invoice-settings-save').addEventListener('click', async () => {
+  const ok = await saveSetting({ shop_address: $('#shop-address').value.trim(), tax_rate_pct: $('#tax-rate').value.trim(), invoice_prefix: $('#invoice-prefix').value.trim(), invoice_footer: $('#invoice-footer').value.trim() });
+  $('#invoice-settings-status').textContent = ok ? 'Saved.' : 'Could not save.';
+});
+
 function loadQuiet(s) {
   $('#quiet-start').value = s.quiet_start || '';
   $('#quiet-end').value = s.quiet_end || '';
@@ -5829,6 +5964,10 @@ async function loadSettings() {
   loadSignin(s);
   loadShops(s);
   loadQuiet(s);
+  $('#shop-address').value = s.shop_address || '';
+  $('#tax-rate').value = s.tax_rate_pct || '';
+  $('#invoice-prefix').value = s.invoice_prefix || '';
+  $('#invoice-footer').value = s.invoice_footer || '';
   loadWall();
   loadLog();
   loadChannels(s);

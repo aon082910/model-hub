@@ -63,8 +63,9 @@ def _item_json(session: Session, item: OrderItem, names: dict, units: dict) -> d
     suggested = q["unit"]["price"] if q else None
     used = item.unit_price if item.unit_price is not None else suggested
     queued = units.get(item.id, {"queued": 0, "done": 0})
-    return {"id": item.id, "model_id": item.model_id, "filename": names.get(item.model_id), "quantity": item.quantity, "unit_price": item.unit_price,
-            "suggested_price": suggested, "price_used": used, "line_price": round(used * item.quantity, 2) if used is not None else None,
+    discount = item.discount_pct or 0
+    return {"id": item.id, "model_id": item.model_id, "filename": names.get(item.model_id), "quantity": item.quantity, "unit_price": item.unit_price, "discount_pct": item.discount_pct,
+            "suggested_price": suggested, "price_used": used, "line_price": round(used * item.quantity * (1 - discount / 100), 2) if used is not None else None,
             "line_cost": q["total"]["cost"] if q else None, "units_queued": queued["queued"], "units_done": queued["done"], "from_stock": item.from_stock or 0, "estimated": q is not None}
 
 
@@ -102,6 +103,13 @@ def _order_json(session: Session, order: Order, with_items: bool = True) -> dict
            "paid": order.paid, "cost_centre_id": order.cost_centre_id, "created_at": order.created_at.isoformat(), "quote_path": f"/quote/{order.public_token}" if order.public_token else None, "units": wanted, "units_done": done,
            "price": round(price, 2), "cost": round(cost, 2), "profit": round(price - cost, 2), "suggested_status": suggested,
            "overdue": bool(order.due_date and order.due_date < date.today().isoformat() and order.status in ("quote", "accepted", "printing"))}
+    from app.models import Invoice
+    live = session.exec(select(Invoice).where(Invoice.order_id == order.id, Invoice.status != "void").order_by(Invoice.id.desc())).first()
+    if live:
+        from app import invoices
+        out["invoice"] = {"id": live.id, "number": live.number, "status": live.status, "total": live.total, "balance": invoices.balance(session, live), "due_on": live.due_on}
+    else:
+        out["invoice"] = None
     if with_items:
         out["items"] = rows
     return out
@@ -271,6 +279,45 @@ def remove_quote_link(order_id: int, request: Request, session: Session = Depend
     return {"quote_path": None}
 
 
+@router.post("/suggest-prices")
+def suggest_prices(payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Fill in the price of every item that has none: its cost (filament, electricity, machine time, failure allowance) plus a margin (margin_pct, else the one in Settings, Costs).
+    For the orders in order_ids, or every order that is still a quote. Items whose weight or time is not known are left and listed."""
+    margin = payload.get("margin_pct")
+    if margin is not None and (isinstance(margin, bool) or not isinstance(margin, (int, float)) or not 0 <= margin <= 1000):
+        raise HTTPException(400, "margin_pct must be a number from 0 to 1000")
+    ids = payload.get("order_ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        raise HTTPException(400, "order_ids must be a list of order ids")
+    stmt = select(Order).where(Order.id.in_(ids)) if ids is not None else select(Order).where(Order.status == "quote")
+    from app.settings_store import get_setting
+    if margin is None:
+        try:
+            margin = float(get_setting(session, "cost_margin_pct", "") or 0)
+        except ValueError:
+            margin = 0.0
+    filled, skipped = 0, []
+    for order in session.exec(stmt).all():
+        for item in session.exec(select(OrderItem).where(OrderItem.order_id == order.id)).all():
+            if item.unit_price is not None:
+                continue
+            defaults = costing.defaults_for(session, item.model_id)
+            if defaults["grams"] is None or defaults["minutes"] is None:
+                skipped.append({"order": order.id, "customer": order.customer, "model_id": item.model_id, "why": "no weight or print time is known for it"})
+                continue
+            q = costing.quote(session, defaults["grams"], defaults["minutes"], defaults["filament_id"], 1)
+            if q["unit"]["cost"] is None or not q["unit"]["cost"]:
+                skipped.append({"order": order.id, "customer": order.customer, "model_id": item.model_id, "why": "its cost is not known (give the filament a price)"})
+                continue
+            item.unit_price = round(q["unit"]["cost"] * (1 + margin / 100), 2)
+            session.add(item)
+            filled += 1
+    session.commit()
+    if filled:
+        activity.record(session, activity.actor_of(request), "order", f"Suggested prices for {filled} item(s) at a {margin:g}% margin")
+    return {"filled": filled, "skipped": skipped, "margin_pct": margin}
+
+
 @router.get("/export.csv")
 def export_csv(session: Session = Depends(get_session)):
     """Every order as a spreadsheet (cells that start like a formula are stored as text)."""
@@ -361,6 +408,14 @@ def edit_item(order_id: int, item_id: int, payload: dict, session: Session = Dep
         item.quantity = _quantity(payload["quantity"])
     if "unit_price" in payload:
         item.unit_price = _price(payload["unit_price"])
+    if "discount_pct" in payload:
+        value = payload["discount_pct"]
+        if value in (None, "", 0):
+            item.discount_pct = None
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 100:
+            raise HTTPException(400, "discount_pct must be a number from 0 to 100")
+        else:
+            item.discount_pct = round(float(value), 2)
     session.add(item)
     session.commit()
     return _order_json(session, order)

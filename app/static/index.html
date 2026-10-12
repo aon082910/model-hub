@@ -294,6 +294,10 @@
   <section id="tab-supplies" class="tab">
     <h2>Supplies on hand</h2>
     <p class="muted">Electronics, parts and supplies you already own. Names that match a project part show up as "in stock" on the shopping list.</p>
+    <details id="purchasing-box"><summary>Buying: vendors, purchase orders and the buy list</summary>
+      <p class="muted">Keep a list of what you buy. The <b>buy list</b> shows spools that are nearly used up, filament the print queue needs more of than you have, and supplies at or below their minimum. A purchase order goes draft, ordered, <b>received</b>: receiving puts one full spool record per spool bought in the Filament page (with its price) and adds the parts to their supplies. Nothing is ordered from a shop by this.</p>
+      <div id="purchasing-body"></div>
+    </details>
     <div class="row supply-add">
       <input id="supply-name" placeholder="Name (e.g. ESP32 dev board, M3x8 screws)">
       <select id="supply-category">
@@ -440,7 +444,16 @@
       <div class="row"><input id="order-customer" placeholder="Customer"><input id="order-contact" placeholder="Contact (optional)"><input id="order-due" type="date" aria-label="Due date"></div>
       <div class="row"><input id="order-notes" placeholder="Notes"><button id="order-create" class="primary">Create</button><span id="order-status-msg" class="muted"></span></div>
     </details>
-    <div class="row"><a class="button-link" href="/api/orders/export.csv" download>Orders as a spreadsheet</a></div>
+    <div class="row"><a class="button-link" href="/api/orders/export.csv" download>Orders as a spreadsheet</a>
+      <label>Margin % <input id="suggest-margin" type="number" min="0" max="1000" step="1" placeholder="from Settings" style="width:8em"></label><button id="suggest-prices" title="Give every quote item that has no price its cost plus this margin">Suggest prices for the quotes</button><span id="suggest-status" class="muted"></span></div>
+    <details id="invoices-box"><summary>Invoices <span id="invoices-summary" class="muted"></span></summary>
+      <p class="muted">Make an invoice from an order (open the order). It is a snapshot of the order's lines, with the customer's terms, discount and tax; payments can be recorded in parts, and the order is marked paid when they cover it. Set the shop details in Settings, Invoices.</p>
+      <div id="invoices-body"></div>
+    </details>
+    <details id="customers-box"><summary>Customers and their terms</summary>
+      <p class="muted">How long each customer has to pay, the most they may owe in unpaid invoices at once (a new invoice over it is refused unless you go on anyway), and a standing discount. Customers are the names on your orders.</p>
+      <div id="customers-body"></div>
+    </details>
     <details id="order-import-box"><summary>Import orders from a shop's export</summary>
       <p class="muted">The spreadsheet (CSV) you can download from Shopify, Etsy, WooCommerce, eBay and most other shops: one order per order number, each line matched to a library model by its SKU or title. Lines that match nothing are kept in the order's notes, and importing the same file twice makes no copies. <b>Preview</b> changes nothing.</p>
       <div class="row"><input type="file" id="order-import-file" accept=".csv,text/csv"><button id="order-import-preview">Preview</button><button id="order-import-go" class="primary">Import</button><span id="order-import-status" class="muted"></span></div>
@@ -833,6 +846,15 @@
       <div class="row"><select id="log-level"><option value="INFO">info and worse</option><option value="WARNING">warnings and errors</option><option value="ERROR">errors only</option></select>
         <input id="log-filter" placeholder="Search the log" style="min-width:14em"><button id="log-refresh">Show</button><a class="button-link" href="/api/system/support-bundle.zip" download>Download a support bundle</a></div>
       <pre id="log-lines" class="muted" style="max-height:18em;overflow:auto;white-space:pre-wrap;font-size:12px"></pre>
+    </div>
+
+    <h2>Invoices</h2>
+    <div class="settings-form" id="invoice-settings">
+      <p class="muted">What goes on an invoice. The shop name and the currency sign are the ones in Shop orders and quotes above.</p>
+      <label>Shop address <small>(top of the invoice)</small><textarea id="shop-address" rows="2" maxlength="300"></textarea></label>
+      <div class="row"><label>Tax % <input id="tax-rate" type="number" min="0" max="100" step="0.01" placeholder="0" style="width:8em"></label><label>Invoice numbers start with <input id="invoice-prefix" maxlength="12" placeholder="INV-" style="width:8em"></label></div>
+      <label>Text at the bottom <small>(how to pay, thanks)</small><input id="invoice-footer" maxlength="300"></label>
+      <div class="row"><button id="invoice-settings-save">Save</button><span id="invoice-settings-status" class="muted"></span></div>
     </div>
 
     <h2>Status page for a wall display</h2>

@@ -38,8 +38,17 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Date>2026-10-10</Date>
+  <Date>2026-10-12</Date>
   <Changes>
+### 2.31.0
+Invoices: make one from an order, with the customer's payment terms, standing
+discount, line discounts and tax; download it as a PDF; record payments in
+parts (the order is marked paid when they cover it); get told when one is
+overdue. Customers can have a credit limit. Suggest prices for the quotes from
+the cost plus a margin. Buying: vendors, purchase orders that put spools and
+parts in stock when received, and a buy list of what is low or needed by the
+queue. New tables and columns are added automatically.
+
 ### 2.30.0
 Shared printers: an access group can limit logins to the queue entries they
 made themselves and can make what they add wait for your approval (Approve or

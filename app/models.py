@@ -361,6 +361,7 @@ class OrderItem(SQLModel, table=True):
     quantity: int = 1
     unit_price: Optional[float] = None     # empty: the price the cost calculator suggests
     from_stock: Optional[int] = None       # units supplied from finished parts on the shelf
+    discount_pct: Optional[float] = None   # a discount on this line (0 to 100)
 
 
 class MaintenanceTask(SQLModel, table=True):
@@ -636,3 +637,84 @@ class SlicerUpload(SQLModel, table=True):
     sent_by: Optional[str] = None           # the API token it came with
     note: Optional[str] = None
     sent_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CustomerTerms(SQLModel, table=True):
+    """What a customer (named as on their orders) has agreed: how long they have to pay, how much they may owe at once, and a standing discount."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name_key: str = Field(index=True, unique=True)     # the customer's name in lower case, as orders spell it
+    name: str
+    payment_terms: str = "due_on_receipt"              # due_on_receipt, net_15, net_30, net_60
+    credit_limit: Optional[float] = None               # most they may owe in unpaid invoices at once (empty: no limit)
+    discount_pct: Optional[float] = None               # taken off every invoice
+    notes: Optional[str] = None
+
+
+class Invoice(SQLModel, table=True):
+    """An invoice made from an order: a snapshot of its lines and money at the time, so later price changes do not alter it."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_id: int = Field(index=True)
+    number: str = Field(index=True, unique=True)
+    customer: str
+    contact: Optional[str] = None
+    issued_on: str                                      # YYYY-MM-DD
+    due_on: str
+    terms: str = "due_on_receipt"
+    lines_json: str = "[]"                              # [{name, quantity, unit, discount_pct, line}]
+    subtotal: float = 0
+    customer_discount_pct: Optional[float] = None
+    customer_discount: float = 0
+    tax_rate_pct: float = 0
+    tax: float = 0
+    total: float = 0
+    status: str = "issued"                              # issued, paid, void
+    notes: Optional[str] = None
+    overdue_told: Optional[bool] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Payment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    invoice_id: int = Field(index=True)
+    amount: float
+    method: Optional[str] = None
+    paid_on: str                                        # YYYY-MM-DD
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Vendor(SQLModel, table=True):
+    """Somewhere filament and parts are bought."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    contact: Optional[str] = None
+    url: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PurchaseOrder(SQLModel, table=True):
+    """What is being bought from one vendor: a draft, then ordered, then received (which adds the spools and parts to stock)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vendor_id: Optional[int] = Field(default=None, index=True)
+    status: str = "draft"                               # draft, ordered, received, cancelled
+    reference: Optional[str] = None                     # the vendor's own order number
+    ordered_on: Optional[str] = None
+    expected_on: Optional[str] = None
+    received_on: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PurchaseLine(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    po_id: int = Field(index=True)
+    kind: str = "spool"                                 # spool (becomes spools when received) or part (adds to a supply)
+    description: str
+    material: Optional[str] = None
+    brand: Optional[str] = None
+    color: Optional[str] = None
+    color_hex: Optional[str] = None
+    quantity: int = 1
+    unit_cost: Optional[float] = None
+    weight_g: Optional[float] = None                    # per spool
+    inventory_id: Optional[int] = None                  # the supply a part adds to

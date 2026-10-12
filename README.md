@@ -682,6 +682,15 @@ The *Scan a spool tag* button (Filament page, Chrome on Android) reads any tag: 
 
 When Model Hub sends a print with *start* and the printer is still idle a minute later (a dropped command, a printer that lost its connection), the queue entry goes back to *queued*, the job is marked *not started* and you are told. It looks only at prints sent in the last ten minutes, never starts anything again by itself, and can be switched off with the setting `dispatch_watchdog` = `false`.
 
+## Invoices, payments and customer terms
+
+Open an order and **Make an invoice**: a snapshot of its lines (with each line's discount), the customer's standing discount, tax (**Settings → Invoices**: tax %, the number prefix, the shop address and a footer) and a due date from the **payment terms** (due on receipt, net 15, 30 or 60: the customer's own, or chosen then). The **PDF** is ready to send. Later price changes do not alter an invoice; there is one live invoice per order (void it to make another). **Record a payment** in parts: the invoice is *paid* when they cover it, which also marks the order paid, and a payment can be taken back.
+**Customers and their terms** (Orders page) sets, per customer (the name as it is on their orders, spelled however), how long they have to pay, a **credit limit** (the most they may owe in unpaid invoices at once: a new invoice over it is refused unless you go on anyway) and a standing discount. **Suggest prices for the quotes** gives every quote item that has no price its cost (filament, electricity, machine time, failure allowance) plus a margin. You are told once about each invoice that goes past its due date unpaid. This is simple bookkeeping for a small print shop, not accounting: there is no ledger or tax filing, and the totals are only as right as the prices you gave. The idea comes from FilaOps (reimplemented, not copied: its licence does not allow that).
+
+## Buying: vendors, purchase orders and the buy list
+
+On the Supplies page, **Buying** keeps **vendors** and **purchase orders** (draft, ordered, received or cancelled; spool lines and part lines) and a **buy list** of what looks worth buying: spools of a material and colour that are nearly used up (the low filament setting), filament the print queue needs more of than is on hand, and supplies at or below their minimum. A draft order can be made from the entries you tick. **Received** puts the order in stock, once: one full spool record per spool bought (with its price and weight) and the parts added to their supplies. Nothing is ordered from a shop by this.
+
 ## The report
 
 **Stats → Report** shows any stretch of time (the last 30 days to start with) with filters for printer and material: print jobs, print time, success rate (finished over all prints), filament used, prints per day, the average print, how long the printers ran, and the cost of the prints (filament, electricity and machine time from Settings, Costs; a failed print costs only its filament). Below are a jobs-per-day chart and tables by printer

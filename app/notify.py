@@ -33,6 +33,7 @@ EVENTS = {
     "dry_due": "A spool in a printer is due for drying",
     "stock_low": "Finished parts on the shelf are at or below their minimum",
     "slicer_upload": "A sliced file arrived from a slicer (the virtual printer)",
+    "invoice_overdue": "An invoice is past its due date and not paid",
     "review_needed": "A queue entry is waiting for the administrator's approval",
     "dispatch_failed": "A print was sent to a printer but never started",
     "schedule_blocked": "A print set to start by itself is waiting, or was given up",

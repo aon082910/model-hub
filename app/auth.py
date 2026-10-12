@@ -160,11 +160,11 @@ GROUP_AREAS = {
     "control": "Start, pause, resume or cancel prints",
 }
 _AREA_PREFIXES = {
-    "library_write": ("/api/library", "/api/nfc", "/api/purchasing", "/api/tags", "/api/collections", "/api/projects", "/api/inventory", "/api/filament", "/api/wishlist", "/api/bulk", "/api/families", "/api/creators",
+    "library_write": ("/api/library", "/api/nfc", "/api/tags", "/api/collections", "/api/projects", "/api/inventory", "/api/filament", "/api/wishlist", "/api/bulk", "/api/families", "/api/creators",
                       "/api/favorites", "/api/saved-searches", "/api/prints", "/api/attachments", "/api/print-files", "/api/profiles", "/api/designers", "/api/library-io", "/api/filing-rules"),
     "queue": ("/api/queue", "/api/calendar", "/api/estimates", "/api/slots"),
-    "orders": ("/api/orders", "/api/stock"),
-    "money": ("/api/costs", "/api/budgets", "/api/analytics"),
+    "orders": ("/api/orders", "/api/stock", "/api/invoices", "/api/customers"),
+    "money": ("/api/costs", "/api/budgets", "/api/analytics", "/api/purchasing"),
 }
 _PRINTER_PATH = re.compile(r"^/api/printers/(\d+)(/|$)")
 
