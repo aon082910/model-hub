@@ -12,7 +12,7 @@ from app.models import (
 from app.settings_store import get_setting
 
 FILTER_KEYS = ("q", "tag", "extension", "duplicates_only", "printed", "designer", "license", "collection_id",
-               "project_id", "linked", "fits_bed", "has_notes", "latest_only", "failed_before", "fits_printer", "favorite")
+               "project_id", "linked", "fits_bed", "has_notes", "latest_only", "failed_before", "fits_printer", "favorite", "known")
 SORT_KEYS = ("id", "name", "newest", "oldest", "largest", "smallest", "last_printed", "popular")
 
 
@@ -62,6 +62,15 @@ def conditions(session: Session, f: dict) -> list:
             raise FilterError("Favorites can only be used in the library view, not here")
         from app.models import Favorite
         out.append(Model3D.id.in_(select(Favorite.model_id).where(Favorite.owner == f["_owner"])))
+    if f.get("known"):                      # known_good, needs_test, failed, archived, or "any" for models someone has said something about
+        if f["known"] == "any":
+            out.append(Model3D.known_status.is_not(None))
+        elif f["known"] == "none":
+            out.append(Model3D.known_status.is_(None))
+        elif f["known"] in ("known_good", "needs_test", "failed", "archived"):
+            out.append(Model3D.known_status == f["known"])
+        else:
+            raise FilterError("known must be known_good, needs_test, failed, archived, any or none")
     if f.get("failed_before") is True:      # at least one failed print in its log
         out.append(Model3D.id.in_(select(PrintLog.model_id).where(print_outcomes.failed())))
     if f.get("linked") is True:

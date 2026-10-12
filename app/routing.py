@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
+from app import capabilities
 from app import fit, sensors, slots
 from app.models import Filament, Model3D, Printer, QueueItem
 
@@ -63,6 +64,8 @@ def suggest_for(session: Session, item: QueueItem, printers: list, overview: dic
         reasons, score, slot = [], 100.0, None
         if printer.out_of_service or sensors.hold_reason(session, printer.id):
             continue                                                      # out of service, or a sensor says it should not be started now
+        if item.requires and capabilities.missing(capabilities.load(item.requires), capabilities.load(printer.capabilities)):
+            continue                                                      # it needs a plate type or a feature this printer lacks
         if only is not None and printer.id not in only:
             continue                                                      # its sliced files are all made for other printers
         if strict and not exact_match_in(spool, overview.get(printer.id), session):

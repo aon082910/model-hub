@@ -71,6 +71,7 @@ def list_models(
     failed_before: bool = False,
     fits_printer: Optional[int] = None,
     favorite: bool = False,
+    known: Optional[str] = None,
     sort: Optional[str] = None,
     limit: int = Query(200, ge=1, le=5000),
     offset: int = Query(0, ge=0),
@@ -86,7 +87,7 @@ def list_models(
         "designer": designer, "license": license, "collection_id": collection_id, "project_id": project_id,
         "linked": linked, "fits_bed": fits_bed or None, "has_notes": has_notes or None,
         "latest_only": latest_only or None, "failed_before": failed_before or None, "fits_printer": fits_printer,
-        "favorite": favorite or None, "_owner": owner_of(request, session),
+        "favorite": favorite or None, "known": known, "_owner": owner_of(request, session),
     }
     try:
         conditions = library_filters.conditions(session, filters)
@@ -289,6 +290,7 @@ def set_print_settings(model_id: int, payload: dict, session: Session = Depends(
 
 
 EDITABLE_TEXT_FIELDS = ("source_url", "designer", "license", "filename", "notes")
+KNOWN_STATUSES = ("known_good", "needs_test", "failed", "archived")
 
 
 @router.patch("/models/{model_id}")
@@ -306,6 +308,22 @@ def update_model(model_id: int, payload: dict, session: Session = Depends(get_se
         if field == "filename" and not value:
             raise HTTPException(400, "filename cannot be empty")
         setattr(model, field, value)
+    if "known_status" in payload:
+        status = payload["known_status"]
+        if status in (None, ""):
+            model.known_status = None
+        elif status in KNOWN_STATUSES:
+            model.known_status = status
+        else:
+            raise HTTPException(400, "known_status must be one of: " + ", ".join(KNOWN_STATUSES))
+    if "recommended" in payload:
+        if not isinstance(payload["recommended"], bool):
+            raise HTTPException(400, "recommended must be true or false")
+        model.recommended = payload["recommended"] or None
+        if payload["recommended"] and model.family_id:                         # one version per family is the one to print
+            for other in session.exec(select(Model3D).where(Model3D.family_id == model.family_id, Model3D.id != model.id, Model3D.recommended.is_(True))).all():
+                other.recommended = None
+                session.add(other)
     model.updated_at = datetime.utcnow()
     session.add(model)
     session.commit()

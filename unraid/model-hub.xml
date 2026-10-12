@@ -40,6 +40,18 @@ PDF export, a browser extension for one-click import, and optional webhook notif
   <DonateLink/>
   <Date>2026-10-10</Date>
   <Changes>
+### 2.30.0
+Shared printers: an access group can limit logins to the queue entries they
+made themselves and can make what they add wait for your approval (Approve or
+Reject on the Print Queue page). Printers and queue entries can carry labels
+like plate=textured, and a print only goes to a printer that has what it needs.
+Models have a print status (known good, needs a test, failed, archived) that a
+working print sets by itself, with one version per family marked as the one to
+print. Spool tags: the scan button now reads OpenSpool and plain tag numbers,
+a tag can be linked to a spool, and a Klipper printer can be told the active
+Spoolman spool. A print that was sent but never started goes back in the queue.
+New columns are added automatically.
+
 ### 2.29.0
 Printer cards can change the nozzle and bed heat, speed, fan and (Bambu Lab)
 light, and Klipper printers can skip one object of the print that is running,

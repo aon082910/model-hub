@@ -118,14 +118,36 @@ def clean_date(value) -> Optional[str]:
     return value
 
 
+def _user(request) -> dict:
+    return getattr(getattr(request, "state", None), "user", None) or {}
+
+
+def _owner_check(request, item: QueueItem) -> None:
+    """A login in a group that sees only its own entries may not touch anyone else's."""
+    user = _user(request)
+    if user.get("own_only") and item.owner != user.get("username"):
+        raise HTTPException(403, "That entry belongs to someone else.")
+
+
+def clean_requires(value) -> Optional[str]:
+    from app import capabilities
+    try:
+        return capabilities.dump(capabilities.clean(value))
+    except capabilities.CapabilityError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.get("")
-def list_queue(session: Session = Depends(get_session)):
-    items = session.exec(select(QueueItem).order_by(QueueItem.position)).all()
-    return items
+def list_queue(request: Request, session: Session = Depends(get_session)):
+    stmt = select(QueueItem).order_by(QueueItem.position)
+    user = _user(request)
+    if user.get("own_only"):
+        stmt = stmt.where(QueueItem.owner == user.get("username"))
+    return session.exec(stmt).all()
 
 
 @router.post("")
-def add_to_queue(payload: dict, session: Session = Depends(get_session)):
+def add_to_queue(payload: dict, request: Request, session: Session = Depends(get_session)):
     max_pos = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
     position = (max_pos.position + 1) if max_pos else 0
     printer_id = payload.get("printer_id")
@@ -155,13 +177,22 @@ def add_to_queue(payload: dict, session: Session = Depends(get_session)):
         priority=clean_priority(payload.get("priority")) or None, held=clean_held(payload["held"]) if "held" in payload else None,
         printer_tag=clean_tag(payload.get("printer_tag")), cost_centre_id=check_centre(session, payload.get("cost_centre_id")),
         strict_match=clean_strict(payload.get("strict_match")),
+        requires=clean_requires(payload.get("requires")),
+        owner=_user(request).get("username"),
         position=position,
     )
+    review_wanted = bool(_user(request).get("needs_review"))
+    if review_wanted:
+        item.held, item.review = True, "pending"
     session.add(item)
     session.flush()
     refuse_if_over(session, item.cost_centre_id)
     session.commit()
     session.refresh(item)
+    if review_wanted:
+        from app.notify import notify_event
+        model = session.get(Model3D, item.model_id)
+        notify_event(session, "review_needed", "Model Hub: a queue entry needs approval", f"{item.owner or 'Someone'} added {model.filename if model else 'a print'} and it is waiting for you to approve it.")
     return item
 
 
@@ -416,6 +447,7 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
     printer = session.get(Printer, item.printer_id) if item.printer_id else None
     if not printer:
         raise HTTPException(400, "Choose a printer for this job first")
+    _owner_check(request, item)
     from app.auth import printer_allowed
     if not printer_allowed(getattr(getattr(request, "state", None), "user", None), printer.id):
         raise HTTPException(403, "Your group may not use that printer.")
@@ -425,6 +457,11 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
         raise HTTPException(409, "This entry is on hold for review: release it first")
     if item.printer_tag and item.printer_tag not in printer_tags(printer):
         raise HTTPException(409, f"This entry asked for a printer tagged \"{item.printer_tag}\" and {printer.name} does not have that tag")
+    if item.requires:
+        from app import capabilities
+        lacking = capabilities.missing(capabilities.load(item.requires), capabilities.load(printer.capabilities))
+        if lacking:
+            raise HTTPException(409, f"Needs: {printer.name} does not have {', '.join(lacking)}")
     every = [f for f in session.exec(select(PrintFile).where(PrintFile.model_id == item.model_id)
                                      .order_by(PrintFile.created_at.desc(), PrintFile.id.desc())).all() if f.kind in print_files.GCODE_KINDS]
     kept = sorted((f for f in every if f.printer_id in (None, printer.id)), key=lambda f: f.printer_id != printer.id)       # this printer's own file first, newest first
@@ -470,8 +507,33 @@ def send_item(item_id: int, payload: dict, request: Request, session: Session = 
     return {**result, "status": item.status}
 
 
+@router.post("/{item_id}/review")
+def review_item(item_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """The administrator approves or rejects an entry that was waiting for review (action: approve or reject, note: why). Approving takes the hold off."""
+    if _user(request).get("role") != "admin":
+        raise HTTPException(403, "Only the administrator can approve entries.")
+    item = session.get(QueueItem, item_id)
+    if not item:
+        raise HTTPException(404, "Not found")
+    action = payload.get("action")
+    if action not in ("approve", "reject"):
+        raise HTTPException(400, "action must be approve or reject")
+    note = payload.get("note")
+    if note is not None and not isinstance(note, str):
+        raise HTTPException(400, "note must be text")
+    item.review = "approved" if action == "approve" else "rejected"
+    item.held = None if action == "approve" else True
+    item.review_note = (note or "").strip()[:300] or None
+    session.add(item)
+    session.commit()
+    from app import activity
+    activity.record(session, activity.actor_of(request), "queue", f"{'Approved' if action == 'approve' else 'Rejected'} the queue entry of {item.owner or 'someone'}")
+    session.refresh(item)                          # (recording the activity committed again: read the entry afresh before it is sent back)
+    return item
+
+
 @router.post("/reprint/{log_id}")
-def reprint(log_id: int, payload: dict, session: Session = Depends(get_session)):
+def reprint(log_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
     """Queue a past print again, with its filament, grams and time, for the printer it was made on or any other you choose (printer_id)."""
     log = session.get(PrintLog, log_id)
     if not log:
@@ -483,7 +545,8 @@ def reprint(log_id: int, payload: dict, session: Session = Depends(get_session))
         raise HTTPException(400, "That printer does not exist")
     top = session.exec(select(QueueItem).order_by(QueueItem.position.desc())).first()
     item = QueueItem(model_id=log.model_id, position=(top.position + 1) if top else 0, filament_id=log.filament_id, printer_id=printer_id, estimated_grams=log.grams,
-                     estimated_minutes=log.minutes, estimate_basis=("history" if log.measured else "estimate") if log.minutes else None, notes=f"Reprint of the print on {log.printed_at:%Y-%m-%d}")
+                     estimated_minutes=log.minutes, estimate_basis=("history" if log.measured else "estimate") if log.minutes else None, notes=f"Reprint of the print on {log.printed_at:%Y-%m-%d}",
+                     owner=_user(request).get("username"))
     session.add(item)
     session.commit()
     session.refresh(item)
@@ -491,7 +554,7 @@ def reprint(log_id: int, payload: dict, session: Session = Depends(get_session))
 
 
 @router.post("/again/{model_id}")
-def print_again(model_id: int, session: Session = Depends(get_session)):
+def print_again(model_id: int, request: Request, session: Session = Depends(get_session)):
     """Queue the model again with the filament, grams and time of its most recent print."""
     if not session.get(Model3D, model_id):
         raise HTTPException(404, "Model not found")
@@ -503,7 +566,7 @@ def print_again(model_id: int, session: Session = Depends(get_session)):
                      filament_id=last.filament_id if last else None, printer_id=last.printer_id if last else None,
                      estimated_grams=last.grams if last else None, estimated_minutes=last.minutes if last else None,
                      estimate_basis=("history" if last.measured else "estimate") if last and last.minutes else None,
-                     notes="Printed again" if last else None)
+                     notes="Printed again" if last else None, owner=_user(request).get("username"))
     session.add(item)
     session.commit()
     session.refresh(item)
@@ -511,10 +574,15 @@ def print_again(model_id: int, session: Session = Depends(get_session)):
 
 
 @router.patch("/{item_id}")
-def update_queue_item(item_id: int, payload: dict, session: Session = Depends(get_session)):
+def update_queue_item(item_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
     item = session.get(QueueItem, item_id)
     if not item:
         raise HTTPException(404, "Not found")
+    _owner_check(request, item)
+    if item.review == "pending" and _user(request).get("role") != "admin" and payload.get("held") is False:
+        raise HTTPException(403, "This entry is waiting for the administrator's approval.")
+    if "requires" in payload:
+        item.requires = clean_requires(payload["requires"])
 
     was_done = item.status == "done"
     was_failed = item.status == "failed"
@@ -575,10 +643,11 @@ def update_queue_item(item_id: int, payload: dict, session: Session = Depends(ge
 
 
 @router.delete("/{item_id}")
-def remove_queue_item(item_id: int, session: Session = Depends(get_session)):
+def remove_queue_item(item_id: int, request: Request, session: Session = Depends(get_session)):
     item = session.get(QueueItem, item_id)
     if not item:
         raise HTTPException(404, "Not found")
+    _owner_check(request, item)
     # SQLite hands a deleted id to the next entry; a print log still pointing at it would make that entry look already logged
     for log in session.exec(select(PrintLog).where(PrintLog.queue_item_id == item_id)).all():
         log.queue_item_id = None

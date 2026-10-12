@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlmodel import Session, select
 
+from app import capabilities
 from app import printers as printing
 from app.config import LIBRARY_PATH
 from app.db import get_session
@@ -20,7 +21,7 @@ MAX_PRINTERS = 20
 
 def _json(printer: Printer) -> dict:
     return {"id": printer.id, "name": printer.name, "kind": printer.kind, "url": printer.url,
-            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "plate_check": bool(printer.plate_check), "out_of_service": bool(printer.out_of_service), "tags": [t for t in (printer.tags or "").split(",") if t], "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
+            "has_key": bool(printer.api_key), "snapshot_url": printer.snapshot_url, "slot_count": printer.slot_count or 0, "serial": printer.serial, "watch_failures": bool(printer.watch_failures), "pause_on_failure": bool(printer.pause_on_failure), "plate_check": bool(printer.plate_check), "out_of_service": bool(printer.out_of_service), "capabilities": capabilities.load(printer.capabilities), "tags": [t for t in (printer.tags or "").split(",") if t], "plug_kind": printer.plug_kind, "plug_host": printer.plug_host,
             "bed_x": printer.bed_x, "bed_y": printer.bed_y, "bed_z": printer.bed_z, "created_at": printer.created_at}
 
 
@@ -108,6 +109,12 @@ def _fields(payload: dict, existing: Optional[Printer] = None) -> dict:
             if tag.strip().lower() not in clean:
                 clean.append(tag.strip().lower())
         out["tags"] = ",".join(clean) or None
+    if "capabilities" in payload:
+        from app import capabilities
+        try:
+            out["capabilities"] = capabilities.dump(capabilities.clean(payload["capabilities"]))
+        except capabilities.CapabilityError as e:
+            raise HTTPException(400, str(e))
     if "out_of_service" in payload:
         if not isinstance(payload["out_of_service"], bool):
             raise HTTPException(400, "out_of_service must be true or false")
@@ -233,6 +240,25 @@ def adjust_printer(printer_id: int, payload: dict, request: Request, session: Se
         raise HTTPException(400 if "must be" in str(e) or "Only" in str(e) or "is on or off" in str(e) else 502, str(e))
     activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: {key} set to {payload[key]}")
     return {"status": "sent", key: payload[key]}
+
+
+@router.post("/{printer_id}/active-spool")
+def set_active_spool(printer_id: int, payload: dict, request: Request, session: Session = Depends(get_session)):
+    """Tell a Klipper printer which Spoolman spool is loaded (so Spoolman counts its filament). The spool must be one linked to Spoolman."""
+    from app.models import Filament
+    printer = _get(session, printer_id)
+    spool = session.get(Filament, payload.get("filament_id")) if isinstance(payload.get("filament_id"), int) and not isinstance(payload.get("filament_id"), bool) else None
+    if not spool:
+        raise HTTPException(400, "Choose a spool")
+    ext = (spool.external_id or "")
+    if not ext.startswith("spoolman:") or not ext.split(":", 1)[1].isdigit():
+        raise HTTPException(400, "That spool is not linked to Spoolman (import or send it from the Spoolman section in Settings first)")
+    try:
+        printing.set_active_spool(printer.kind, printer.url, printer.api_key, int(ext.split(":", 1)[1]))
+    except printing.PrinterError as e:
+        raise HTTPException(400 if "Only Klipper" in str(e) else 502, str(e))
+    activity.record(session, activity.actor_of(request), "printer", f"{printer.name}: active spool set to Spoolman spool {ext.split(':', 1)[1]}")
+    return {"status": "sent", "spoolman_id": int(ext.split(":", 1)[1])}
 
 
 @router.get("/{printer_id}/objects")

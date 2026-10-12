@@ -662,6 +662,26 @@ Tick **Settings → Print planning → start queued prints by itself** (off by d
 In a model's print history, **Reprint** puts a past print back in the queue with its filament, grams and time, on the printer it was made on or another you choose; tick **compare** on two prints for a side-by-side table (model, date, printer, how it went, minutes, grams, filament, rating, energy, notes, photos) with the differences highlighted. **Settings → Appearance** picks a dark, light or follow-my-device theme and an accent colour, for this browser only. Press **?** anywhere for the keyboard shortcuts (**/** searches the library; **g** then a letter goes to a page, like **g q** for the Print Queue).
 Not built from the list: a **Git backup** of the settings (it would need a stored access token, and the offsite backups to a folder or WebDAV already cover keeping copies) and **translations** (left out at your request).
 
+## Shared printers: your own entries, and approval
+
+In **Settings → Access groups**, two more switches on a group: **only see and change the queue entries they made themselves** (like students sharing a printer: each login sees its own entries; the administrator and logins with no such group see all) and **what they add waits for my approval** (their entries are put on hold, marked *waiting for approval* on the Print Queue page, and you are told; **Approve** takes the hold off, **Reject** keeps it with a reason they can see; they cannot take the hold off themselves, and your own entries are never held). Every queue entry now records who made it. This limits the **queue**: the library's files are not made private by it.
+
+## Printer labels
+
+On a printer's card, **Labels** are what it can do, in words you choose: `plate=textured, enclosed=yes, nozzle=0.6`. A queue entry's **needs** field takes the same kind of labels. A printer that lacks a needed label (or has another value; case is ignored) is never suggested for the entry and cannot be sent it (not even with *start anyway*). Model Hub only compares the labels; they mean whatever you decide.
+
+## Known-good versions
+
+A model has a **print status**: known good, needs a test, failed or archived (nothing until someone says). A print that **worked** marks a model nobody has judged yet (or one that needs a test) as known good by itself; a judgement you made is kept. In a family of versions one can be marked **the version to print**. The library filter *Print status* finds them.
+
+## Spool tags
+
+The *Scan a spool tag* button (Filament page, Chrome on Android) reads any tag: one with a Model Hub spool link, a `SPOOL:12` text, an **OpenSpool** record (a new spool can be made from it), or just the tag's own number (matched against the tag number kept on a spool; *Link a tag* on a spool's row links one, and a tag belongs to one spool at a time). For a Klipper printer with Moonraker's Spoolman component, *Active spool* on its card tells the printer which Spoolman spool is loaded. Bambu, Creality and QIDI tags use closed formats and are not read; **not tried with real tags, a reader or a phone**: the text handling is tested, the reading and writing is the browser's.
+
+## A print that never started
+
+When Model Hub sends a print with *start* and the printer is still idle a minute later (a dropped command, a printer that lost its connection), the queue entry goes back to *queued*, the job is marked *not started* and you are told. It looks only at prints sent in the last ten minutes, never starts anything again by itself, and can be switched off with the setting `dispatch_watchdog` = `false`.
+
 ## The report
 
 **Stats → Report** shows any stretch of time (the last 30 days to start with) with filters for printer and material: print jobs, print time, success rate (finished over all prints), filament used, prints per day, the average print, how long the printers ran, and the cost of the prints (filament, electricity and machine time from Settings, Costs; a failed print costs only its filament). Below are a jobs-per-day chart and tables by printer

@@ -160,7 +160,7 @@ GROUP_AREAS = {
     "control": "Start, pause, resume or cancel prints",
 }
 _AREA_PREFIXES = {
-    "library_write": ("/api/library", "/api/tags", "/api/collections", "/api/projects", "/api/inventory", "/api/filament", "/api/wishlist", "/api/bulk", "/api/families", "/api/creators",
+    "library_write": ("/api/library", "/api/nfc", "/api/purchasing", "/api/tags", "/api/collections", "/api/projects", "/api/inventory", "/api/filament", "/api/wishlist", "/api/bulk", "/api/families", "/api/creators",
                       "/api/favorites", "/api/saved-searches", "/api/prints", "/api/attachments", "/api/print-files", "/api/profiles", "/api/designers", "/api/library-io", "/api/filing-rules"),
     "queue": ("/api/queue", "/api/calendar", "/api/estimates", "/api/slots"),
     "orders": ("/api/orders", "/api/stock"),
@@ -183,7 +183,8 @@ def group_info(session: Session, row) -> dict:
         printers = _json.loads(group.printers_json) if group.printers_json else None
     except ValueError:
         deny, printers = [], None
-    return {"group": group.name, "deny": deny, "printers": [int(p) for p in printers] if isinstance(printers, list) and printers else None}
+    return {"group": group.name, "deny": deny, "printers": [int(p) for p in printers] if isinstance(printers, list) and printers else None,
+            "own_only": bool(group.own_only), "needs_review": bool(group.needs_review)}
 
 
 def printer_allowed(user: Optional[dict], printer_id: int) -> bool:

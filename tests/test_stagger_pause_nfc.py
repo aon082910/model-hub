@@ -213,4 +213,4 @@ def test_the_nfc_controls_are_in_the_page_and_only_for_phones_that_have_nfc():
     js = (Path(__file__).resolve().parent.parent / "app" / "static" / "app.js").read_text(encoding="utf-8")
     assert "NFC_OK" in js and "NDEFReader" in js and "nfcWriteSpool" in js and "nfcScanSpool" in js and "fil-nfc" in js and "nfc-scan" in js
     assert "printer-pause-watch" in js and "pause_on_failure" in js
-    assert r"/^#\/spool\/\d+$/" in js and "url.origin === location.origin" in js           # only this server's own spool links are followed
+    assert "/api/nfc/lookup" in js and "location.hash = `#/spool/${found.match.id}`" in js          # only a spool the server itself matched is opened, never an address from a tag

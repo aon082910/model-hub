@@ -489,6 +489,16 @@ def set_light(kind: str, url: str, api_key: Optional[str], serial: Optional[str]
                                                                  "led_on_time": 500, "led_off_time": 500, "loop_times": 0, "interval_time": 0}})
 
 
+def set_active_spool(kind: str, url: str, api_key: Optional[str], spoolman_id: int) -> None:
+    """Moonraker's Spoolman component: say which spool is loaded (Klipper only)."""
+    if kind != "moonraker":
+        raise PrinterError("Only Klipper (Moonraker) printers can be told the active spool")
+    with _client() as client:
+        response = _request(client, "POST", f"{url}/server/spoolman/spool_id", api_key, json={"spool_id": int(spoolman_id)})
+        if response.status_code not in (200, 202, 204):
+            raise PrinterError(f"The printer refused ({response.status_code}); is Spoolman set up in Moonraker?")
+
+
 def list_objects(kind: str, url: str, api_key: Optional[str]) -> dict:
     """The objects of the print Klipper is making (when it was sliced with object labels): {supported, objects: [{name, excluded, current}]}."""
     if kind != "moonraker":

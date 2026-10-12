@@ -16,7 +16,8 @@ _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,39}$")
 
 
 def _json(group: AccessGroup, members: int) -> dict:
-    return {"id": group.id, "name": group.name, "deny": json.loads(group.deny_json or "[]"), "printers": json.loads(group.printers_json) if group.printers_json else None, "members": members}
+    return {"id": group.id, "name": group.name, "deny": json.loads(group.deny_json or "[]"), "printers": json.loads(group.printers_json) if group.printers_json else None, "members": members,
+            "own_only": bool(group.own_only), "needs_review": bool(group.needs_review)}
 
 
 def _clean(session: Session, payload: dict, existing=None) -> dict:
@@ -29,6 +30,11 @@ def _clean(session: Session, payload: dict, existing=None) -> dict:
         if clash and (existing is None or clash.id != existing.id):
             raise HTTPException(409, "A group has that name already")
         out["name"] = name.strip()
+    for flag in ("own_only", "needs_review"):
+        if flag in payload:
+            if not isinstance(payload[flag], bool):
+                raise HTTPException(400, f"{flag} must be true or false")
+            out[flag] = payload[flag]
     if "deny" in payload:
         deny = payload["deny"]
         if not isinstance(deny, list) or any(a not in GROUP_AREAS for a in deny):

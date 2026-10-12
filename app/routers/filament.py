@@ -15,6 +15,7 @@ def list_filament(session: Session = Depends(get_session)):
 
 @router.post("")
 def create_filament(payload: dict, session: Session = Depends(get_session)):
+    payload = {k: v for k, v in payload.items() if k != "nfc_tag"}          # a tag is linked with /api/nfc/claim, which keeps it to one spool
     f = Filament(**payload)
     session.add(f)
     session.commit()
@@ -31,7 +32,7 @@ def update_filament(filament_id: int, payload: dict, session: Session = Depends(
         raise HTTPException(404, "Not found")
     old_cost = f.cost
     for k, v in payload.items():
-        if hasattr(f, k):
+        if hasattr(f, k) and k != "nfc_tag":
             setattr(f, k, v)
     session.add(f)
     session.commit()

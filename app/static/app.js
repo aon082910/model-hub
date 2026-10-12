@@ -328,6 +328,7 @@ function libraryParams() {
   if ($('#f-failed').checked) params.set('failed_before', 'true');
   if ($('#f-favorite').checked) params.set('favorite', 'true');
   put('fits_printer', $('#f-fits-printer').value);
+  put('known', $('#f-known').value);
   return params;
 }
 
@@ -347,6 +348,7 @@ function setLibraryFilters(values) {
   $('#f-failed').checked = values.failed_before === true || values.failed_before === 'true';
   $('#f-favorite').checked = values.favorite === true || values.favorite === 'true';
   $('#f-fits-printer').value = values.fits_printer ? String(values.fits_printer) : '';
+  $('#f-known').value = values.known || '';
 }
 
 // a filter changed: back to the first page, then reload (the paging script resets on a search-box input)
@@ -369,7 +371,7 @@ async function loadFilterChoices() {
 let savedSearches = [];
 
 ['#f-designer', '#f-license'].forEach(sel => $(sel).addEventListener('input', debounce(filtersChanged, 400)));
-['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed', '#f-favorite', '#f-fits-printer'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
+['#f-collection', '#f-project', '#f-linked', '#f-sort', '#f-fits', '#f-notes', '#f-latest', '#f-failed', '#f-favorite', '#f-fits-printer', '#f-known'].forEach(sel => $(sel).addEventListener('change', filtersChanged));
 $('#library-filters').addEventListener('toggle', () => { if ($('#library-filters').open) loadFilterChoices(); });
 $('#f-clear').addEventListener('click', () => { setLibraryFilters({}); filtersChanged(); });
 $('#f-saved').addEventListener('change', () => {
@@ -1113,7 +1115,19 @@ function renderModelFacts(m) {
     <table class="facts"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
     ${m.file_exists === false ? '<p class="warn-text">The file is missing from the library folder.</p>' : ''}
     ${m.ai_description ? `<p class="model-desc">${esc(m.ai_description)}</p>` : ''}
+    <div class="row"><label>Print status <select id="model-known" ${currentUser.role === 'viewer' ? 'disabled' : ''}><option value="">not judged yet</option>
+        ${[['known_good', 'known good'], ['needs_test', 'needs a test'], ['failed', 'failed'], ['archived', 'archived']].map(([v, t]) => `<option value="${v}" ${m.known_status === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      ${m.family_id ? `<label class="inline-check"><input type="checkbox" id="model-recommended" ${m.recommended ? 'checked' : ''} ${currentUser.role === 'viewer' ? 'disabled' : ''}> the version to print</label>` : ''}
+      <span id="model-known-msg" class="muted">A print that works marks a version known good by itself.</span></div>
     <div class="row"><a class="button-link" href="/api/library/models/${m.id}/file" download>Download file</a></div>`;
+  $('#model-known').onchange = async (e) => {
+    const res = await jsonRequest('PATCH', `/api/library/models/${m.id}`, { known_status: e.target.value || null });
+    $('#model-known-msg').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+  };
+  if ($('#model-recommended')) $('#model-recommended').onchange = async (e) => {
+    const res = await jsonRequest('PATCH', `/api/library/models/${m.id}`, { recommended: e.target.checked });
+    $('#model-known-msg').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+  };
 }
 
 function renderModelTags(m) {
@@ -3307,6 +3321,20 @@ function nfcProblem(e) {
   if (e && e.name === 'NotSupportedError') return 'This phone has no NFC, or it is switched off.';
   return `NFC did not work (${e && e.name ? e.name : 'unknown error'}).`;
 }
+async function nfcLinkSpool(id, out) {
+  out.textContent = 'Hold the tag to the back of the phone...';
+  try {
+    const reader = new NDEFReader();
+    const abort = new AbortController();
+    await reader.scan({ signal: abort.signal });
+    reader.onreading = async (event) => {
+      abort.abort();
+      if (!event.serialNumber) { out.textContent = 'That tag has no number to link.'; return; }
+      const res = await jsonRequest('POST', '/api/nfc/claim', { uid: event.serialNumber, filament_id: parseInt(id) });
+      out.textContent = res.ok ? `Linked tag ${event.serialNumber} to this spool.${(await res.json()).moved_from ? ' It was taken off another spool.' : ''}` : await sourceErrorText(res);
+    };
+  } catch (e) { out.textContent = nfcProblem(e); }
+}
 async function nfcWriteSpool(id, out) {
   out.textContent = 'Hold a blank tag to the back of the phone...';
   try {
@@ -3323,15 +3351,22 @@ async function nfcScanSpool(out) {
     await reader.scan({ signal: abort.signal });
     nfcReader = { abort };
     out.textContent = 'Scanning: hold a spool tag to the phone (press Scan again to stop).';
-    reader.onreading = (event) => {
+    reader.onreading = async (event) => {
+      let text = '';
       for (const record of event.message.records) {
-        if (record.recordType !== 'url') continue;
-        try {
-          const url = new URL(new TextDecoder().decode(record.data));
-          if (url.origin === location.origin && /^#\/spool\/\d+$/.test(url.hash)) { abort.abort(); nfcReader = null; location.hash = url.hash; return; }
-        } catch (err) { /* not a link */ }
+        if (['url', 'text', 'mime'].includes(record.recordType)) { try { text = new TextDecoder().decode(record.data); break; } catch (err) { /* not text */ } }
       }
-      out.textContent = "That tag is not one of this Model Hub's spool tags.";
+      abort.abort(); nfcReader = null;
+      const res = await jsonRequest('POST', '/api/nfc/lookup', { payload: text || null, uid: event.serialNumber || null });
+      if (!res.ok) { out.textContent = await sourceErrorText(res); return; }
+      const found = await res.json();
+      if (found.match) { location.hash = `#/spool/${found.match.id}`; return; }
+      if (found.parsed && found.parsed.spec && confirm(`This tag describes a ${found.parsed.spec.material} spool${found.parsed.spec.brand ? ' from ' + found.parsed.spec.brand : ''} that is not in Model Hub. Add it?`)) {
+        const made = await jsonRequest('POST', '/api/nfc/create', { spec: found.parsed.spec, uid: event.serialNumber || null });
+        if (made.ok) { const sp = await made.json(); loadFilament(); location.hash = `#/spool/${sp.id}`; } else { out.textContent = await sourceErrorText(made); }
+        return;
+      }
+      out.textContent = event.serialNumber ? `This tag (${event.serialNumber}) is not linked to a spool yet. Use "Link a tag" on a spool's row.` : "That tag is not a spool tag Model Hub knows.";
     };
   } catch (e) { out.textContent = nfcProblem(e); }
 }
@@ -3356,12 +3391,13 @@ async function loadFilament() {
       <td>${f.remaining_g}g / ${f.spool_weight_g}g</td>
       <td><input class="fil-price" data-id="${f.id}" type="number" min="0" step="0.01" value="${f.cost ?? ''}" placeholder="price" aria-label="Spool price">
         ${f.cost != null && f.spool_weight_g ? `<small class="muted">$${(f.cost / f.spool_weight_g * 1000).toFixed(2)}/kg</small>` : ''}</td>
-      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="fil-opened" title="Note that this spool was opened today">opened</button> <button data-id="${f.id}" class="fil-dried" title="Note that this spool was dried today">dried</button> ${NFC_OK ? `<button data-id="${f.id}" class="fil-nfc" title="Write this spool's link to an NFC tag">NFC tag</button> ` : ''}<button data-id="${f.id}" class="del-fil">delete</button></td>
+      <td><button data-id="${f.id}" class="fil-history">prices</button> <button data-id="${f.id}" class="fil-opened" title="Note that this spool was opened today">opened</button> <button data-id="${f.id}" class="fil-dried" title="Note that this spool was dried today">dried</button> ${NFC_OK ? `<button data-id="${f.id}" class="fil-nfc" title="Write this spool's link to an NFC tag">NFC tag</button> <button data-id="${f.id}" class="fil-link-tag" title="Link a tag you already have (any tag number) to this spool">Link a tag</button> ` : ''}<button data-id="${f.id}" class="del-fil">delete</button></td>
     </tr>
     <tr class="fil-history-row hidden" data-for="${f.id}"><td colspan="6"></td></tr>`).join('');
   if (NFC_OK && !$('#nfc-bar')) $('#filament-table').insertAdjacentHTML('beforebegin', '<p id="nfc-bar"><button id="nfc-scan">Scan a spool tag</button> <span id="nfc-msg" class="muted"></span></p>');
   if ($('#nfc-scan')) $('#nfc-scan').onclick = () => nfcScanSpool($('#nfc-msg'));
   $$('.fil-nfc').forEach(b => b.onclick = () => nfcWriteSpool(b.dataset.id, $('#nfc-msg')));
+  $$('.fil-link-tag').forEach(b => b.onclick = () => nfcLinkSpool(b.dataset.id, $('#nfc-msg')));
   if (!$('#fil-labels-link')) $('#filament-table').insertAdjacentHTML('beforebegin', '<p><a id="fil-labels-link" class="button-link" href="#/labels/filament">Print QR labels for spools</a></p>');
   $$('.fil-price').forEach(input => input.onchange = async () => {
     const value = input.value.trim();
@@ -3475,6 +3511,10 @@ async function loadPrinters() {
       <button class="printer-delete">Remove</button>
       <label class="inline-check" title="Never suggested for a print, and starting one on it asks first"><input type="checkbox" class="printer-parked" ${p.out_of_service ? 'checked' : ''}> out of service</label>
       <button class="printer-diagnose">Why can't it connect?</button><div class="printer-diagnose-result muted" style="flex-basis:100%;width:100%"></div>
+      <details class="printer-labels" style="flex-basis:100%;width:100%"><summary>Labels${Object.keys(p.capabilities || {}).length ? ` (${Object.entries(p.capabilities).map(([k, v]) => esc(k + '=' + v)).join(', ')})` : ''}</summary>
+        <p class="muted">What this printer can do, as labels you choose, like <code>plate=textured, enclosed=yes</code>. A queue entry can say what it needs (the same kind of labels); only a printer that has them is suggested for it or sent it.</p>
+        <div class="row"><input class="printer-labels-input" value="${esc(Object.entries(p.capabilities || {}).map(([k, v]) => k + '=' + v).join(', '))}" placeholder="plate=smooth, enclosed=no" aria-label="Labels"><button class="printer-labels-save">Save</button><span class="printer-labels-result muted"></span></div>
+      </details>
       <details class="printer-controls-box" style="flex-basis:100%;width:100%"><summary>Controls</summary>
         <p class="muted">Change the heat, speed or fan of what the printer is doing. Nozzle up to 300 &deg;C and bed up to 120 &deg;C; 0 switches a heater off. Heating an idle printer and leaving it is on you: be there.</p>
         <div class="row"><label>Nozzle <input type="number" class="ctl-nozzle" min="0" max="300" step="5" style="width:6em"> &deg;C</label><button class="ctl-set" data-key="nozzle">Set</button>
@@ -3482,7 +3522,7 @@ async function loadPrinters() {
         <div class="row"><label>Speed <input type="number" class="ctl-speed" ${p.kind === 'bambu' ? 'min="1" max="4" placeholder="1-4"' : 'min="10" max="300" placeholder="100"'} style="width:6em"> ${p.kind === 'bambu' ? '(1 silent, 2 standard, 3 sport, 4 ludicrous)' : '%'}</label><button class="ctl-set" data-key="speed">Set</button>
           <label>Fan <input type="number" class="ctl-fan" min="0" max="100" step="5" style="width:6em"> %</label><button class="ctl-set" data-key="fan">Set</button>
           ${p.kind === 'bambu' ? '<button class="ctl-light" data-on="true">Light on</button><button class="ctl-light" data-on="false">Light off</button>' : ''}</div>
-        ${p.kind === 'moonraker' ? '<div class="row"><button class="ctl-objects">Skip an object of this print...</button></div><div class="ctl-objects-list"></div>' : ''}
+        ${p.kind === 'moonraker' ? '<div class="row"><button class="ctl-objects">Skip an object of this print...</button></div><div class="ctl-objects-list"></div><div class="row"><select class="ctl-spool" aria-label="Spoolman spool"><option value="">Active spool (from Spoolman)...</option></select><button class="ctl-spool-set">Tell the printer</button></div>' : ''}
         <span class="ctl-result muted"></span>
       </details>
       <details class="printer-temps" style="flex-basis:100%;width:100%"><summary>Temperatures</summary>
@@ -3570,8 +3610,17 @@ async function loadTemps(row) {
   if (!res.ok) { box.textContent = await sourceErrorText(res); return; }
   drawTemps(box, await res.json());
 }
-$('#printers-list').addEventListener('toggle', (e) => {
+$('#printers-list').addEventListener('toggle', async (e) => {
   if (e.target.classList && e.target.classList.contains('printer-temps') && e.target.open) loadTemps(e.target.closest('.printer-row'));
+  if (e.target.classList && e.target.classList.contains('printer-controls-box') && e.target.open) {
+    const sel = e.target.querySelector('.ctl-spool');
+    if (sel && sel.options.length === 1) {
+      const spools = await fetch('/api/filament').then(r => (r.ok ? r.json() : []));
+      for (const f of spools.filter(x => (x.external_id || '').startsWith('spoolman:'))) {
+        sel.add(new Option(`${[f.material, f.brand, f.color].filter(Boolean).join(' ')} (Spoolman #${f.external_id.split(':')[1]})`, f.id));
+      }
+    }
+  }
 }, true);
 
 $('#discover-go').addEventListener('click', async () => {
@@ -3650,6 +3699,18 @@ $('#printers-list').addEventListener('click', async (e) => {
     if (!saved.ok) { out.textContent = await sourceErrorText(saved); return; }
     const res = await fetch(`/api/printers/${row.dataset.id}/plug-test`, { method: 'POST' });
     out.textContent = res.ok ? `Its energy total is ${(await res.json()).total_kwh} kWh.` : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('printer-labels-save')) {
+    const res = await jsonRequest('PATCH', `/api/printers/${row.dataset.id}`, { capabilities: row.querySelector('.printer-labels-input').value.trim() || null });
+    row.querySelector('.printer-labels-result').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
+    return;
+  }
+  if (row && e.target.classList.contains('ctl-spool-set')) {
+    const sel = row.querySelector('.ctl-spool'), out = row.querySelector('.ctl-result');
+    if (!sel.value) { out.textContent = 'Choose a spool first.'; return; }
+    const res = await jsonRequest('POST', `/api/printers/${row.dataset.id}/active-spool`, { filament_id: parseInt(sel.value) });
+    out.textContent = res.ok ? 'The printer now counts that spool.' : await sourceErrorText(res);
     return;
   }
   if (row && e.target.classList.contains('ctl-set')) {
@@ -4023,7 +4084,7 @@ async function loadQueue() {
       .filter(Boolean).join(' · ');
     return `
     <li>
-      <span>#${i.position} ${i.held ? '<span class="status-badge status-failed">on hold</span> ' : ''}${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
+      <span>#${i.position} ${i.review === 'pending' ? '<span class="status-badge status-failed">waiting for approval</span> ' : i.review === 'rejected' ? `<span class="status-badge status-failed" title="${esc(i.review_note || '')}">rejected</span> ` : i.held ? '<span class="status-badge status-failed">on hold</span> ' : ''}${i.owner ? `<span class="muted">by ${esc(i.owner)}</span> ` : ''}${m ? m.filename : 'model ' + i.model_id}${est ? ' — ' + est : ''}
         ${fitData[i.id] && !fitData[i.id].fits ? `<span class="warn-text" title="model ${fitData[i.id].model.map(v => Math.round(v)).join(' x ')} mm, bed ${fitData[i.id].bed.filter(Boolean).join(' x ')} mm">&#9888; too big for ${esc(fitData[i.id].printer)}'s bed</span>` : ''}
         ${ifNow[i.id] ? `<span class="muted">finishes about ${esc(clock(ifNow[i.id]))} if started now</span>` : ''}
         ${i.printer_id && holds[i.printer_id] && i.status === 'queued' ? `<span class="warn-text">&#9888; waiting: ${esc(holds[i.printer_id])}</span>` : ''}
@@ -4032,6 +4093,8 @@ async function loadQueue() {
           <button class="queue-suggest" data-id="${i.id}" data-printer="${suggestions[i.id][0].printer_id}" data-slot="${suggestions[i.id][0].slot || ''}">Use</button></span>` : ''}
         ${hints[i.model_id] && ['queued', 'printing'].includes(i.status) ? `<span class="warn-text" title="${esc(hints[i.model_id].tip || '')}">&#9888; ${esc(hintText(hints[i.model_id]))}</span>` : ''}</span>
       <span>
+        ${currentUser.role === 'admin' && i.review === 'pending' ? `<button class="queue-approve primary" data-id="${i.id}">Approve</button><button class="queue-reject danger" data-id="${i.id}">Reject</button>` : ''}
+        ${i.status === 'queued' ? `<input class="queue-requires" data-id="${i.id}" value="${esc(requiresText(i.requires))}" placeholder="needs, like plate=textured" aria-label="What a printer must have" title="Only a printer with these labels (set on its card) may print it" style="width:11em">` : ''}
         ${i.status === 'queued' ? `<select class="queue-priority" data-id="${i.id}" aria-label="Priority" title="Priority"><option value="1" ${i.priority === 1 ? 'selected' : ''}>high</option><option value="0" ${!i.priority ? 'selected' : ''}>normal</option><option value="-1" ${i.priority === -1 ? 'selected' : ''}>low</option></select>
           <label class="inline-check queue-hold-label" title="Keep it from being suggested, assigned or sent until someone has looked at it"><input type="checkbox" class="queue-hold" data-id="${i.id}" ${i.held ? 'checked' : ''}> hold</label>
           ${centres.length ? `<select class="queue-centre" data-id="${i.id}" aria-label="Budget" title="The budget this print is charged to"><option value="">no budget</option>${centres.map(c => `<option value="${c.id}" ${c.id === i.cost_centre_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
@@ -4053,6 +4116,18 @@ async function loadQueue() {
       </span>
     </li>`;
   }).join('');
+  $$('.queue-requires').forEach(input => input.onchange = async () => {
+    const res = await jsonRequest('PATCH', `/api/queue/${input.dataset.id}`, { requires: input.value.trim() || null });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
+  $$('.queue-approve, .queue-reject').forEach(btn => btn.onclick = async () => {
+    const approve = btn.classList.contains('queue-approve');
+    const note = approve ? '' : (prompt('Why? (they will see this)', '') || '');
+    const res = await jsonRequest('POST', `/api/queue/${btn.dataset.id}/review`, { action: approve ? 'approve' : 'reject', note });
+    if (!res.ok) showNotice(await sourceErrorText(res));
+    loadQueue();
+  });
   $$('.queue-priority').forEach(sel => sel.onchange = async () => {
     const res = await jsonRequest('PATCH', `/api/queue/${sel.dataset.id}`, { priority: parseInt(sel.value) });
     if (!res.ok) showNotice(await sourceErrorText(res));
@@ -4915,6 +4990,10 @@ $('#order-create').addEventListener('click', async () => {
 });
 
 // ---------- Calendar ----------
+function requiresText(json) {
+  try { return Object.entries(JSON.parse(json || '{}')).map(([k, v]) => `${k}=${v}`).join(', '); } catch (e) { return ''; }
+}
+
 function toLocalInput(iso) {
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
   const p = n => String(n).padStart(2, '0');
@@ -5515,6 +5594,8 @@ async function loadGroups() {
   const d = await res.json();
   box.innerHTML = d.groups.map(g => `<div class="project-card access-group" data-id="${g.id}">
       <div class="row"><b>${esc(g.name)}</b><span class="muted">${g.members} login${g.members === 1 ? '' : 's'}</span><button class="group-delete danger">Remove</button></div>
+      <label class="inline-check"><input type="checkbox" class="group-flag" data-flag="own_only" ${g.own_only ? 'checked' : ''}> Only see and change the queue entries they made themselves</label>
+      <label class="inline-check"><input type="checkbox" class="group-flag" data-flag="needs_review" ${g.needs_review ? 'checked' : ''}> What they add to the queue waits for my approval</label>
       <div class="muted">Not allowed to:</div>
       ${Object.entries(d.areas).map(([key, label]) => `<label class="inline-check"><input type="checkbox" class="group-deny" data-area="${key}" ${g.deny.includes(key) ? 'checked' : ''}> ${esc(label)}</label>`).join('')}
       ${d.printers.length ? `<div class="muted">May only use these printers (none ticked: all of them):</div>${d.printers.map(p => `<label class="inline-check"><input type="checkbox" class="group-printer" data-id="${p.id}" ${g.printers && g.printers.includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('')}` : ''}
@@ -5524,7 +5605,8 @@ async function loadGroups() {
     if (!card) return;
     const res = await jsonRequest('PATCH', `/api/access-groups/${card.dataset.id}`, {
       deny: [...card.querySelectorAll('.group-deny:checked')].map(c => c.dataset.area),
-      printers: [...card.querySelectorAll('.group-printer:checked')].map(c => parseInt(c.dataset.id)) });
+      printers: [...card.querySelectorAll('.group-printer:checked')].map(c => parseInt(c.dataset.id)),
+      own_only: card.querySelector('[data-flag="own_only"]').checked, needs_review: card.querySelector('[data-flag="needs_review"]').checked });
     $('#groups-status').textContent = res.ok ? 'Saved.' : await sourceErrorText(res);
   };
   box.onclick = async (e) => {

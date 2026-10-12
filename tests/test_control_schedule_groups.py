@@ -318,7 +318,7 @@ def test_a_failure_of_one_print_does_not_stop_the_next(authed, farm):
 def test_groups_are_made_checked_and_removed(authed, rich):
     p = _printer(authed)
     r = authed.post("/api/access-groups", json={"name": "Helpers", "deny": ["orders", "money"], "printers": [p["id"]]})
-    assert r.status_code == 200 and r.json() == {"id": r.json()["id"], "name": "Helpers", "deny": ["money", "orders"], "printers": [p["id"]], "members": 0}
+    assert r.status_code == 200 and r.json() == {"id": r.json()["id"], "name": "Helpers", "deny": ["money", "orders"], "printers": [p["id"]], "members": 0, "own_only": False, "needs_review": False}
     gid = r.json()["id"]
     assert authed.post("/api/access-groups", json={"name": "Helpers"}).status_code == 409
     for bad in ({"name": ""}, {"name": "x" * 50}, {"name": "<b>"}, {"name": "Ok", "deny": ["everything"]}, {"name": "Ok", "deny": "orders"}, {"name": "Ok", "printers": [999999]},
@@ -401,7 +401,7 @@ def test_group_info_survives_a_missing_group_and_bad_json(authed, rich):
         s.add(AccessGroup(name="Broken", deny_json="not json", printers_json="[1"))
         s.commit()
         row = s.query(AccessGroup).filter(AccessGroup.name == "Broken").one()
-        assert auth.group_info(s, AppUser(username="x", password_hash="!", group_id=row.id)) == {"group": "Broken", "deny": [], "printers": None}
+        assert auth.group_info(s, AppUser(username="x", password_hash="!", group_id=row.id)) == {"group": "Broken", "deny": [], "printers": None, "own_only": False, "needs_review": False}
         s.delete(row)
         s.commit()
     assert auth.printer_allowed(None, 5) and auth.printer_allowed({"printers": None}, 5) and auth.printer_allowed({"printers": [5]}, 5) and not auth.printer_allowed({"printers": [4]}, 5)

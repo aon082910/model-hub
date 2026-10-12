@@ -124,6 +124,11 @@ def log_print(session: Session, model_id: int, *, printed_at=None, filament_id=N
     session.flush()
     if deduct:
         _take_filament(session, log)
+    if log.outcome != "failed":                         # a print that worked marks a model nobody has judged yet as known good
+        model = session.get(Model3D, model_id)
+        if model and model.known_status in (None, "needs_test"):
+            model.known_status = "known_good"
+            session.add(model)
     return log
 
 

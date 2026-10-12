@@ -85,6 +85,7 @@
         <label class="inline-check"><input type="checkbox" id="f-failed"> Failed before</label>
         <label class="inline-check"><input type="checkbox" id="f-favorite"> Starred</label>
         <label>Fits printer <select id="f-fits-printer"><option value="">any</option></select></label>
+        <label>Print status <select id="f-known"><option value="">any</option><option value="known_good">known good</option><option value="needs_test">needs a test</option><option value="failed">failed</option><option value="archived">archived</option><option value="none">not judged yet</option></select></label>
       </div>
       <div class="row">
         <select id="f-saved"><option value="">saved searches...</option></select>
@@ -937,6 +938,7 @@
     <h2>Access groups</h2>
     <div class="settings-form wide" id="groups-box">
       <p class="muted">A group <b>narrows</b> what a login's role allows (it never gives more): take away areas (the library, the queue, orders, money, starting prints) and, for a printer login, say which printers it may use. Put a login in a group with the group choice in the People list above.</p>
+      <p class="muted" id="group-own-only-help">Two more switches on each group: <b>only their own entries</b> (a login in it sees and changes only the print-queue entries it made itself, like students sharing a printer) and <b>entries wait for approval</b> (what it adds to the queue is put on hold and you approve or reject it on the Print Queue page). The administrator's own entries are never held. The library's files are not made private by this: it limits the queue.</p>
       <div id="groups-list"></div>
       <div class="row"><input id="group-name" placeholder="Group name, like Weekend helpers" maxlength="40"><button id="group-add">Make the group</button><span id="groups-status" class="muted"></span></div>
     </div>

@@ -81,6 +81,8 @@ class Model3D(SQLModel, table=True):
     notes: Optional[str] = None             # your own notes on this model
     family_id: Optional[int] = Field(default=None, index=True)   # versions of the same model share a family
     version_label: Optional[str] = None                          # v1, v2, final...
+    known_status: Optional[str] = None                           # known_good, needs_test, failed, archived (empty: nothing said yet)
+    recommended: Optional[bool] = None                           # the version to print (one per family)
     print_settings: Optional[str] = None    # JSON: what worked (material, layer height, infill, supports, temperatures...)
 
     is_duplicate_of: Optional[int] = Field(default=None, foreign_key="model3d.id")
@@ -111,6 +113,7 @@ class Filament(SQLModel, table=True):
     external_id: Optional[str] = None   # the same spool elsewhere, like "spoolman:12"
     opened_at: Optional[datetime] = None    # when the spool was opened, for the drying reminder
     dried_at: Optional[datetime] = None     # when it was last dried
+    nfc_tag: Optional[str] = Field(default=None, index=True)    # the number of the NFC tag stuck on the spool (one spool per tag)
 
 
 class QueueItem(SQLModel, table=True):
@@ -137,6 +140,10 @@ class QueueItem(SQLModel, table=True):
     printer_tag: Optional[str] = None          # only a printer with this tag may print it
     cost_centre_id: Optional[int] = None      # the budget this print is charged to
     strict_match: Optional[bool] = None       # True: only a printer with exactly this material and colour loaded; None: follow Settings
+    owner: Optional[str] = None               # the login that put it in the queue
+    review: Optional[str] = None              # pending (waiting for staff to look at it), approved or rejected
+    review_note: Optional[str] = None
+    requires: Optional[str] = None            # JSON labels a printer must have (see app.capabilities)
     start_at: Optional[datetime] = None       # start it by itself at this time (UTC), when Settings allows scheduled starts
     start_note: Optional[str] = None          # why a scheduled start is waiting or was given up
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -303,6 +310,7 @@ class Printer(SQLModel, table=True):
     plug_kind: Optional[str] = None      # a smart plug that measures its power: tasmota or shelly
     plug_host: Optional[str] = None      # its address on your network
     tags: Optional[str] = None           # comma-separated labels (a room, a group, a nozzle size) a queue entry can ask for
+    capabilities: Optional[str] = None       # JSON labels of what it can do: {"plate": "textured", "enclosed": "yes"} (see app.capabilities)
     out_of_service: Optional[bool] = None    # taken out of use for now (maintenance): never suggested, and starting a print on it asks first
     plate_check: Optional[bool] = None       # after a print, let the camera say whether the plate looks empty (needs a camera and a local vision model)
     pause_on_failure: Optional[bool] = None   # with watching on: pause the print after three bad looks in a row
@@ -511,6 +519,8 @@ class AccessGroup(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     deny_json: str = "[]"                  # areas denied (keys of auth.GROUP_AREAS)
     printers_json: Optional[str] = None    # a JSON list of printer ids that may be used; empty means every printer
+    own_only: bool = False                 # its logins see and change only the queue entries they made themselves
+    needs_review: bool = False             # what its logins add to the queue waits on hold until the administrator approves it
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
